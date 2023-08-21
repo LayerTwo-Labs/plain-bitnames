@@ -69,20 +69,17 @@ impl Wallet {
         let change = total - value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
-            Output {
-                address: self.get_new_address()?,
-                content: Content::Withdrawal {
+            Output::new(
+                self.get_new_address()?,
+                Content::Withdrawal {
                     value,
                     main_fee,
                     main_address,
                 },
-            },
-            Output {
-                address: self.get_new_address()?,
-                content: Content::Value(change),
-            },
+            ),
+            Output::new(self.get_new_address()?, Content::Value(change)),
         ];
-        Ok(Transaction { inputs, outputs })
+        Ok(Transaction::new(inputs, outputs))
     }
 
     pub fn create_transaction(
@@ -95,16 +92,10 @@ impl Wallet {
         let change = total - value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
-            Output {
-                address,
-                content: Content::Value(value),
-            },
-            Output {
-                address: self.get_new_address()?,
-                content: Content::Value(change),
-            },
+            Output::new(address, Content::Value(value)),
+            Output::new(self.get_new_address()?, Content::Value(change)),
         ];
-        Ok(Transaction { inputs, outputs })
+        Ok(Transaction::new(inputs, outputs))
     }
 
     pub fn select_coins(

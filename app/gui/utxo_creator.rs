@@ -108,12 +108,12 @@ impl UtxoCreator {
                         )
                         .clicked()
                     {
-                        let utxo = Output {
-                            address: address.expect("should not happen"),
-                            content: Content::Value(
+                        let utxo = Output::new(
+                            address.expect("should not happen"),
+                            Content::Value(
                                 value.expect("should not happen").to_sat(),
                             ),
-                        };
+                        );
                         app.transaction.outputs.push(utxo);
                     }
                 }

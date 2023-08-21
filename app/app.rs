@@ -63,10 +63,7 @@ impl App {
             wallet,
             miner,
             utxos,
-            transaction: Transaction {
-                inputs: vec![],
-                outputs: vec![],
-            },
+            transaction: Transaction::default(),
             runtime,
         })
     }
@@ -76,10 +73,7 @@ impl App {
             self.wallet.authorize(self.transaction.clone())?;
         self.runtime
             .block_on(self.node.submit_transaction(&authorized_transaction))?;
-        self.transaction = Transaction {
-            inputs: vec![],
-            outputs: vec![],
-        };
+        self.transaction = Transaction::default();
         self.update_utxos()?;
         Ok(())
     }
@@ -92,10 +86,10 @@ impl App {
                 self.node.get_transactions(NUM_TRANSACTIONS)?;
             let coinbase = match fee {
                 0 => vec![],
-                _ => vec![types::Output {
-                    address: self.wallet.get_new_address()?,
-                    content: types::Content::Value(fee),
-                }],
+                _ => vec![types::Output::new(
+                    self.wallet.get_new_address()?,
+                    types::Content::Value(fee),
+                )],
             };
             let body = types::Body::new(transactions, coinbase);
             let prev_side_hash = self.node.get_best_hash()?;

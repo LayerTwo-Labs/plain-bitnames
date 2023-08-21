@@ -317,10 +317,8 @@ impl State {
         for (outpoint, deposit) in &two_way_peg_data.deposits {
             if let Ok(address) = deposit.address.parse() {
                 let outpoint = OutPoint::Deposit(*outpoint);
-                let output = Output {
-                    address,
-                    content: Content::Value(deposit.value),
-                };
+                let output =
+                    Output::new(address, Content::Value(deposit.value));
                 self.utxos.put(txn, &outpoint, &output)?;
             }
         }

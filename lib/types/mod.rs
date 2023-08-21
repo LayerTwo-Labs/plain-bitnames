@@ -25,26 +25,6 @@ pub enum OutPoint {
     Deposit(bitcoin::OutPoint),
 }
 
-impl std::fmt::Display for OutPoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Regular { txid, vout } => write!(f, "regular {txid} {vout}"),
-            Self::Coinbase { merkle_root, vout } => {
-                write!(f, "coinbase {merkle_root} {vout}")
-            }
-            Self::Deposit(bitcoin::OutPoint { txid, vout }) => {
-                write!(f, "deposit {txid} {vout}")
-            }
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Output {
-    pub address: Address,
-    pub content: Content,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Content {
     Value(u64),
@@ -53,6 +33,13 @@ pub enum Content {
         main_fee: u64,
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Output {
+    pub address: Address,
+    pub content: Content,
+    pub memo: Vec<u8>,
 }
 
 /*
@@ -64,7 +51,18 @@ pub type AuthorizedTransaction = types::AuthorizedTransaction<Authorization, ()>
 pub type Body = types::Body<Authorization, ()>;
 */
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+pub type TxInputs = Vec<OutPoint>;
+
+pub type TxOutputs = Vec<Output>;
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Transaction {
+    pub inputs: TxInputs,
+    pub outputs: TxOutputs,
+    pub memo: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Header {
     pub merkle_root: MerkleRoot,
     pub prev_side_hash: BlockHash,
@@ -90,78 +88,10 @@ pub struct TwoWayPegData {
     pub bundle_statuses: HashMap<bitcoin::Txid, WithdrawalBundleStatus>,
 }
 
-impl Header {
-    pub fn hash(&self) -> BlockHash {
-        hashes::hash(self).into()
-    }
-}
-
-impl Content {
-    pub fn is_value(&self) -> bool {
-        matches!(self, Self::Value(_))
-    }
-    pub fn is_withdrawal(&self) -> bool {
-        matches!(self, Self::Withdrawal { .. })
-    }
-}
-
-impl GetValue for Output {
-    #[inline(always)]
-    fn get_value(&self) -> u64 {
-        self.content.get_value()
-    }
-}
-
-impl GetValue for Content {
-    #[inline(always)]
-    fn get_value(&self) -> u64 {
-        match self {
-            Self::Value(value) => *value,
-            Self::Withdrawal { value, .. } => *value,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Transaction {
-    pub inputs: Vec<OutPoint>,
-    pub outputs: Vec<Output>,
-}
-
-impl Transaction {
-    pub fn txid(&self) -> Txid {
-        hash(self).into()
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FilledTransaction {
     pub transaction: Transaction,
     pub spent_utxos: Vec<Output>,
-}
-
-impl FilledTransaction {
-    pub fn get_value_in(&self) -> u64 {
-        self.spent_utxos.iter().map(GetValue::get_value).sum()
-    }
-
-    pub fn get_value_out(&self) -> u64 {
-        self.transaction
-            .outputs
-            .iter()
-            .map(GetValue::get_value)
-            .sum()
-    }
-
-    pub fn get_fee(&self) -> Option<u64> {
-        let value_in = self.get_value_in();
-        let value_out = self.get_value_out();
-        if value_in < value_out {
-            None
-        } else {
-            Some(value_in - value_out)
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +126,100 @@ pub struct AggregatedWithdrawal {
     pub main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     pub value: u64,
     pub main_fee: u64,
+}
+
+impl std::fmt::Display for OutPoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Regular { txid, vout } => write!(f, "regular {txid} {vout}"),
+            Self::Coinbase { merkle_root, vout } => {
+                write!(f, "coinbase {merkle_root} {vout}")
+            }
+            Self::Deposit(bitcoin::OutPoint { txid, vout }) => {
+                write!(f, "deposit {txid} {vout}")
+            }
+        }
+    }
+}
+
+impl Content {
+    pub fn is_value(&self) -> bool {
+        matches!(self, Self::Value(_))
+    }
+    pub fn is_withdrawal(&self) -> bool {
+        matches!(self, Self::Withdrawal { .. })
+    }
+}
+
+impl GetValue for Content {
+    #[inline(always)]
+    fn get_value(&self) -> u64 {
+        match self {
+            Self::Value(value) => *value,
+            Self::Withdrawal { value, .. } => *value,
+        }
+    }
+}
+
+impl Output {
+    pub fn new(address: Address, content: Content) -> Self {
+        Self {
+            address,
+            content,
+            memo: Vec::new(),
+        }
+    }
+}
+
+impl GetValue for Output {
+    #[inline(always)]
+    fn get_value(&self) -> u64 {
+        self.content.get_value()
+    }
+}
+
+impl Transaction {
+    pub fn new(inputs: TxInputs, outputs: TxOutputs) -> Self {
+        Self {
+            inputs,
+            outputs,
+            memo: Vec::new(),
+        }
+    }
+
+    pub fn txid(&self) -> Txid {
+        hash(self).into()
+    }
+}
+
+impl Header {
+    pub fn hash(&self) -> BlockHash {
+        hashes::hash(self).into()
+    }
+}
+
+impl FilledTransaction {
+    pub fn get_value_in(&self) -> u64 {
+        self.spent_utxos.iter().map(GetValue::get_value).sum()
+    }
+
+    pub fn get_value_out(&self) -> u64 {
+        self.transaction
+            .outputs
+            .iter()
+            .map(GetValue::get_value)
+            .sum()
+    }
+
+    pub fn get_fee(&self) -> Option<u64> {
+        let value_in = self.get_value_in();
+        let value_out = self.get_value_out();
+        if value_in < value_out {
+            None
+        } else {
+            Some(value_in - value_out)
+        }
+    }
 }
 
 impl Body {
