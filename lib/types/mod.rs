@@ -74,6 +74,29 @@ pub struct BitNameData {
     pub signing_pubkey: Option<PublicKey>,
 }
 
+/// delete, retain, or set a value
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum Update<T> {
+    Delete,
+    Retain,
+    Set(T),
+}
+
+/// updates to the data associated with a BitName
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BitNameDataUpdates {
+    /// commitment to arbitrary data
+    pub commitment: Update<Hash>,
+    /// optional ipv4 addr
+    pub ipv4_addr: Update<Ipv4Addr>,
+    /// optional ipv6 addr
+    pub ipv6_addr: Update<Ipv6Addr>,
+    /// optional pubkey used for encryption
+    pub encryption_pubkey: Update<EncryptionPubKey>,
+    /// optional pubkey used for signing messages
+    pub signing_pubkey: Update<PublicKey>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionData {
     BitNameReservation {
@@ -88,6 +111,7 @@ pub enum TransactionData {
         /// initial BitName data
         bitname_data: Box<BitNameData>,
     },
+    BitNameUpdate(Box<BitNameDataUpdates>),
 }
 
 pub type TxData = TransactionData;
@@ -271,6 +295,11 @@ impl TxData {
     pub fn is_reservation(&self) -> bool {
         matches!(self, Self::BitNameReservation { .. })
     }
+
+    /// true if the tx data corresponds to an update
+    pub fn is_update(&self) -> bool {
+        matches!(self, Self::BitNameUpdate(_))
+    }
 }
 
 impl Transaction {
@@ -300,6 +329,14 @@ impl Transaction {
     pub fn is_reservation(&self) -> bool {
         match &self.data {
             Some(tx_data) => tx_data.is_reservation(),
+            None => false,
+        }
+    }
+
+    /// true if the tx data corresponds to an update
+    pub fn is_update(&self) -> bool {
+        match &self.data {
+            Some(tx_data) => tx_data.is_update(),
             None => false,
         }
     }
@@ -352,6 +389,15 @@ impl Transaction {
 }
 
 impl FilledContent {
+    /// returns the BitName ID (name hash) if the filled output content
+    /// corresponds to a BitName output.
+    pub fn bitname(&self) -> Option<&Hash> {
+        match self {
+            Self::BitName(name_hash) => Some(name_hash),
+            _ => None,
+        }
+    }
+
     /// true if the output content corresponds to a bitname
     pub fn is_bitname(&self) -> bool {
         matches!(self, Self::BitName(_))
@@ -403,6 +449,12 @@ impl FilledOutput {
             content,
             memo: Vec::new(),
         }
+    }
+
+    /// returns the BitName ID (name hash) if the filled output content
+    /// corresponds to a BitName output.
+    pub fn bitname(&self) -> Option<&Hash> {
+        self.content.bitname()
     }
 
     /// accessor for content
@@ -469,6 +521,11 @@ impl FilledTransaction {
         self.transaction.is_reservation()
     }
 
+    // true if the tx data corresponds to a BitName update
+    pub fn is_update(&self) -> bool {
+        self.transaction.is_update()
+    }
+
     /// accessor for tx outputs
     pub fn outputs(&self) -> &TxOutputs {
         &self.transaction.outputs
@@ -524,7 +581,9 @@ impl FilledTransaction {
     }
 
     /// return an iterator over spent bitnames
-    pub fn spent_bitnames(&self) -> impl Iterator<Item = &FilledOutput> {
+    pub fn spent_bitnames(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &FilledOutput> {
         self.spent_utxos
             .iter()
             .filter(|filled_output| filled_output.is_bitname())
@@ -546,6 +605,7 @@ impl FilledTransaction {
     }
 
     /// compute the filled content for BitName reservation outputs
+    /// WARNING: do not expose DoubleEndedIterator.
     fn filled_reservation_output_content(
         &self,
     ) -> impl Iterator<Item = FilledContent> + '_ {

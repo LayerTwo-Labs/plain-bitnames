@@ -43,6 +43,10 @@ pub enum Error {
     FillTxOutputContentsFailed,
     #[error("heed error")]
     Heed(#[from] heed::Error),
+    #[error("missing bitname {name_hash:?}")]
+    MissingBitName { name_hash: Hash },
+    #[error("no BitNames to update")]
+    NoBitNamesToUpdate,
     #[error("total fees less than coinbase value")]
     NotEnoughFees,
     #[error("value in is less than value out")]
@@ -90,6 +94,29 @@ impl BitNameData {
             encryption_pubkey: vec![bitname_data.encryption_pubkey],
             signing_pubkey: vec![bitname_data.signing_pubkey],
         }
+    }
+
+    // apply bitname data updates
+    fn apply_updates(&mut self, updates: BitNameDataUpdates) {
+        // apply an update to a single data field
+        fn apply_field_update<T>(
+            data_field: &mut Vec<Option<T>>,
+            update: Update<T>,
+        ) {
+            match update {
+                Update::Delete => data_field.push(None),
+                Update::Retain => (),
+                Update::Set(value) => data_field.push(Some(value)),
+            }
+        }
+        apply_field_update(&mut self.commitment, updates.commitment);
+        apply_field_update(&mut self.ipv4_addr, updates.ipv4_addr);
+        apply_field_update(&mut self.ipv6_addr, updates.ipv6_addr);
+        apply_field_update(
+            &mut self.encryption_pubkey,
+            updates.encryption_pubkey,
+        );
+        apply_field_update(&mut self.signing_pubkey, updates.signing_pubkey);
     }
 }
 
@@ -350,6 +377,8 @@ impl State {
     /// the number of bitnames in the inputs.
     /// * If the tx is a BitName registration, then the newly registered
     /// BitName must be unregistered.
+    /// * If the tx is a BitName update, then there must be at least one
+    /// BitName input and output
     pub fn validate_bitnames(
         &self,
         rotxn: &RoTxn,
@@ -357,6 +386,9 @@ impl State {
     ) -> Result<(), Error> {
         let n_bitname_inputs: usize = tx.spent_bitnames().count();
         let n_bitname_outputs: usize = tx.bitname_outputs().count();
+        if tx.is_update() && (n_bitname_inputs < 1 || n_bitname_outputs < 1) {
+            return Err(Error::NoBitNamesToUpdate);
+        };
         if let Some(name_hash) = tx.registration_name_hash() {
             if self.bitnames.get(rotxn, &name_hash)?.is_some() {
                 return Err(Error::BitNameAlreadyRegistered { name_hash });
@@ -501,6 +533,33 @@ impl State {
         Ok(())
     }
 
+    // apply bitname updates
+    fn apply_bitname_updates(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        bitname_updates: BitNameDataUpdates,
+    ) -> Result<(), Error> {
+        // the updated bitname is the BitName that corresponds to the last
+        // bitname output, or equivalently, the BitName corresponding to the
+        // last bitname input
+        let updated_bitname = filled_tx
+            .spent_bitnames()
+            .next_back()
+            .ok_or(Error::NoBitNamesToUpdate)?
+            .bitname()
+            .expect("should only contain BitName outputs");
+        let mut bitname_data = self
+            .bitnames
+            .get(rwtxn, updated_bitname)?
+            .ok_or(Error::MissingBitName {
+                name_hash: *updated_bitname,
+            })?;
+        bitname_data.apply_updates(bitname_updates);
+        self.bitnames.put(rwtxn, updated_bitname, &bitname_data)?;
+        Ok(())
+    }
+
     pub fn connect_body(
         &self,
         txn: &mut RwTxn,
@@ -563,6 +622,13 @@ impl State {
                     let bitname_data =
                         BitNameData::init((**bitname_data).clone());
                     self.bitnames.put(txn, name_hash, &bitname_data)?;
+                }
+                Some(TxData::BitNameUpdate(bitname_updates)) => {
+                    let () = self.apply_bitname_updates(
+                        txn,
+                        &filled_tx,
+                        (**bitname_updates).clone(),
+                    )?;
                 }
             }
         }
