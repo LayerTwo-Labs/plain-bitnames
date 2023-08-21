@@ -50,7 +50,7 @@ impl Deposit {
             )
             .clicked()
         {
-            let _ = app.deposit(
+            let _result = app.deposit(
                 amount.expect("should not happen"),
                 fee.expect("should not happen"),
             );

@@ -23,6 +23,7 @@ serde = { version = "1.0.179", features = ["derive"] }
 sha256 = "1.2.2"
 thiserror = "1.0.44"
 tokio = { version = "1.29.1", features = ["sync"] }
+x25519-dalek = { version = "2.0.0", features = ["serde"] }
 
 [lib]
 name = "plain_bitnames"

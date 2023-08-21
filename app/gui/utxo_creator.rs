@@ -82,7 +82,7 @@ impl UtxoCreator {
             ui.horizontal(|ui| {
                 ui.monospace("Main Address:");
                 ui.add(egui::TextEdit::singleline(&mut self.main_address));
-                let _ = ui.button("generate");
+                let _result = ui.button("generate");
             });
             ui.horizontal(|ui| {
                 ui.monospace("Main Fee:    ");

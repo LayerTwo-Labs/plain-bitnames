@@ -1,7 +1,7 @@
 pub use crate::authorization::{get_address, Authorization};
 use crate::types::{
-    Address, AuthorizedTransaction, Content, GetValue, OutPoint, Output,
-    Transaction,
+    Address, AuthorizedTransaction, Content, FilledOutput, GetValue, OutPoint,
+    Output, Transaction,
 };
 use bip300301::bitcoin;
 use byteorder::{BigEndian, ByteOrder};
@@ -18,7 +18,7 @@ pub struct Wallet {
     seed: Database<OwnedType<u8>, OwnedType<[u8; 64]>>,
     pub address_to_index: Database<SerdeBincode<Address>, OwnedType<[u8; 4]>>,
     pub index_to_address: Database<OwnedType<[u8; 4]>, SerdeBincode<Address>>,
-    pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<Output>>,
+    pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
 }
 
 impl Wallet {
@@ -101,7 +101,7 @@ impl Wallet {
     pub fn select_coins(
         &self,
         value: u64,
-    ) -> Result<(u64, HashMap<OutPoint, Output>), Error> {
+    ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
         let txn = self.env.read_txn()?;
         let mut utxos = vec![];
         for item in self.utxos.iter(&txn)? {
@@ -138,7 +138,7 @@ impl Wallet {
 
     pub fn put_utxos(
         &self,
-        utxos: &HashMap<OutPoint, Output>,
+        utxos: &HashMap<OutPoint, FilledOutput>,
     ) -> Result<(), Error> {
         let mut txn = self.env.write_txn()?;
         for (outpoint, output) in utxos {
@@ -158,7 +158,7 @@ impl Wallet {
         Ok(balance)
     }
 
-    pub fn get_utxos(&self) -> Result<HashMap<OutPoint, Output>, Error> {
+    pub fn get_utxos(&self) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let txn = self.env.read_txn()?;
         let mut utxos = HashMap::new();
         for item in self.utxos.iter(&txn)? {

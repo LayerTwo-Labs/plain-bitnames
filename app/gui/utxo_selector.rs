@@ -3,7 +3,7 @@ use crate::app::App;
 use eframe::egui;
 use lib::{
     bip300301::bitcoin,
-    types::{GetValue, OutPoint, Output},
+    types::{FilledOutput, GetValue, OutPoint},
 };
 use std::collections::HashSet;
 
@@ -53,7 +53,11 @@ impl UtxoSelector {
     }
 }
 
-pub fn show_utxo(ui: &mut egui::Ui, outpoint: &OutPoint, output: &Output) {
+pub fn show_utxo(
+    ui: &mut egui::Ui,
+    outpoint: &OutPoint,
+    output: &FilledOutput,
+) {
     let (kind, hash, vout) = match outpoint {
         OutPoint::Regular { txid, vout } => {
             ("regular", format!("{txid}"), *vout)

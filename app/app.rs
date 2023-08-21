@@ -7,7 +7,7 @@ use lib::{
     format_deposit_address,
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
-    types::{self, OutPoint, Output, Transaction},
+    types::{self, FilledOutput, OutPoint, Transaction},
     wallet::{self, Wallet},
 };
 pub use plain_bitnames as lib;
@@ -16,7 +16,7 @@ pub struct App {
     pub node: Node,
     pub wallet: Wallet,
     pub miner: Miner,
-    pub utxos: HashMap<OutPoint, Output>,
+    pub utxos: HashMap<OutPoint, FilledOutput>,
     pub transaction: Transaction,
     runtime: tokio::runtime::Runtime,
 }

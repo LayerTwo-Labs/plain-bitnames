@@ -73,11 +73,12 @@ impl Node {
 
     pub fn validate_transaction(
         &self,
-        txn: &RoTxn,
+        rotxn: &RoTxn,
         transaction: &AuthorizedTransaction,
     ) -> Result<u64, Error> {
-        let filled_transaction =
-            self.state.fill_transaction(txn, &transaction.transaction)?;
+        let filled_transaction = self
+            .state
+            .fill_transaction(rotxn, &transaction.transaction)?;
         for (authorization, spent_utxo) in transaction
             .authorizations
             .iter()
@@ -92,7 +93,7 @@ impl Node {
         }
         let fee = self
             .state
-            .validate_filled_transaction(&filled_transaction)?;
+            .validate_filled_transaction(rotxn, &filled_transaction)?;
         Ok(fee)
     }
 
@@ -132,7 +133,7 @@ impl Node {
     pub fn get_utxos_by_addresses(
         &self,
         addresses: &HashSet<Address>,
-    ) -> Result<HashMap<OutPoint, Output>, Error> {
+    ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let txn = self.env.read_txn()?;
         let utxos = self.state.get_utxos_by_addresses(&txn, addresses)?;
         Ok(utxos)
@@ -244,10 +245,10 @@ impl Node {
             bundle
         };
         if let Some(bundle) = bundle {
-            let _ = self
+            let () = self
                 .drivechain
                 .broadcast_withdrawal_bundle(bundle.transaction)
-                .await;
+                .await?;
         }
         Ok(())
     }
