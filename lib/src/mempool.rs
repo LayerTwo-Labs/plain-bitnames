@@ -39,7 +39,7 @@ impl MemPool {
         self.transactions.put(
             txn,
             &transaction.transaction.txid().into(),
-            &transaction,
+            transaction,
         )?;
         Ok(())
     }

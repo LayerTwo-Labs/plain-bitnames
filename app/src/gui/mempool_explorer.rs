@@ -7,14 +7,9 @@ use lib::{
     types::{GetValue, OutPoint},
 };
 
+#[derive(Default)]
 pub struct MemPoolExplorer {
     current: usize,
-}
-
-impl Default for MemPoolExplorer {
-    fn default() -> Self {
-        Self { current: 0 }
-    }
 }
 
 impl MemPoolExplorer {
@@ -59,7 +54,7 @@ impl MemPoolExplorer {
                                 ui.selectable_value(
                                     &mut self.current,
                                     index,
-                                    format!("{txid}"),
+                                    txid.to_string(),
                                 );
                                 ui.with_layout(
                                     egui::Layout::right_to_left(
@@ -88,7 +83,7 @@ impl MemPoolExplorer {
                                 ui.selectable_value(
                                     &mut self.current,
                                     index,
-                                    format!("{txid}"),
+                                    txid.to_string(),
                                 );
                                 ui.monospace("invalid");
                                 ui.end_row();
@@ -127,7 +122,7 @@ impl MemPoolExplorer {
                             let hash = &hash[0..8];
                             let value =
                                 bitcoin::Amount::from_sat(output.get_value());
-                            ui.monospace(format!("{kind}",));
+                            ui.monospace(kind.to_string());
                             ui.monospace(format!("{hash}:{vout}",));
                             ui.monospace(format!("{value}",));
                             ui.end_row();
@@ -151,7 +146,7 @@ impl MemPoolExplorer {
                             let value =
                                 bitcoin::Amount::from_sat(output.get_value());
                             ui.monospace(format!("{vout}"));
-                            ui.monospace(format!("{address}"));
+                            ui.monospace(address.to_string());
                             ui.monospace(format!("{value}"));
                             ui.end_row();
                         }
