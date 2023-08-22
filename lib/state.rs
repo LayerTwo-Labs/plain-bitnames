@@ -43,8 +43,10 @@ pub enum Error {
     FillTxOutputContentsFailed,
     #[error("heed error")]
     Heed(#[from] heed::Error),
-    #[error("missing bitname {name_hash:?}")]
+    #[error("missing BitName {name_hash:?}")]
     MissingBitName { name_hash: Hash },
+    #[error("missing BitName reservation {txid}")]
+    MissingReservation { txid: Txid },
     #[error("no BitNames to update")]
     NoBitNamesToUpdate,
     #[error("total fees less than coinbase value")]
@@ -533,6 +535,42 @@ impl State {
         Ok(())
     }
 
+    // apply bitname registration
+    fn apply_bitname_registration(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        name_hash: Hash,
+        bitname_data: &types::BitNameData,
+    ) -> Result<(), Error> {
+        // Find the reservation to burn
+        let implied_commitment =
+            filled_tx.implied_reservation_commitment().expect(
+                "A BitName registration tx should have an implied commitment",
+            );
+        let burned_reservation_txid =
+            filled_tx.spent_reservations().find_map(|(_, filled_output)| {
+                let (txid, commitment) = filled_output.reservation_data()
+                    .expect("A spent reservation should correspond to a commitment");
+                if *commitment == implied_commitment {
+                    Some(txid)
+                } else {
+                    None
+                }
+            }).expect("A BitName registration tx should correspond to a burned reservation");
+        if !self
+            .bitname_reservations
+            .delete(rwtxn, burned_reservation_txid)?
+        {
+            return Err(Error::MissingReservation {
+                txid: *burned_reservation_txid,
+            });
+        }
+        let bitname_data = BitNameData::init(bitname_data.clone());
+        self.bitnames.put(rwtxn, &name_hash, &bitname_data)?;
+        Ok(())
+    }
+
     // apply bitname updates
     fn apply_bitname_updates(
         &self,
@@ -547,6 +585,7 @@ impl State {
             .spent_bitnames()
             .next_back()
             .ok_or(Error::NoBitNamesToUpdate)?
+            .1
             .bitname()
             .expect("should only contain BitName outputs");
         let mut bitname_data = self
@@ -619,9 +658,12 @@ impl State {
                     revealed_nonce: _,
                     bitname_data,
                 }) => {
-                    let bitname_data =
-                        BitNameData::init((**bitname_data).clone());
-                    self.bitnames.put(txn, name_hash, &bitname_data)?;
+                    let () = self.apply_bitname_registration(
+                        txn,
+                        &filled_tx,
+                        *name_hash,
+                        bitname_data,
+                    )?;
                 }
                 Some(TxData::BitNameUpdate(bitname_updates)) => {
                     let () = self.apply_bitname_updates(

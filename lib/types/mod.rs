@@ -124,7 +124,7 @@ pub struct Transaction {
     pub data: Option<TransactionData>,
 }
 
-/// Representation of Output Content that includes asset type or
+/// Representation of Output Content that includes asset type and/or
 /// reservation commitment
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum FilledContent {
@@ -135,8 +135,8 @@ pub enum FilledContent {
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     },
     BitName(Hash),
-    /// Reservation commitment
-    BitNameReservation(Hash),
+    /// Reservation txid and commitment
+    BitNameReservation(Txid, Hash),
 }
 
 /// Representation of output that includes asset type
@@ -412,6 +412,23 @@ impl FilledContent {
     pub fn is_withdrawal(&self) -> bool {
         matches!(self, Self::BitcoinWithdrawal { .. })
     }
+
+    /// returns the reservation txid and commitment if the filled output
+    /// content corresponds to a BitName reservation output.
+    pub fn reservation_data(&self) -> Option<(&Txid, &Hash)> {
+        match self {
+            Self::BitNameReservation(txid, commitment) => {
+                Some((txid, commitment))
+            }
+            _ => None,
+        }
+    }
+
+    /// returns the reservation commitment if the filled output content
+    /// corresponds to a BitName reservation output.
+    pub fn reservation_commitment(&self) -> Option<&Hash> {
+        self.reservation_data().map(|(_, commitment)| commitment)
+    }
 }
 
 impl From<FilledContent> for Content {
@@ -470,6 +487,18 @@ impl FilledOutput {
     /// true if the output content corresponds to a reservation
     pub fn is_reservation(&self) -> bool {
         self.content.is_reservation()
+    }
+
+    /// returns the reservation txid and commitment if the filled output
+    /// content corresponds to a BitName reservation output.
+    pub fn reservation_data(&self) -> Option<(&Txid, &Hash)> {
+        self.content.reservation_data()
+    }
+
+    /// returns the reservation commitment if the filled output content
+    /// corresponds to a BitName reservation output.
+    pub fn reservation_commitment(&self) -> Option<&Hash> {
+        self.content.reservation_commitment()
     }
 }
 
@@ -551,6 +580,13 @@ impl FilledTransaction {
         self.transaction.txid()
     }
 
+    /// return an iterator over spent outpoints/outputs
+    pub fn spent_inputs(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
+        self.inputs().iter().zip(self.spent_utxos.iter())
+    }
+
     /// returns the total value spent
     pub fn spent_value(&self) -> u64 {
         self.spent_utxos.iter().map(GetValue::get_value).sum()
@@ -574,19 +610,19 @@ impl FilledTransaction {
     }
 
     /// return an iterator over spent reservations
-    pub fn spent_reservations(&self) -> impl Iterator<Item = &FilledOutput> {
-        self.spent_utxos
-            .iter()
-            .filter(|filled_output| filled_output.is_reservation())
+    pub fn spent_reservations(
+        &self,
+    ) -> impl Iterator<Item = (&OutPoint, &FilledOutput)> {
+        self.spent_inputs()
+            .filter(|(_, filled_output)| filled_output.is_reservation())
     }
 
     /// return an iterator over spent bitnames
     pub fn spent_bitnames(
         &self,
-    ) -> impl DoubleEndedIterator<Item = &FilledOutput> {
-        self.spent_utxos
-            .iter()
-            .filter(|filled_output| filled_output.is_bitname())
+    ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
+        self.spent_inputs()
+            .filter(|(_, filled_output)| filled_output.is_bitname())
     }
 
     /// compute the filled content for BitName outputs
@@ -599,7 +635,7 @@ impl FilledTransaction {
         let new_bitname_content: Option<FilledContent> =
             self.registration_name_hash().map(FilledContent::BitName);
         self.spent_bitnames()
-            .map(FilledOutput::content)
+            .map(|(_, filled_output)| filled_output.content())
             .cloned()
             .chain(new_bitname_content.into_iter())
     }
@@ -612,15 +648,16 @@ impl FilledTransaction {
         // If this tx is a BitName reservation, this is the content of the
         // output corresponding to the newly created BitName reservation,
         // which must be the final reservation output.
-        let new_reservation_content: Option<FilledContent> = self
-            .reservation_commitment()
-            .map(FilledContent::BitNameReservation);
+        let new_reservation_content: Option<FilledContent> =
+            self.reservation_commitment().map(|commitment| {
+                FilledContent::BitNameReservation(self.txid(), commitment)
+            });
         // used to track if the reservation that should be burned as part
         // of a registration tx
         let mut reservation_to_burn: Option<Hash> =
             self.implied_reservation_commitment();
         self.spent_reservations()
-            .map(FilledOutput::content)
+            .map(|(_, filled_output)| filled_output.content())
             .cloned()
             // In the event of a registration, the first corresponding
             // reservation does not occur in the output
@@ -628,7 +665,7 @@ impl FilledTransaction {
                 if let Some(implied_commitment) = reservation_to_burn {
                     if matches!(
                         content,
-                        FilledContent::BitNameReservation(commitment)
+                        FilledContent::BitNameReservation(_, commitment)
                             if *commitment == implied_commitment)
                     {
                         reservation_to_burn = None;
