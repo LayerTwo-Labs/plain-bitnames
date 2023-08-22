@@ -216,7 +216,7 @@ impl State {
         >::new();
         for item in self.utxos.iter(txn)? {
             let (outpoint, output) = item?;
-            if let FilledContent::BitcoinWithdrawal {
+            if let FilledOutputContent::BitcoinWithdrawal {
                 value,
                 ref main_address,
                 main_fee,
@@ -485,7 +485,7 @@ impl State {
                 let outpoint = OutPoint::Deposit(*outpoint);
                 let output = FilledOutput::new(
                     address,
-                    FilledContent::Bitcoin(deposit.value),
+                    FilledOutputContent::Bitcoin(deposit.value),
                 );
                 self.utxos.put(txn, &outpoint, &output)?;
             }
@@ -611,17 +611,19 @@ impl State {
                 vout: vout as u32,
             };
             let filled_content = match output.content.clone() {
-                Content::Value(value) => FilledContent::Bitcoin(value),
-                Content::Withdrawal {
+                OutputContent::Value(value) => {
+                    FilledOutputContent::Bitcoin(value)
+                }
+                OutputContent::Withdrawal {
                     value,
                     main_fee,
                     main_address,
-                } => FilledContent::BitcoinWithdrawal {
+                } => FilledOutputContent::BitcoinWithdrawal {
                     value,
                     main_fee,
                     main_address,
                 },
-                Content::BitName | Content::BitNameReservation => {
+                OutputContent::BitName | OutputContent::BitNameReservation => {
                     return Err(Error::BadCoinbaseOutputContent);
                 }
             };

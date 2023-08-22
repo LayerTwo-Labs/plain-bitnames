@@ -1,7 +1,7 @@
 pub use crate::authorization::{get_address, Authorization};
 use crate::types::{
-    Address, AuthorizedTransaction, Content, FilledOutput, GetValue, OutPoint,
-    Output, Transaction,
+    Address, AuthorizedTransaction, FilledOutput, GetValue, OutPoint, Output,
+    OutputContent, Transaction,
 };
 use bip300301::bitcoin;
 use byteorder::{BigEndian, ByteOrder};
@@ -71,13 +71,13 @@ impl Wallet {
         let outputs = vec![
             Output::new(
                 self.get_new_address()?,
-                Content::Withdrawal {
+                OutputContent::Withdrawal {
                     value,
                     main_fee,
                     main_address,
                 },
             ),
-            Output::new(self.get_new_address()?, Content::Value(change)),
+            Output::new(self.get_new_address()?, OutputContent::Value(change)),
         ];
         Ok(Transaction::new(inputs, outputs))
     }
@@ -92,8 +92,8 @@ impl Wallet {
         let change = total - value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
-            Output::new(address, Content::Value(value)),
-            Output::new(self.get_new_address()?, Content::Value(change)),
+            Output::new(address, OutputContent::Value(value)),
+            Output::new(self.get_new_address()?, OutputContent::Value(change)),
         ];
         Ok(Transaction::new(inputs, outputs))
     }

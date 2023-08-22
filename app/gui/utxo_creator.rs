@@ -3,7 +3,7 @@ use crate::app::App;
 use eframe::egui;
 use lib::{
     bip300301::bitcoin,
-    types::{self, Content, Output},
+    types::{self, Output, OutputContent},
 };
 
 pub struct UtxoCreator {
@@ -110,7 +110,7 @@ impl UtxoCreator {
                     {
                         let utxo = Output::new(
                             address.expect("should not happen"),
-                            Content::Value(
+                            OutputContent::Value(
                                 value.expect("should not happen").to_sat(),
                             ),
                         );
