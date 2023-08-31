@@ -141,3 +141,9 @@ pub fn hash<T: serde::Serialize>(data: &T) -> Hash {
         .expect("failed to serialize a type to compute a hash");
     blake3::hash(&data_serialized).into()
 }
+
+pub fn update<T: serde::Serialize>(hasher: &mut blake3::Hasher, data: &T) {
+    let data_serialized = bincode::serialize(data)
+        .expect("failed to serialize a type to compute a hash");
+    let _hasher = hasher.update(&data_serialized);
+}

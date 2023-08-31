@@ -9,7 +9,7 @@ use super::{
     hashes::{self, Hash, MerkleRoot, Txid},
     EncryptionPubKey, GetValue,
 };
-use crate::authorization::PublicKey;
+use crate::authorization::{Authorization, PublicKey, Signature};
 
 #[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutPoint {
@@ -81,6 +81,15 @@ pub struct BitNameDataUpdates {
     pub signing_pubkey: Update<PublicKey>,
 }
 
+/// batch icann registration tx payload
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BatchIcannRegistrationData {
+    /// plaintext names of the bitnames to be registered as ICANN domains
+    pub plain_names: Vec<String>,
+    /// signature over the batch icann registration tx
+    pub signature: Signature,
+}
+
 #[allow(clippy::enum_variant_names)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum TransactionData {
@@ -97,6 +106,7 @@ pub enum TransactionData {
         bitname_data: Box<BitNameData>,
     },
     BitNameUpdate(Box<BitNameDataUpdates>),
+    BatchIcann(BatchIcannRegistrationData),
 }
 
 pub type TxData = TransactionData;
@@ -136,6 +146,13 @@ pub struct FilledOutput {
 pub struct FilledTransaction {
     pub transaction: Transaction,
     pub spent_utxos: Vec<FilledOutput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorizedTransaction {
+    pub transaction: Transaction,
+    /// Authorization is called witness in Bitcoin.
+    pub authorizations: Vec<Authorization>,
 }
 
 impl std::fmt::Display for OutPoint {
@@ -225,6 +242,11 @@ impl TxData {
     pub fn is_update(&self) -> bool {
         matches!(self, Self::BitNameUpdate(_))
     }
+
+    /// true if the tx data corresponds to a batch icann registration
+    pub fn is_batch_icann(&self) -> bool {
+        matches!(self, Self::BatchIcann(_))
+    }
 }
 
 impl Transaction {
@@ -262,6 +284,14 @@ impl Transaction {
     pub fn is_update(&self) -> bool {
         match &self.data {
             Some(tx_data) => tx_data.is_update(),
+            None => false,
+        }
+    }
+
+    /// true if the tx data corresponds to a batch icann registration
+    pub fn is_batch_icann(&self) -> bool {
+        match &self.data {
+            Some(tx_data) => tx_data.is_batch_icann(),
             None => false,
         }
     }
@@ -308,6 +338,15 @@ impl Transaction {
     pub fn reservation_commitment(&self) -> Option<Hash> {
         match self.data {
             Some(TxData::BitNameReservation { commitment }) => Some(commitment),
+            _ => None,
+        }
+    }
+
+    pub fn batch_icann_data(&self) -> Option<&BatchIcannRegistrationData> {
+        match self.data {
+            Some(TxData::BatchIcann(ref batch_icann_data)) => {
+                Some(batch_icann_data)
+            }
             _ => None,
         }
     }
@@ -475,9 +514,14 @@ impl FilledTransaction {
         self.transaction.is_reservation()
     }
 
-    // true if the tx data corresponds to a BitName update
+    /// true if the tx data corresponds to a BitName update
     pub fn is_update(&self) -> bool {
         self.transaction.is_update()
+    }
+
+    /// true if the tx data corresponds to a BitName batch icann registration
+    pub fn is_batch_icann(&self) -> bool {
+        self.transaction.is_batch_icann()
     }
 
     /// accessor for tx outputs
@@ -498,6 +542,12 @@ impl FilledTransaction {
     /// If the tx is a bitname reservation, returns the reservation commitment
     pub fn reservation_commitment(&self) -> Option<Hash> {
         self.transaction.reservation_commitment()
+    }
+
+    /// If the tx is a batch icann registration, returns the batch icann
+    /// registration data
+    pub fn batch_icann_data(&self) -> Option<&BatchIcannRegistrationData> {
+        self.transaction.batch_icann_data()
     }
 
     /// accessor for txid
@@ -640,5 +690,36 @@ impl FilledTransaction {
                 })
             })
             .collect()
+    }
+
+    /// not all spent utxos require auth
+    pub fn spent_utxos_requiring_auth(&self) -> Vec<FilledOutput> {
+        if let Some(batch_icann_data) = self.batch_icann_data() {
+            let mut bitnames = batch_icann_data
+                .plain_names
+                .iter()
+                .map(|plain_name| {
+                    Hash::from(blake3::hash(plain_name.as_bytes()))
+                })
+                .peekable();
+            let mut spent_utxos = self.spent_utxos.clone();
+            spent_utxos.retain(|output| {
+                let Some(spent_bitname) = output.bitname() else {
+                    return true;
+                };
+                let Some(bitname) = bitnames.peek() else {
+                    return true;
+                };
+                if spent_bitname == bitname {
+                    let _ = bitnames.next();
+                    false
+                } else {
+                    true
+                }
+            });
+            spent_utxos
+        } else {
+            self.spent_utxos.clone()
+        }
     }
 }

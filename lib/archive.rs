@@ -1,5 +1,5 @@
 use crate::types::*;
-use crate::types::{hash, BlockHash, Body};
+use crate::types::{hashes, BlockHash, Body};
 use heed::byteorder::{BigEndian, ByteOrder};
 use heed::types::*;
 use heed::{Database, RoTxn, RwTxn};
@@ -47,7 +47,7 @@ impl Archive {
 
     pub fn get_best_hash(&self, txn: &RoTxn) -> Result<BlockHash, Error> {
         let best_hash = match self.headers.last(txn)? {
-            Some((_, header)) => hash(&header).into(),
+            Some((_, header)) => hashes::hash(&header).into(),
             None => [0; 32].into(),
         };
         Ok(best_hash)

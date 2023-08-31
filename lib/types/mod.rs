@@ -8,13 +8,15 @@ use bip300301::bitcoin;
 use crate::authorization::Authorization;
 
 mod address;
-mod hashes;
+pub mod constants;
+pub mod hashes;
 mod transaction;
 
 pub use address::*;
-pub use hashes::*;
+pub use hashes::{BlockHash, Hash, MerkleRoot, Txid};
 pub use transaction::{
-    BitNameData, BitNameDataUpdates, Content as OutputContent,
+    AuthorizedTransaction, BatchIcannRegistrationData, BitNameData,
+    BitNameDataUpdates, Content as OutputContent,
     FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
     OutPoint, Output, Transaction, TxData, Update,
 };
@@ -65,13 +67,6 @@ pub struct TwoWayPegData {
     pub deposits: HashMap<OutPoint, Output>,
     pub deposit_block_hash: Option<bitcoin::BlockHash>,
     pub bundle_statuses: HashMap<bitcoin::Txid, WithdrawalBundleStatus>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthorizedTransaction {
-    pub transaction: Transaction,
-    /// Authorization is called witness in Bitcoin.
-    pub authorizations: Vec<Authorization>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,7 +128,7 @@ impl Body {
 
     pub fn compute_merkle_root(&self) -> MerkleRoot {
         // FIXME: Compute actual merkle root instead of just a hash.
-        hash(&(&self.coinbase, &self.transactions)).into()
+        hashes::hash(&(&self.coinbase, &self.transactions)).into()
     }
 
     pub fn get_inputs(&self) -> Vec<OutPoint> {

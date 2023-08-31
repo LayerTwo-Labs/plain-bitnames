@@ -19,6 +19,8 @@ use crate::types::{self, *};
 pub struct BitNameData {
     /// commitment to arbitrary data
     commitment: Vec<Option<Hash>>,
+    /// set if the plain bitname is known to be an ICANN domain
+    is_icann: bool,
     /// optional ipv4 addr
     ipv4_addr: Vec<Option<Ipv4Addr>>,
     /// optional ipv6 addr
@@ -37,14 +39,20 @@ pub enum Error {
     BadCoinbaseOutputContent,
     #[error("bitname {name_hash:?} already registered")]
     BitNameAlreadyRegistered { name_hash: Hash },
+    #[error("bitname {name_hash:?} already registered as an ICANN name")]
+    BitNameAlreadyIcann { name_hash: Hash },
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
     #[error("heed error")]
     Heed(#[from] heed::Error),
+    #[error("invalid ICANN name: {plain_name}")]
+    IcannNameInvalid { plain_name: String },
     #[error("missing BitName {name_hash:?}")]
     MissingBitName { name_hash: Hash },
+    #[error("missing BitName input {name_hash:?}")]
+    MissingBitNameInput { name_hash: Hash },
     #[error("missing BitName reservation {txid}")]
     MissingReservation { txid: Txid },
     #[error("no BitNames to update")]
@@ -55,6 +63,10 @@ pub enum Error {
     NotEnoughValueIn,
     #[error("utxo {outpoint} doesn't exist")]
     NoUtxo { outpoint: OutPoint },
+    #[error(transparent)]
+    SignatureError(#[from] ed25519_dalek::SignatureError),
+    #[error("Too few BitName outputs")]
+    TooFewBitNameOutputs,
     #[error("unbalanced BitNames: {n_bitname_inputs} BitName inputs, {n_bitname_outputs} BitName outputs")]
     UnbalancedBitNames {
         n_bitname_inputs: usize,
@@ -91,6 +103,7 @@ impl BitNameData {
     fn init(bitname_data: types::BitNameData) -> Self {
         Self {
             commitment: vec![bitname_data.commitment],
+            is_icann: false,
             ipv4_addr: vec![bitname_data.ipv4_addr],
             ipv6_addr: vec![bitname_data.ipv6_addr],
             encryption_pubkey: vec![bitname_data.encryption_pubkey],
@@ -297,7 +310,7 @@ impl State {
             }],
         ]
         .concat();
-        let commitment = hash(&inputs);
+        let commitment = hashes::hash(&inputs);
         let script = script::Builder::new()
             .push_opcode(opcodes::all::OP_RETURN)
             .push_slice(commitment)
@@ -381,6 +394,8 @@ impl State {
     /// BitName must be unregistered.
     /// * If the tx is a BitName update, then there must be at least one
     /// BitName input and output
+    /// * If the tx is a Batch Icann registration, then there must be at least
+    /// as many bitname outputs as there are registered names.
     pub fn validate_bitnames(
         &self,
         rotxn: &RoTxn,
@@ -391,6 +406,11 @@ impl State {
         if tx.is_update() && (n_bitname_inputs < 1 || n_bitname_outputs < 1) {
             return Err(Error::NoBitNamesToUpdate);
         };
+        if let Some(batch_icann_data) = tx.batch_icann_data() {
+            if n_bitname_outputs < batch_icann_data.plain_names.len() {
+                return Err(Error::TooFewBitNameOutputs);
+            }
+        }
         if let Some(name_hash) = tx.registration_name_hash() {
             if self.bitnames.get(rotxn, &name_hash)?.is_some() {
                 return Err(Error::BitNameAlreadyRegistered { name_hash });
@@ -407,6 +427,46 @@ impl State {
         })
     }
 
+    /// If the tx is a batch icann registration, check that
+    /// * The signature is valid over the tx
+    /// * Each of the declared plain names is a valid ICANN domain name
+    pub fn validate_batch_icann(
+        &self,
+        tx: &FilledTransaction,
+    ) -> Result<(), Error> {
+        if let Some(batch_icann_data) = tx.batch_icann_data() {
+            // validate plain names
+            for plain_name in batch_icann_data.plain_names.iter() {
+                // check ascii
+                if !plain_name.is_ascii() {
+                    return Err(Error::IcannNameInvalid {
+                        plain_name: plain_name.clone(),
+                    });
+                }
+                // at most one seperator
+                if plain_name.chars().filter(|char| *char == '.').count() > 1 {
+                    return Err(Error::IcannNameInvalid {
+                        plain_name: plain_name.clone(),
+                    });
+                }
+                if addr::parse_domain_name(plain_name).is_err() {
+                    return Err(Error::IcannNameInvalid {
+                        plain_name: plain_name.clone(),
+                    });
+                }
+            }
+            // validate signature
+            let msg_hash = hashes::hash(&(
+                &tx.transaction.inputs,
+                &tx.transaction.outputs,
+                &batch_icann_data.plain_names,
+            ));
+            constants::BATCH_ICANN_PUBKEY
+                .verify_strict(&msg_hash, &batch_icann_data.signature)?;
+        }
+        Ok(())
+    }
+
     /// Validates a filled transaction, and returns the fee
     pub fn validate_filled_transaction(
         &self,
@@ -415,6 +475,7 @@ impl State {
     ) -> Result<u64, Error> {
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitnames(rotxn, tx)?;
+        let () = self.validate_batch_icann(tx)?;
         tx.fee().ok_or(Error::NotEnoughValueIn)
     }
 
@@ -449,7 +510,7 @@ impl State {
         }
         let spent_utxos = filled_transactions
             .iter()
-            .flat_map(|t| t.spent_utxos.iter());
+            .flat_map(|t| t.spent_utxos_requiring_auth().into_iter());
         for (authorization, spent_utxo) in
             body.authorizations.iter().zip(spent_utxos)
         {
@@ -599,6 +660,43 @@ impl State {
         Ok(())
     }
 
+    // apply batch icann registration
+    fn apply_batch_icann(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        batch_icann_data: &BatchIcannRegistrationData,
+    ) -> Result<(), Error> {
+        let name_hashes = batch_icann_data
+            .plain_names
+            .iter()
+            .map(|name| Hash::from(blake3::hash(name.as_bytes())));
+        let mut spent_bitnames = filled_tx.spent_bitnames();
+        for name_hash in name_hashes {
+            // search for the bitname to be registered as an ICANN domain
+            // exists in the inputs
+            let found_bitname = spent_bitnames.any(|(_, outpoint)| {
+                let bitname = outpoint.bitname()
+                    .expect("spent bitname input should correspond to a known name hash");
+                *bitname == name_hash
+            });
+            if found_bitname {
+                let mut bitname_data = self
+                    .bitnames
+                    .get(rwtxn, &name_hash)?
+                    .ok_or(Error::MissingBitName { name_hash })?;
+                if bitname_data.is_icann {
+                    return Err(Error::BitNameAlreadyIcann { name_hash });
+                }
+                bitname_data.is_icann = true;
+                self.bitnames.put(rwtxn, &name_hash, &bitname_data)?;
+            } else {
+                return Err(Error::MissingBitNameInput { name_hash });
+            }
+        }
+        Ok(())
+    }
+
     pub fn connect_body(
         &self,
         txn: &mut RwTxn,
@@ -672,6 +770,13 @@ impl State {
                         txn,
                         &filled_tx,
                         (**bitname_updates).clone(),
+                    )?;
+                }
+                Some(TxData::BatchIcann(batch_icann_data)) => {
+                    let () = self.apply_batch_icann(
+                        txn,
+                        &filled_tx,
+                        batch_icann_data,
                     )?;
                 }
             }

@@ -5,6 +5,7 @@ edition = "2021"
 authors = [ "Ash Manning <ashermanning@yahoo.co.uk>" ]
 
 [dependencies]
+addr = "0.15.6"
 bincode = "1.3.3"
 bip300301 = { git = "https://github.com/nchashch/bip300301", rev = "cf917605ab1937c57f19f72311f96ac0b4832de0" }
 blake3 = "1.4.1"
@@ -15,6 +16,8 @@ ed25519-dalek = { version = "1.0.1", features = ["batch", "serde"] }
 ed25519-dalek-bip32 = "0.2.0"
 heed = { git = "https://github.com/meilisearch/heed", tag = "v0.12.4", version = "0.12.4" }
 hex = "0.4.3"
+hex-literal = "0.4.1"
+lazy_static = "1.4.0"
 quinn = "0.10.1"
 rayon = "1.7.0"
 rcgen = "0.11.1"
