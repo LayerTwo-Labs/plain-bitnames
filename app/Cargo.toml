@@ -7,7 +7,7 @@ authors = [ "Ash Manning <ashermanning@yahoo.co.uk>" ]
 [dependencies]
 plain_bitnames = { path = "../lib" }
 
-anyhow = "1.0.72"
+anyhow = { version = "1.0.72", features = ["backtrace"] }
 serde = { version = "1.0.179", features = ["derive"] }
 thiserror = "1.0.44"
 tokio = { version = "1.29.1", features = ["rt-multi-thread", "macros"] }
