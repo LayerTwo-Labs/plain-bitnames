@@ -260,8 +260,13 @@ impl Transaction {
     }
 
     /// return an iterator over value outputs with index
-    pub fn indexed_value_outputs(&self) -> impl Iterator<Item = (usize, &Output)> {
-        self.outputs.iter().enumerate().filter(|(_, output)| output.get_value() != 0)
+    pub fn indexed_value_outputs(
+        &self,
+    ) -> impl Iterator<Item = (usize, &Output)> {
+        self.outputs
+            .iter()
+            .enumerate()
+            .filter(|(_, output)| output.get_value() != 0)
     }
 
     /// return an iterator over bitname outputs
@@ -325,9 +330,8 @@ impl Transaction {
                 revealed_nonce,
                 ..
             }) => {
-                let implied_commitment = blake3::keyed_hash(
-                    &revealed_nonce ,
-                    &name_hash).into();
+                let implied_commitment =
+                    blake3::keyed_hash(&revealed_nonce, &name_hash).into();
                 Some(implied_commitment)
             }
             _ => None,
@@ -335,7 +339,9 @@ impl Transaction {
     }
 
     /// return an iterator over reservation outputs
-    pub fn reservation_outputs(&self) -> impl DoubleEndedIterator<Item = &Output> {
+    pub fn reservation_outputs(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &Output> {
         self.outputs.iter().filter(|output| output.is_reservation())
     }
 

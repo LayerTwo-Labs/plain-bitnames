@@ -4,20 +4,23 @@ use eframe::egui;
 
 use plain_bitnames::{
     bip300301::bitcoin,
-    types::{FilledOutput, GetValue, OutPoint},
+    types::{FilledOutput, GetValue, OutPoint, Transaction},
 };
 
 use crate::app::App;
 
-
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct UtxoSelector;
 
 impl UtxoSelector {
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(
+        &mut self,
+        app: &mut App,
+        ui: &mut egui::Ui,
+        tx: &mut Transaction,
+    ) {
         ui.heading("Spend UTXO");
-        let selected: HashSet<_> =
-            app.transaction.inputs.iter().cloned().collect();
+        let selected: HashSet<_> = tx.inputs.iter().cloned().collect();
         let utxos = &app.utxos;
         let total: u64 = utxos
             .iter()
@@ -48,7 +51,7 @@ impl UtxoSelector {
                     )
                     .clicked()
                 {
-                    app.transaction.inputs.push(*outpoint);
+                    tx.inputs.push(*outpoint);
                 }
                 ui.end_row();
             }

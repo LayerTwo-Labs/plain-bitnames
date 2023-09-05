@@ -16,7 +16,6 @@ pub struct App {
     pub wallet: Wallet,
     pub miner: Miner,
     pub utxos: HashMap<OutPoint, FilledOutput>,
-    pub transaction: Transaction,
     runtime: tokio::runtime::Runtime,
 }
 
@@ -62,17 +61,14 @@ impl App {
             wallet,
             miner,
             utxos,
-            transaction: Transaction::default(),
             runtime,
         })
     }
 
-    pub fn sign_and_send(&mut self) -> Result<(), Error> {
-        let authorized_transaction =
-            self.wallet.authorize(self.transaction.clone())?;
+    pub fn sign_and_send(&mut self, tx: Transaction) -> Result<(), Error> {
+        let authorized_transaction = self.wallet.authorize(tx)?;
         self.runtime
             .block_on(self.node.submit_transaction(&authorized_transaction))?;
-        self.transaction = Transaction::default();
         self.update_utxos()?;
         Ok(())
     }

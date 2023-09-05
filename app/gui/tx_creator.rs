@@ -1,8 +1,6 @@
-
-
 use eframe::egui;
 
-use plain_bitnames::bip300301::bitcoin;
+use plain_bitnames::{bip300301::bitcoin, types::Transaction};
 
 use crate::app::App;
 
@@ -10,7 +8,9 @@ use crate::app::App;
 pub enum TxType {
     #[default]
     Regular,
-    BitNameReservation { plaintext_name: String }
+    BitNameReservation {
+        plaintext_name: String,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -24,26 +24,35 @@ impl std::fmt::Display for TxType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Regular => write!(f, "regular"),
-            Self::BitNameReservation { .. }=> write!(f, "reserve bitname"),
+            Self::BitNameReservation { .. } => write!(f, "reserve bitname"),
         }
     }
 }
 
 impl TxCreator {
     // set tx data for the current transaction
-    fn set_tx_data(&self, app: &mut App) -> anyhow::Result<()> {
+    fn set_tx_data(
+        &self,
+        app: &mut App,
+        tx: &mut Transaction,
+    ) -> anyhow::Result<()> {
         match &self.tx_type {
             TxType::Regular => {
-                let () = app.wallet.regularize(&mut app.transaction);
-            },
+                let () = app.wallet.regularize(tx);
+            }
             TxType::BitNameReservation { plaintext_name } => {
-                let () = app.wallet.reserve_bitname(&mut app.transaction, &plaintext_name)?;
+                let () = app.wallet.reserve_bitname(tx, plaintext_name)?;
             }
         }
         Ok(())
     }
 
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) -> anyhow::Result<()> {
+    pub fn show(
+        &mut self,
+        app: &mut App,
+        ui: &mut egui::Ui,
+        tx: &mut Transaction,
+    ) -> anyhow::Result<()> {
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_source("tx_type")
                 .selected_text(format!("{}", self.tx_type))
@@ -55,7 +64,9 @@ impl TxCreator {
                     );
                     ui.selectable_value(
                         &mut self.tx_type,
-                        TxType::BitNameReservation { plaintext_name: String::new() },
+                        TxType::BitNameReservation {
+                            plaintext_name: String::new(),
+                        },
                         "reserve bitname",
                     );
                 });
@@ -70,17 +81,16 @@ impl TxCreator {
                 });
             }
         }
-        let () = self.set_tx_data(app)?;
-        let txid =
-            &format!("{}", app.transaction.txid())
-                [0..8];
+        let () = self.set_tx_data(app, tx)?;
+        let txid = &format!("{}", tx.txid())[0..8];
         ui.monospace(format!("txid: {txid}"));
         if self.value_in >= self.value_out {
             let fee = self.value_in - self.value_out;
             let fee = bitcoin::Amount::from_sat(fee);
             ui.monospace(format!("fee:  {fee}"));
             if ui.button("sign and send").clicked() {
-                app.sign_and_send().unwrap_or(());
+                let () = app.sign_and_send(tx.clone())?;
+                *tx = Transaction::default();
             }
         } else {
             ui.label("Not Enough Value In");

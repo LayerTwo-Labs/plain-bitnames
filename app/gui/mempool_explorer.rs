@@ -8,7 +8,6 @@ use plain_bitnames::{
 
 use crate::app::App;
 
-
 #[derive(Default)]
 pub struct MemPoolExplorer {
     current: usize,

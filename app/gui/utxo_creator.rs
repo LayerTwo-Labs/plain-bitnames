@@ -2,24 +2,24 @@ use eframe::egui;
 
 use plain_bitnames::{
     bip300301::bitcoin,
-    types::{self, Output, OutputContent},
+    types::{self, Output, OutputContent, Transaction},
 };
 
 use crate::app::App;
 
+#[derive(Debug, Eq, PartialEq)]
+enum UtxoType {
+    Regular,
+    Withdrawal,
+}
 
+#[derive(Debug)]
 pub struct UtxoCreator {
     utxo_type: UtxoType,
     value: String,
     address: String,
     main_address: String,
     _main_fee: String,
-}
-
-#[derive(Eq, PartialEq)]
-enum UtxoType {
-    Regular,
-    Withdrawal,
 }
 
 impl std::fmt::Display for UtxoType {
@@ -44,7 +44,12 @@ impl Default for UtxoCreator {
 }
 
 impl UtxoCreator {
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(
+        &mut self,
+        app: &mut App,
+        ui: &mut egui::Ui,
+        tx: &mut Transaction,
+    ) {
         ui.horizontal(|ui| {
             ui.heading("Create");
             egui::ComboBox::from_id_source("utxo_type")
@@ -116,7 +121,7 @@ impl UtxoCreator {
                                 value.expect("should not happen").to_sat(),
                             ),
                         );
-                        app.transaction.outputs.push(utxo);
+                        tx.outputs.push(utxo);
                     }
                 }
                 UtxoType::Withdrawal => {}

@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    path::Path
+    path::Path,
 };
 
 use bip300301::bitcoin;
@@ -11,11 +11,10 @@ use heed::{types::*, Database, RoTxn};
 use crate::{
     authorization::{get_address, Authorization},
     types::{
-        Address, AuthorizedTransaction, FilledOutput, GetValue, OutPoint, Output,
-        OutputContent, Transaction, TxData, Hash,
-    }
+        Address, AuthorizedTransaction, FilledOutput, GetValue, Hash, OutPoint,
+        Output, OutputContent, Transaction, TxData,
+    },
 };
-
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -178,6 +177,20 @@ impl Wallet {
                 tx.outputs.remove(last_reservation_idx);
                 tx.data = None;
             },
+            /*
+            Some(TxData::BitNameRegistration { name_hash, revealed_nonce, .. }) => {
+                // reverse index of last bitname output
+                let last_bitname_rev_idx =
+                    tx.outputs.iter().rev().position(Output::is_bitname))
+                        .expect("A bitname registration tx must have at least one bitname output")
+                    ;
+                //  index of last reservation output
+                let last_registration_idx = (tx.outputs.len() - 1) - last_registration_rev_idx;
+                let 
+                tx.outputs.remove(last_registration_idx);
+                tx.data = None;
+            }
+            */
             Some(_) => panic!("this function only accepts a regular or bitname reservation tx")
         }
     }
@@ -185,14 +198,21 @@ impl Wallet {
     /// given a regular transaction, add a bitname reservation.
     /// given a bitname reservation tx, change the reserved name.
     /// panics if the tx is not regular or a bitname reservation tx.
-    pub fn reserve_bitname(&self, tx: &mut Transaction, plain_name: &str) -> Result<(), Error> {
-        assert!(tx.is_regular() || tx.is_reservation(), "this function only accepts a regular or bitname reservation tx");
+    pub fn reserve_bitname(
+        &self,
+        tx: &mut Transaction,
+        plain_name: &str,
+    ) -> Result<(), Error> {
+        assert!(
+            tx.is_regular() || tx.is_reservation(),
+            "this function only accepts a regular or bitname reservation tx"
+        );
         // address for the reservation output
         let reservation_addr =
             // if the tx is already bitname reservation,
             // re-use the reservation address
             if tx.is_reservation() {
-                tx.reservation_outputs().rev().next()
+                tx.reservation_outputs().next_back()
                     .expect("A bitname reservation tx must have at least one reservation output")
                     .address
             }
@@ -210,9 +230,12 @@ impl Wallet {
                 self.get_new_address()?
             };
         let rotxn = self.env.read_txn()?;
-        let reservation_addr_idx =
-            self.address_to_index.get(&rotxn, &reservation_addr)?
-                .ok_or(Error::AddressDoesNotExist { address: reservation_addr })?;
+        let reservation_addr_idx = self
+            .address_to_index
+            .get(&rotxn, &reservation_addr)?
+            .ok_or(Error::AddressDoesNotExist {
+                address: reservation_addr,
+            })?;
         let reservation_keypair =
             self.get_keypair(&rotxn, u32::from_be_bytes(reservation_addr_idx))?;
         // sanity check that reservation_keypair corresponds to reservation_addr
@@ -221,13 +244,17 @@ impl Wallet {
         // hmac(secret, name_hash)
         let nonce = blake3::keyed_hash(
             reservation_keypair.secret.as_bytes(),
-            &name_hash).into();
+            &name_hash,
+        )
+        .into();
         // hmac(nonce, name_hash)
         let commitment = blake3::keyed_hash(&nonce, &name_hash).into();
         // if the tx is regular, add a reservation output
         if tx.is_regular() {
-            let reservation_output =
-                Output::new(reservation_addr, OutputContent::BitNameReservation);
+            let reservation_output = Output::new(
+                reservation_addr,
+                OutputContent::BitNameReservation,
+            );
             tx.outputs.push(reservation_output);
         };
         tx.data = Some(TxData::BitNameReservation { commitment });
