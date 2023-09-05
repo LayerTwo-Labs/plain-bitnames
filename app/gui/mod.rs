@@ -1,14 +1,17 @@
 use std::collections::HashSet;
 
-use crate::app::{lib, App};
 use eframe::egui;
-use lib::{bip300301::bitcoin, types::GetValue};
+
+use plain_bitnames::{bip300301::bitcoin, types::GetValue};
+
+use crate::app::App;
 
 mod block_explorer;
 mod deposit;
 mod mempool_explorer;
 mod miner;
 mod seed;
+mod tx_creator;
 mod utxo_creator;
 mod utxo_selector;
 
@@ -17,9 +20,9 @@ use deposit::Deposit;
 use mempool_explorer::MemPoolExplorer;
 use miner::Miner;
 use seed::SetSeed;
+use tx_creator::TxCreator;
+use utxo_creator::UtxoCreator;
 use utxo_selector::{show_utxo, UtxoSelector};
-
-use self::utxo_creator::UtxoCreator;
 
 pub struct EguiApp {
     app: App,
@@ -27,6 +30,7 @@ pub struct EguiApp {
     miner: Miner,
     deposit: Deposit,
     tab: Tab,
+    tx_creator: TxCreator,
     utxo_selector: UtxoSelector,
     utxo_creator: UtxoCreator,
     mempool_explorer: MemPoolExplorer,
@@ -52,6 +56,7 @@ impl EguiApp {
             set_seed: SetSeed::default(),
             miner: Miner,
             deposit: Deposit::default(),
+            tx_creator: TxCreator::default(),
             utxo_selector: UtxoSelector,
             utxo_creator: UtxoCreator::default(),
             mempool_explorer: MemPoolExplorer::default(),
@@ -101,6 +106,7 @@ impl eframe::App for EguiApp {
                         .filter(|(outpoint, _)| selected.contains(outpoint))
                         .map(|(_, output)| output.get_value())
                         .sum();
+                    self.tx_creator.value_in = value_in;
                     let value_out: u64 = self
                         .app
                         .transaction
@@ -108,6 +114,7 @@ impl eframe::App for EguiApp {
                         .iter()
                         .map(GetValue::get_value)
                         .sum();
+                    self.tx_creator.value_out = value_out;
                     egui::SidePanel::left("spend_utxo")
                         .exact_width(250.)
                         .resizable(false)
@@ -152,11 +159,13 @@ impl eframe::App for EguiApp {
                                         .enumerate()
                                     {
                                         let output = &self.app.utxos[outpoint];
-                                        show_utxo(ui, outpoint, output);
-                                        if ui.button("remove").clicked() {
-                                            remove = Some(vout);
+                                        if output.get_value() != 0 {
+                                            show_utxo(ui, outpoint, output);
+                                            if ui.button("remove").clicked() {
+                                                remove = Some(vout);
+                                            }
+                                            ui.end_row();
                                         }
-                                        ui.end_row();
                                     }
                                     if let Some(vout) = remove {
                                         self.app
@@ -189,9 +198,7 @@ impl eframe::App for EguiApp {
                                     for (vout, output) in self
                                         .app
                                         .transaction
-                                        .outputs
-                                        .iter()
-                                        .enumerate()
+                                        .indexed_value_outputs()
                                     {
                                         let address =
                                             &format!("{}", output.address)
@@ -232,21 +239,7 @@ impl eframe::App for EguiApp {
                         .show_inside(ui, |ui| {
                             self.utxo_creator.show(&mut self.app, ui);
                             ui.separator();
-                            ui.heading("Transaction");
-                            let txid =
-                                &format!("{}", self.app.transaction.txid())
-                                    [0..8];
-                            ui.monospace(format!("txid: {txid}"));
-                            if value_in >= value_out {
-                                let fee = value_in - value_out;
-                                let fee = bitcoin::Amount::from_sat(fee);
-                                ui.monospace(format!("fee:  {fee}"));
-                                if ui.button("sign and send").clicked() {
-                                    self.app.sign_and_send().unwrap_or(());
-                                }
-                            } else {
-                                ui.label("Not Enough Value In");
-                            }
+                            self.tx_creator.show(&mut self.app, ui).unwrap();
                         });
                 }
                 Tab::MemPoolExplorer => {

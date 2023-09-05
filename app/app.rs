@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::cli::Config;
 
-use lib::{
+use plain_bitnames::{
     bip300301::{self, bitcoin, jsonrpsee, MainClient},
     format_deposit_address,
     miner::{self, Miner},
@@ -10,7 +10,6 @@ use lib::{
     types::{self, FilledOutput, OutPoint, Transaction},
     wallet::{self, Wallet},
 };
-pub use plain_bitnames as lib;
 
 pub struct App {
     pub node: Node,

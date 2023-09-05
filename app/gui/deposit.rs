@@ -1,7 +1,8 @@
-use crate::app::lib;
-use crate::app::App;
 use eframe::egui;
-use lib::bip300301::bitcoin;
+
+use plain_bitnames::bip300301::bitcoin;
+
+use crate::app::App;
 
 pub struct Deposit {
     amount: String,

@@ -1,11 +1,13 @@
-use crate::app::lib;
-use crate::app::App;
 use eframe::egui;
 use human_size::{Byte, Kibibyte, Mebibyte, SpecificSize};
-use lib::{
+
+use plain_bitnames::{
     bip300301::bitcoin,
     types::{GetValue, OutPoint},
 };
+
+use crate::app::App;
+
 
 #[derive(Default)]
 pub struct MemPoolExplorer {

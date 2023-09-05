@@ -1,10 +1,12 @@
-use crate::app::lib;
-use crate::app::App;
 use eframe::egui;
-use lib::{
+
+use plain_bitnames::{
     bip300301::bitcoin,
     types::{self, Output, OutputContent},
 };
+
+use crate::app::App;
+
 
 pub struct UtxoCreator {
     utxo_type: UtxoType,

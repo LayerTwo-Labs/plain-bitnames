@@ -1,11 +1,14 @@
-use crate::app::lib;
-use crate::app::App;
+use std::collections::HashSet;
+
 use eframe::egui;
-use lib::{
+
+use plain_bitnames::{
     bip300301::bitcoin,
     types::{FilledOutput, GetValue, OutPoint},
 };
-use std::collections::HashSet;
+
+use crate::app::App;
+
 
 #[derive(Default)]
 pub struct UtxoSelector;

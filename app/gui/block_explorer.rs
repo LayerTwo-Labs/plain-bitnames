@@ -1,8 +1,10 @@
-use crate::app::lib;
-use crate::app::App;
+
 use eframe::egui;
 use human_size::{Byte, Kibibyte, Mebibyte, SpecificSize};
-use lib::{bip300301::bitcoin, types::GetValue};
+
+use plain_bitnames::{bip300301::bitcoin, types::GetValue};
+
+use crate::app::App;
 
 pub struct BlockExplorer {
     height: u32,

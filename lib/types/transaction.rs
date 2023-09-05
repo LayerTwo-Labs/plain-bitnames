@@ -259,6 +259,11 @@ impl Transaction {
         }
     }
 
+    /// return an iterator over value outputs with index
+    pub fn indexed_value_outputs(&self) -> impl Iterator<Item = (usize, &Output)> {
+        self.outputs.iter().enumerate().filter(|(_, output)| output.get_value() != 0)
+    }
+
     /// return an iterator over bitname outputs
     pub fn bitname_outputs(&self) -> impl Iterator<Item = &Output> {
         self.outputs.iter().filter(|output| output.is_bitname())
@@ -270,6 +275,11 @@ impl Transaction {
             Some(tx_data) => tx_data.is_registration(),
             None => false,
         }
+    }
+
+    /// true if the tx data corresponds to a regular tx
+    pub fn is_regular(&self) -> bool {
+        self.data.is_none()
     }
 
     /// true if the tx data corresponds to a reservation
@@ -315,10 +325,9 @@ impl Transaction {
                 revealed_nonce,
                 ..
             }) => {
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(&revealed_nonce);
-                hasher.update(&name_hash);
-                let implied_commitment = hasher.finalize().into();
+                let implied_commitment = blake3::keyed_hash(
+                    &revealed_nonce ,
+                    &name_hash).into();
                 Some(implied_commitment)
             }
             _ => None,
@@ -326,7 +335,7 @@ impl Transaction {
     }
 
     /// return an iterator over reservation outputs
-    pub fn reservation_outputs(&self) -> impl Iterator<Item = &Output> {
+    pub fn reservation_outputs(&self) -> impl DoubleEndedIterator<Item = &Output> {
         self.outputs.iter().filter(|output| output.is_reservation())
     }
 
@@ -507,6 +516,11 @@ impl FilledTransaction {
     /// true if the tx data corresponds to a BitName registration
     pub fn is_registration(&self) -> bool {
         self.transaction.is_registration()
+    }
+
+    /// true if the tx data corresponds to a regular tx
+    pub fn is_regular(&self) -> bool {
+        self.transaction.is_regular()
     }
 
     /// true if the tx data corresponds to a BitName reservation
