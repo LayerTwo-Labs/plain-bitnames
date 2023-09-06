@@ -16,7 +16,8 @@ use crate::app::App;
 
 #[derive(Debug, Default)]
 pub struct TxBuilder {
-    tx: Transaction,
+    // regular tx without extra data or special inputs/outputs
+    base_tx: Transaction,
     tx_creator: TxCreator,
     utxo_creator: UtxoCreator,
     utxo_selector: UtxoSelector,
@@ -25,7 +26,8 @@ pub struct TxBuilder {
 impl TxBuilder {
     pub fn show_value_in(&mut self, app: &mut App, ui: &mut egui::Ui) {
         ui.heading("Value In");
-        let selected: HashSet<_> = self.tx.inputs.iter().cloned().collect();
+        let selected: HashSet<_> =
+            self.base_tx.inputs.iter().cloned().collect();
         let mut spent_utxos: Vec<_> = app
             .utxos
             .iter()
@@ -46,7 +48,7 @@ impl TxBuilder {
             ui.monospace("value");
             ui.end_row();
             let mut remove = None;
-            for (vout, outpoint) in self.tx.inputs.iter().enumerate() {
+            for (vout, outpoint) in self.base_tx.inputs.iter().enumerate() {
                 let output = &app.utxos[outpoint];
                 if output.get_value() != 0 {
                     show_utxo(ui, outpoint, output);
@@ -57,7 +59,7 @@ impl TxBuilder {
                 }
             }
             if let Some(vout) = remove {
-                self.tx.inputs.remove(vout);
+                self.base_tx.inputs.remove(vout);
             }
         });
     }
@@ -66,7 +68,7 @@ impl TxBuilder {
         ui.heading("Value Out");
         ui.separator();
         let value_out: u64 =
-            self.tx.outputs.iter().map(GetValue::get_value).sum();
+            self.base_tx.outputs.iter().map(GetValue::get_value).sum();
         self.tx_creator.value_out = value_out;
         ui.monospace(format!(
             "Total: {}",
@@ -79,7 +81,7 @@ impl TxBuilder {
             ui.monospace("address");
             ui.monospace("value");
             ui.end_row();
-            for (vout, output) in self.tx.indexed_value_outputs() {
+            for (vout, output) in self.base_tx.indexed_value_outputs() {
                 let address = &format!("{}", output.address)[0..8];
                 let value = bitcoin::Amount::from_sat(output.get_value());
                 ui.monospace(format!("{vout}"));
@@ -96,7 +98,7 @@ impl TxBuilder {
                 ui.end_row();
             }
             if let Some(vout) = remove {
-                self.tx.outputs.remove(vout);
+                self.base_tx.outputs.remove(vout);
             }
         });
     }
@@ -110,7 +112,7 @@ impl TxBuilder {
             .exact_width(250.)
             .resizable(false)
             .show_inside(ui, |ui| {
-                self.utxo_selector.show(app, ui, &mut self.tx);
+                self.utxo_selector.show(app, ui, &mut self.base_tx);
             });
         egui::SidePanel::left("value_in")
             .exact_width(250.)
@@ -129,9 +131,9 @@ impl TxBuilder {
             .resizable(false)
             .show_separator_line(false)
             .show_inside(ui, |ui| {
-                self.utxo_creator.show(app, ui, &mut self.tx);
+                self.utxo_creator.show(app, ui, &mut self.base_tx);
                 ui.separator();
-                self.tx_creator.show(app, ui, &mut self.tx).unwrap();
+                self.tx_creator.show(app, ui, &mut self.base_tx).unwrap();
             });
         Ok(())
     }

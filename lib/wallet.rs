@@ -161,40 +161,6 @@ impl Wallet {
         Ok(Transaction::new(inputs, outputs))
     }
 
-    /// converts a regular or bitname reservation tx to a regular tx.
-    /// panics if the tx is not regular or a bitname reservation tx.
-    pub fn regularize(&self, tx: &mut Transaction) {
-        match tx.data {
-            None => (),
-            Some(TxData::BitNameReservation { .. }) => {
-                // reverse index of last reservation output
-                let last_reservation_rev_idx =
-                    tx.outputs.iter().rev().position(Output::is_reservation)
-                    .expect("A bitname reservation tx must have at least one reservation output")
-                ;
-                //  index of last reservation output
-                let last_reservation_idx = (tx.outputs.len() - 1) - last_reservation_rev_idx;
-                tx.outputs.remove(last_reservation_idx);
-                tx.data = None;
-            },
-            /*
-            Some(TxData::BitNameRegistration { name_hash, revealed_nonce, .. }) => {
-                // reverse index of last bitname output
-                let last_bitname_rev_idx =
-                    tx.outputs.iter().rev().position(Output::is_bitname))
-                        .expect("A bitname registration tx must have at least one bitname output")
-                    ;
-                //  index of last reservation output
-                let last_registration_idx = (tx.outputs.len() - 1) - last_registration_rev_idx;
-                let 
-                tx.outputs.remove(last_registration_idx);
-                tx.data = None;
-            }
-            */
-            Some(_) => panic!("this function only accepts a regular or bitname reservation tx")
-        }
-    }
-
     /// given a regular transaction, add a bitname reservation.
     /// given a bitname reservation tx, change the reserved name.
     /// panics if the tx is not regular or a bitname reservation tx.
