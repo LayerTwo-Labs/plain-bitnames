@@ -1,8 +1,11 @@
+use std::borrow::Cow;
+
 use eframe::egui::{self, InnerResponse, Response};
 
 use plain_bitnames::{
     bip300301::bitcoin,
-    types::{Transaction, Txid},
+    types::{BitNameData, Transaction, Txid},
+    wallet,
 };
 
 use crate::app::App;
@@ -11,6 +14,10 @@ use crate::app::App;
 pub enum TxType {
     #[default]
     Regular,
+    BitNameRegistration {
+        plaintext_name: String,
+        bitname_data: Box<BitNameData>,
+    },
     BitNameReservation {
         plaintext_name: String,
     },
@@ -23,13 +30,14 @@ pub struct TxCreator {
     pub tx_type: TxType,
     // if the base tx has changed, need to recompute final tx
     base_txid: Txid,
-    final_tx: Option<Transaction>,
+    final_tx: Option<Result<Transaction, wallet::Error>>,
 }
 
 impl std::fmt::Display for TxType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Regular => write!(f, "regular"),
+            Self::BitNameRegistration { .. } => write!(f, "register bitname"),
             Self::BitNameReservation { .. } => write!(f, "reserve bitname"),
         }
     }
@@ -56,9 +64,20 @@ impl TxCreator {
         &self,
         app: &mut App,
         mut tx: Transaction,
-    ) -> anyhow::Result<Transaction> {
+    ) -> Result<Transaction, wallet::Error> {
         match &self.tx_type {
             TxType::Regular => Ok(tx),
+            TxType::BitNameRegistration {
+                plaintext_name,
+                bitname_data,
+            } => {
+                let () = app.wallet.register_bitname(
+                    &mut tx,
+                    plaintext_name,
+                    Cow::Borrowed(bitname_data.as_ref()),
+                )?;
+                Ok(tx)
+            }
             TxType::BitNameReservation { plaintext_name } => {
                 let () = app.wallet.reserve_bitname(&mut tx, plaintext_name)?;
                 Ok(tx)
@@ -82,6 +101,13 @@ impl TxCreator {
                         "regular",
                     ) | ui.selectable_value(
                         &mut self.tx_type,
+                        TxType::BitNameRegistration {
+                            plaintext_name: String::new(),
+                            bitname_data: Box::default(),
+                        },
+                        "register bitname",
+                    ) | ui.selectable_value(
+                        &mut self.tx_type,
                         TxType::BitNameReservation {
                             plaintext_name: String::new(),
                         },
@@ -92,6 +118,16 @@ impl TxCreator {
         });
         let tx_data_ui = match &mut self.tx_type {
             TxType::Regular => None,
+            TxType::BitNameRegistration {
+                plaintext_name,
+                bitname_data: _,
+            } => {
+                let inner_resp = ui.horizontal(|ui| {
+                    ui.monospace("Plaintext Name:       ")
+                        | ui.add(egui::TextEdit::singleline(plaintext_name))
+                });
+                Some(bitwise_or_inner_resp(inner_resp))
+            }
             TxType::BitNameReservation { plaintext_name } => {
                 let inner_resp = ui.horizontal(|ui| {
                     ui.monospace("Plaintext Name:       ")
@@ -116,12 +152,16 @@ impl TxCreator {
             || base_txid_changed
             || self.final_tx.is_none();
         if refresh_final_tx {
-            self.final_tx = Some(self.set_tx_data(app, base_tx.clone())?);
+            self.final_tx = Some(self.set_tx_data(app, base_tx.clone()));
         }
-        let final_tx = self
-            .final_tx
-            .as_ref()
-            .expect("impossible! final tx should have been set");
+        let final_tx = match &self.final_tx {
+            None => panic!("impossible! final tx should have been set"),
+            Some(Ok(final_tx)) => final_tx,
+            Some(Err(wallet_err)) => {
+                ui.monospace(format!("{wallet_err}"));
+                return Ok(());
+            }
+        };
         let txid = &format!("{}", final_tx.txid())[0..8];
         ui.monospace(format!("txid: {txid}"));
         if self.value_in >= self.value_out {

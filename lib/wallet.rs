@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     path::Path,
 };
@@ -11,8 +12,8 @@ use heed::{types::*, Database, RoTxn};
 use crate::{
     authorization::{get_address, Authorization},
     types::{
-        Address, AuthorizedTransaction, FilledOutput, GetValue, Hash, OutPoint,
-        Output, OutputContent, Transaction, TxData,
+        Address, AuthorizedTransaction, BitNameData, FilledOutput, GetValue,
+        Hash, OutPoint, Output, OutputContent, Transaction, TxData,
     },
 };
 
@@ -32,6 +33,8 @@ pub enum Error {
     NoIndex { address: Address },
     #[error("wallet doesn't have a seed")]
     NoSeed,
+    #[error("could not find bitname reservation for `{plain_name}`")]
+    NoBitnameReservation { plain_name: String },
     #[error("not enough funds")]
     NotEnoughFunds,
     #[error("utxo doesn't exist")]
@@ -87,6 +90,22 @@ impl Wallet {
         let public = child.public_key();
         let secret = child.secret_key;
         Ok(ed25519_dalek::Keypair { secret, public })
+    }
+
+    // get the keypair that corresponds to the provided address
+    fn get_keypair_for_addr(
+        &self,
+        rotxn: &RoTxn,
+        address: &Address,
+    ) -> Result<ed25519_dalek::Keypair, Error> {
+        let addr_idx = self
+            .address_to_index
+            .get(rotxn, address)?
+            .ok_or(Error::AddressDoesNotExist { address: *address })?;
+        let keypair = self.get_keypair(rotxn, u32::from_be_bytes(addr_idx))?;
+        // sanity check that keypair corresponds to address
+        assert_eq!(*address, get_address(&keypair.public));
+        Ok(keypair)
     }
 
     pub fn get_new_address(&self) -> Result<Address, Error> {
@@ -196,16 +215,8 @@ impl Wallet {
                 self.get_new_address()?
             };
         let rotxn = self.env.read_txn()?;
-        let reservation_addr_idx = self
-            .address_to_index
-            .get(&rotxn, &reservation_addr)?
-            .ok_or(Error::AddressDoesNotExist {
-                address: reservation_addr,
-            })?;
         let reservation_keypair =
-            self.get_keypair(&rotxn, u32::from_be_bytes(reservation_addr_idx))?;
-        // sanity check that reservation_keypair corresponds to reservation_addr
-        assert_eq!(reservation_addr, get_address(&reservation_keypair.public));
+            self.get_keypair_for_addr(&rotxn, &reservation_addr)?;
         let name_hash: Hash = blake3::hash(plain_name.as_bytes()).into();
         // hmac(secret, name_hash)
         let nonce = blake3::keyed_hash(
@@ -224,6 +235,82 @@ impl Wallet {
             tx.outputs.push(reservation_output);
         };
         tx.data = Some(TxData::BitNameReservation { commitment });
+        Ok(())
+    }
+
+    /// given a regular transaction, add a bitname registration.
+    /// panics if the tx is not regular.
+    /// returns an error if there is no corresponding reservation utxo
+    /// does not modify the tx if there is no corresponding reservation utxo.
+    pub fn register_bitname(
+        &self,
+        tx: &mut Transaction,
+        plain_name: &str,
+        bitname_data: Cow<BitNameData>,
+    ) -> Result<(), Error> {
+        assert!(tx.is_regular(), "this function only accepts a regular tx");
+        // address for the registration output
+        let registration_addr =
+            // if the last output is owned by this wallet, then use
+            // the address associated with the last output
+            if let Some(last_output) = tx.outputs.last() {
+                let last_output_addr = last_output.address;
+                let rotxn = self.env.read_txn()?;
+                if self.address_to_index.get(&rotxn, &last_output_addr)?.is_some() {
+                    last_output_addr
+                } else {
+                    self.get_new_address()?
+                }
+            } else {
+                self.get_new_address()?
+            };
+        let name_hash: Hash = blake3::hash(plain_name.as_bytes()).into();
+        /* Search for reservation utxo by the following procedure:
+        For each reservation:
+        * Get the corresponding keypair
+        * Compute a reservation commitment for the bitname to be registered
+        * If the computed commitment is the same as the reservation commitment,
+          then use this utxo. Otherwise, continue */
+        // outpoint and nonce, if found
+        let mut reservation_outpoint_nonce: Option<(OutPoint, Hash)> = None;
+        for (outpoint, filled_output) in self.get_utxos()?.into_iter() {
+            if let Some(reservation_commitment) =
+                filled_output.reservation_commitment()
+            {
+                // for each reservation, get the keypair, and
+                let reservation_addr = filled_output.address;
+                let rotxn = self.env.read_txn()?;
+                let reservation_keypair =
+                    self.get_keypair_for_addr(&rotxn, &reservation_addr)?;
+                // hmac(secret, name_hash)
+                let nonce = blake3::keyed_hash(
+                    reservation_keypair.secret.as_bytes(),
+                    &name_hash,
+                )
+                .into();
+                // hmac(nonce, name_hash)
+                let commitment = blake3::keyed_hash(&nonce, &name_hash);
+                // WARNING: This comparison MUST be done in constant time.
+                // `blake3::Hash` handles this; DO NOT compare as byte arrays
+                if commitment == *reservation_commitment {
+                    reservation_outpoint_nonce = Some((outpoint, nonce));
+                    break;
+                }
+            }
+        }
+        let (reservation_outpoint, nonce) = reservation_outpoint_nonce
+            .ok_or_else(|| Error::NoBitnameReservation {
+                plain_name: plain_name.to_owned(),
+            })?;
+        let registration_output =
+            Output::new(registration_addr, OutputContent::BitName);
+        tx.inputs.push(reservation_outpoint);
+        tx.outputs.push(registration_output);
+        tx.data = Some(TxData::BitNameRegistration {
+            name_hash,
+            revealed_nonce: nonce,
+            bitname_data: Box::new(bitname_data.into_owned()),
+        });
         Ok(())
     }
 
