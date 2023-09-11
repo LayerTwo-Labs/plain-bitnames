@@ -632,7 +632,7 @@ impl FilledTransaction {
         self.spent_bitnames()
             .map(|(_, filled_output)| filled_output.content())
             .cloned()
-            .chain(new_bitname_content.into_iter())
+            .chain(new_bitname_content)
     }
 
     /// compute the filled content for BitName reservation outputs
@@ -672,7 +672,7 @@ impl FilledTransaction {
                     true
                 }
             })
-            .chain(new_reservation_content.into_iter())
+            .chain(new_reservation_content)
     }
 
     /// compute the filled outputs.
