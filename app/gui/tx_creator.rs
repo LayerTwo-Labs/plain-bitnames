@@ -1,10 +1,14 @@
-use std::borrow::Cow;
+use std::{
+    borrow::Cow,
+    net::{Ipv4Addr, Ipv6Addr},
+};
 
 use eframe::egui::{self, InnerResponse, Response};
 
 use plain_bitnames::{
+    authorization::PublicKey,
     bip300301::bitcoin,
-    types::{BitNameData, Transaction, Txid},
+    types::{BitNameData, EncryptionPubKey, Transaction, Txid},
     wallet,
 };
 
@@ -85,6 +89,90 @@ impl TxCreator {
         }
     }
 
+    // show setter for a single optional field, with default value
+    fn show_option_field_default<T>(
+        ui: &mut egui::Ui,
+        name: &str,
+        default: T,
+        option_field: &mut Option<T>,
+    ) -> Response
+    where
+        T: PartialEq,
+    {
+        let option_dropdown = egui::ComboBox::from_id_source(name)
+            .selected_text(if option_field.is_some() {
+                "set"
+            } else {
+                "do not set"
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(option_field, Some(default), "set")
+                    | ui.selectable_value(option_field, None, "do not set")
+            });
+        bitwise_or_inner_resp_option(option_dropdown)
+    }
+
+    fn show_bitname_options(
+        ui: &mut egui::Ui,
+        bitname_data: &mut BitNameData,
+    ) -> Response {
+        let commitment_resp = ui.horizontal(|ui| {
+            ui.monospace("Commitment:       ")
+                | Self::show_option_field_default(
+                    ui,
+                    "bitname_data_commitment",
+                    Default::default(),
+                    &mut bitname_data.commitment,
+                )
+        });
+        let ipv4_resp = ui.horizontal(|ui| {
+            ui.monospace("IPv4 Address:       ")
+                | Self::show_option_field_default(
+                    ui,
+                    "bitname_data_ipv4",
+                    Ipv4Addr::UNSPECIFIED,
+                    &mut bitname_data.ipv4_addr,
+                )
+        });
+        let ipv6_resp = ui.horizontal(|ui| {
+            ui.monospace("IPv6 Address:       ")
+                | Self::show_option_field_default(
+                    ui,
+                    "bitname_data_ipv6",
+                    Ipv6Addr::UNSPECIFIED,
+                    &mut bitname_data.ipv6_addr,
+                )
+        });
+        let encryption_pubkey_resp = ui.horizontal(|ui| {
+            let default_pubkey =
+                EncryptionPubKey::from(<[u8; 32] as Default>::default());
+            ui.monospace("Encryption PubKey:       ")
+                | Self::show_option_field_default(
+                    ui,
+                    "bitname_data_encryption_pubkey",
+                    default_pubkey,
+                    &mut bitname_data.encryption_pubkey,
+                )
+        });
+        let signing_pubkey_resp = ui.horizontal(|ui| {
+            let default_pubkey =
+                PublicKey::from_bytes(&<[u8; 32] as Default>::default())
+                    .unwrap();
+            ui.monospace("Signing PubKey:       ")
+                | Self::show_option_field_default(
+                    ui,
+                    "bitname_data_signing_pubkey",
+                    default_pubkey,
+                    &mut bitname_data.signing_pubkey,
+                )
+        });
+        bitwise_or_inner_resp(commitment_resp)
+            | bitwise_or_inner_resp(ipv4_resp)
+            | bitwise_or_inner_resp(ipv6_resp)
+            | bitwise_or_inner_resp(encryption_pubkey_resp)
+            | bitwise_or_inner_resp(signing_pubkey_resp)
+    }
+
     pub fn show(
         &mut self,
         app: &mut App,
@@ -120,13 +208,17 @@ impl TxCreator {
             TxType::Regular => None,
             TxType::BitNameRegistration {
                 plaintext_name,
-                bitname_data: _,
+                bitname_data,
             } => {
-                let inner_resp = ui.horizontal(|ui| {
+                let plaintext_name_resp = ui.horizontal(|ui| {
                     ui.monospace("Plaintext Name:       ")
                         | ui.add(egui::TextEdit::singleline(plaintext_name))
                 });
-                Some(bitwise_or_inner_resp(inner_resp))
+                let bitname_options_resp =
+                    Self::show_bitname_options(ui, bitname_data.as_mut());
+                let resp = bitwise_or_inner_resp(plaintext_name_resp)
+                    | bitname_options_resp;
+                Some(resp)
             }
             TxType::BitNameReservation { plaintext_name } => {
                 let inner_resp = ui.horizontal(|ui| {
