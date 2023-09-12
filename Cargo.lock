@@ -2677,6 +2677,8 @@ dependencies = [
  "clap",
  "dirs",
  "eframe",
+ "either",
+ "hex",
  "human-size",
  "plain_bitnames",
  "serde",

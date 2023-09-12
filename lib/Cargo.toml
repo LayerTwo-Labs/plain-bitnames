@@ -2,7 +2,7 @@
 name = "plain_bitnames"
 version = "0.1.0"
 edition = "2021"
-authors = [ "Ash Manning <ashermanning@yahoo.co.uk>" ]
+authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 
 [dependencies]
 addr = "0.15.6"

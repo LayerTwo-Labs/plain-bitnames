@@ -1,18 +1,39 @@
 use std::{
     borrow::Cow,
     net::{Ipv4Addr, Ipv6Addr},
+    str::FromStr,
 };
 
 use eframe::egui::{self, InnerResponse, Response};
+use hex::FromHex;
 
 use plain_bitnames::{
     authorization::PublicKey,
     bip300301::bitcoin,
-    types::{BitNameData, EncryptionPubKey, Transaction, Txid},
-    wallet,
+    types::{BitNameData, EncryptionPubKey, Hash, Transaction, Txid},
 };
 
 use crate::app::App;
+
+// struct representing the outcome of trying to set an Option<T> from a String
+// Err represents unset, Ok(None) represents bad value
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrySetOption<T>(Result<Option<T>, String>);
+
+// try to set BitName Data
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TrySetBitNameData {
+    /// commitment to arbitrary data
+    pub commitment: TrySetOption<Hash>,
+    /// optional ipv4 addr
+    pub ipv4_addr: TrySetOption<Ipv4Addr>,
+    /// optional ipv6 addr
+    pub ipv6_addr: TrySetOption<Ipv6Addr>,
+    /// optional pubkey used for encryption
+    pub encryption_pubkey: TrySetOption<EncryptionPubKey>,
+    /// optional pubkey used for signing messages
+    pub signing_pubkey: TrySetOption<PublicKey>,
+}
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum TxType {
@@ -20,7 +41,7 @@ pub enum TxType {
     Regular,
     BitNameRegistration {
         plaintext_name: String,
-        bitname_data: Box<BitNameData>,
+        bitname_data: Box<TrySetBitNameData>,
     },
     BitNameReservation {
         plaintext_name: String,
@@ -34,7 +55,46 @@ pub struct TxCreator {
     pub tx_type: TxType,
     // if the base tx has changed, need to recompute final tx
     base_txid: Txid,
-    final_tx: Option<Result<Transaction, wallet::Error>>,
+    final_tx: Option<anyhow::Result<Transaction>>,
+}
+
+impl<T> std::default::Default for TrySetOption<T> {
+    fn default() -> Self {
+        Self(Ok(None))
+    }
+}
+
+impl TryFrom<TrySetBitNameData> for BitNameData {
+    type Error = String;
+
+    fn try_from(try_set: TrySetBitNameData) -> Result<Self, Self::Error> {
+        let commitment = try_set
+            .commitment
+            .0
+            .map_err(|err| format!("Cannot parse commitment: \"{err}\""))?;
+        let ipv4_addr = try_set
+            .ipv4_addr
+            .0
+            .map_err(|err| format!("Cannot parse ipv4 address: \"{err}\""))?;
+        let ipv6_addr = try_set
+            .ipv6_addr
+            .0
+            .map_err(|err| format!("Cannot parse ipv6 address: \"{err}\""))?;
+        let encryption_pubkey = try_set.encryption_pubkey.0.map_err(|err| {
+            format!("Cannot parse encryption pubkey: \"{err}\"")
+        })?;
+        let signing_pubkey = try_set
+            .signing_pubkey
+            .0
+            .map_err(|err| format!("Cannot parse signing pubkey: \"{err}\""))?;
+        Ok(BitNameData {
+            commitment,
+            ipv4_addr,
+            ipv6_addr,
+            encryption_pubkey,
+            signing_pubkey,
+        })
+    }
 }
 
 impl std::fmt::Display for TxType {
@@ -68,17 +128,21 @@ impl TxCreator {
         &self,
         app: &mut App,
         mut tx: Transaction,
-    ) -> Result<Transaction, wallet::Error> {
+    ) -> anyhow::Result<Transaction> {
         match &self.tx_type {
             TxType::Regular => Ok(tx),
             TxType::BitNameRegistration {
                 plaintext_name,
                 bitname_data,
             } => {
+                let bitname_data: BitNameData = (bitname_data.as_ref())
+                    .clone()
+                    .try_into()
+                    .map_err(|err| anyhow::anyhow!("{err}"))?;
                 let () = app.wallet.register_bitname(
                     &mut tx,
                     plaintext_name,
-                    Cow::Borrowed(bitname_data.as_ref()),
+                    Cow::Borrowed(&bitname_data),
                 )?;
                 Ok(tx)
             }
@@ -90,31 +154,70 @@ impl TxCreator {
     }
 
     // show setter for a single optional field, with default value
-    fn show_option_field_default<T>(
+    fn show_option_field_default<T, ToStr, TryFromStr, TryFromStrErr>(
         ui: &mut egui::Ui,
         name: &str,
         default: T,
-        option_field: &mut Option<T>,
+        try_set: &mut TrySetOption<T>,
+        try_from_str: TryFromStr,
+        to_str: ToStr,
     ) -> Response
     where
         T: PartialEq,
+        TryFromStr: Fn(String) -> Result<T, TryFromStrErr>,
+        TryFromStrErr: std::error::Error,
+        ToStr: Fn(&T) -> String,
     {
         let option_dropdown = egui::ComboBox::from_id_source(name)
-            .selected_text(if option_field.is_some() {
-                "set"
-            } else {
+            .selected_text(if let Ok(None) = try_set.0 {
                 "do not set"
+            } else {
+                "set"
             })
             .show_ui(ui, |ui| {
-                ui.selectable_value(option_field, Some(default), "set")
-                    | ui.selectable_value(option_field, None, "do not set")
+                ui.selectable_value(
+                    try_set,
+                    TrySetOption(Ok(Some(default))),
+                    "set",
+                ) | ui.selectable_value(
+                    try_set,
+                    TrySetOption(Ok(None)),
+                    "do not set",
+                )
             });
-        bitwise_or_inner_resp_option(option_dropdown)
+        match try_set.0 {
+            Ok(None) => bitwise_or_inner_resp_option(option_dropdown),
+            Err(ref mut bad_value) => {
+                let text_edit = ui.add(egui::TextEdit::singleline(bad_value));
+                if text_edit.changed() {
+                    if let Ok(value) = try_from_str(bad_value.clone()) {
+                        try_set.0 = Ok(Some(value));
+                    }
+                }
+                bitwise_or_inner_resp_option(option_dropdown) | text_edit
+            }
+            Ok(Some(ref mut value)) => {
+                let mut text_buffer = to_str(value);
+                let text_edit =
+                    ui.add(egui::TextEdit::singleline(&mut text_buffer));
+                if text_edit.changed() {
+                    match try_from_str(text_buffer.clone()) {
+                        Ok(new_value) => {
+                            *value = new_value;
+                        }
+                        Err(_) => {
+                            try_set.0 = Err(text_buffer);
+                        }
+                    }
+                }
+                bitwise_or_inner_resp_option(option_dropdown) | text_edit
+            }
+        }
     }
 
     fn show_bitname_options(
         ui: &mut egui::Ui,
-        bitname_data: &mut BitNameData,
+        bitname_data: &mut TrySetBitNameData,
     ) -> Response {
         let commitment_resp = ui.horizontal(|ui| {
             ui.monospace("Commitment:       ")
@@ -123,6 +226,8 @@ impl TxCreator {
                     "bitname_data_commitment",
                     Default::default(),
                     &mut bitname_data.commitment,
+                    Hash::from_hex,
+                    |commitment| hex::encode(commitment),
                 )
         });
         let ipv4_resp = ui.horizontal(|ui| {
@@ -132,6 +237,8 @@ impl TxCreator {
                     "bitname_data_ipv4",
                     Ipv4Addr::UNSPECIFIED,
                     &mut bitname_data.ipv4_addr,
+                    |s| Ipv4Addr::from_str(&s),
+                    Ipv4Addr::to_string,
                 )
         });
         let ipv6_resp = ui.horizontal(|ui| {
@@ -141,6 +248,8 @@ impl TxCreator {
                     "bitname_data_ipv6",
                     Ipv6Addr::UNSPECIFIED,
                     &mut bitname_data.ipv6_addr,
+                    |s| Ipv6Addr::from_str(&s),
+                    Ipv6Addr::to_string,
                 )
         });
         let encryption_pubkey_resp = ui.horizontal(|ui| {
@@ -152,18 +261,29 @@ impl TxCreator {
                     "bitname_data_encryption_pubkey",
                     default_pubkey,
                     &mut bitname_data.encryption_pubkey,
+                    |s| <[u8; 32]>::from_hex(s).map(EncryptionPubKey::from),
+                    |epk| hex::encode(epk.as_bytes()),
                 )
         });
         let signing_pubkey_resp = ui.horizontal(|ui| {
             let default_pubkey =
                 PublicKey::from_bytes(&<[u8; 32] as Default>::default())
                     .unwrap();
+            let try_from_str = |s: String| {
+                <[u8; 32]>::from_hex(s).map_err(either::Left).and_then(
+                    |bytes| {
+                        PublicKey::from_bytes(&bytes).map_err(either::Right)
+                    },
+                )
+            };
             ui.monospace("Signing PubKey:       ")
                 | Self::show_option_field_default(
                     ui,
                     "bitname_data_signing_pubkey",
                     default_pubkey,
                     &mut bitname_data.signing_pubkey,
+                    try_from_str,
+                    |pk| hex::encode(pk.to_bytes()),
                 )
         });
         bitwise_or_inner_resp(commitment_resp)
