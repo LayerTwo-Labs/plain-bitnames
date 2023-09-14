@@ -2,6 +2,7 @@ use eframe::egui;
 
 use crate::app::App;
 
+mod bitname_explorer;
 mod block_explorer;
 mod deposit;
 mod mempool_explorer;
@@ -9,9 +10,11 @@ mod miner;
 mod seed;
 mod tx_builder;
 mod tx_creator;
+mod util;
 mod utxo_creator;
 mod utxo_selector;
 
+use bitname_explorer::BitnameExplorer;
 use block_explorer::BlockExplorer;
 use deposit::Deposit;
 use mempool_explorer::MemPoolExplorer;
@@ -28,6 +31,7 @@ pub struct EguiApp {
     tx_builder: TxBuilder,
     mempool_explorer: MemPoolExplorer,
     block_explorer: BlockExplorer,
+    bitname_explorer: BitnameExplorer,
 }
 
 #[derive(Eq, PartialEq)]
@@ -35,6 +39,7 @@ enum Tab {
     TransactionBuilder,
     MemPoolExplorer,
     BlockExplorer,
+    BitnameExplorer,
 }
 
 impl EguiApp {
@@ -52,6 +57,7 @@ impl EguiApp {
             tx_builder: TxBuilder::default(),
             mempool_explorer: MemPoolExplorer::default(),
             block_explorer: BlockExplorer::new(height),
+            bitname_explorer: BitnameExplorer::default(),
             tab: Tab::TransactionBuilder,
         }
     }
@@ -77,6 +83,11 @@ impl eframe::App for EguiApp {
                         Tab::BlockExplorer,
                         "block explorer",
                     );
+                    ui.selectable_value(
+                        &mut self.tab,
+                        Tab::BitnameExplorer,
+                        "bitname explorer",
+                    );
                 });
             });
             egui::TopBottomPanel::bottom("util").show(ctx, |ui| {
@@ -95,6 +106,9 @@ impl eframe::App for EguiApp {
                 }
                 Tab::BlockExplorer => {
                     self.block_explorer.show(&mut self.app, ui);
+                }
+                Tab::BitnameExplorer => {
+                    self.bitname_explorer.show(&mut self.app, ui);
                 }
             });
         } else {

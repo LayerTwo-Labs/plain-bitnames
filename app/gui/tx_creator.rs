@@ -4,7 +4,7 @@ use std::{
     str::FromStr,
 };
 
-use eframe::egui::{self, InnerResponse, Response};
+use eframe::egui::{self, Response};
 use hex::FromHex;
 
 use plain_bitnames::{
@@ -13,6 +13,7 @@ use plain_bitnames::{
     types::{BitNameData, EncryptionPubKey, Hash, Transaction, Txid},
 };
 
+use super::util::InnerResponseExt;
 use crate::app::App;
 
 // struct representing the outcome of trying to set an Option<T> from a String
@@ -107,21 +108,6 @@ impl std::fmt::Display for TxType {
     }
 }
 
-// BitwiseOr for inner response option
-fn bitwise_or_inner_resp_option(
-    inner_resp: InnerResponse<Option<Response>>,
-) -> Response {
-    match inner_resp.inner {
-        Some(inner) => inner_resp.response | inner,
-        None => inner_resp.response,
-    }
-}
-
-// BitwiseOr for inner response
-fn bitwise_or_inner_resp(inner_resp: InnerResponse<Response>) -> Response {
-    inner_resp.response | inner_resp.inner
-}
-
 impl TxCreator {
     // set tx data for the current transaction
     fn set_tx_data(
@@ -186,7 +172,7 @@ impl TxCreator {
                 )
             });
         match try_set.0 {
-            Ok(None) => bitwise_or_inner_resp_option(option_dropdown),
+            Ok(None) => option_dropdown.join(),
             Err(ref mut bad_value) => {
                 let text_edit = ui.add(egui::TextEdit::singleline(bad_value));
                 if text_edit.changed() {
@@ -194,7 +180,7 @@ impl TxCreator {
                         try_set.0 = Ok(Some(value));
                     }
                 }
-                bitwise_or_inner_resp_option(option_dropdown) | text_edit
+                option_dropdown.join() | text_edit
             }
             Ok(Some(ref mut value)) => {
                 let mut text_buffer = to_str(value);
@@ -210,7 +196,7 @@ impl TxCreator {
                         }
                     }
                 }
-                bitwise_or_inner_resp_option(option_dropdown) | text_edit
+                option_dropdown.join() | text_edit
             }
         }
     }
@@ -286,11 +272,11 @@ impl TxCreator {
                     |pk| hex::encode(pk.to_bytes()),
                 )
         });
-        bitwise_or_inner_resp(commitment_resp)
-            | bitwise_or_inner_resp(ipv4_resp)
-            | bitwise_or_inner_resp(ipv6_resp)
-            | bitwise_or_inner_resp(encryption_pubkey_resp)
-            | bitwise_or_inner_resp(signing_pubkey_resp)
+        commitment_resp.join()
+            | ipv4_resp.join()
+            | ipv6_resp.join()
+            | encryption_pubkey_resp.join()
+            | signing_pubkey_resp.join()
     }
 
     pub fn show(
@@ -322,7 +308,7 @@ impl TxCreator {
                         "reserve bitname",
                     )
                 });
-            bitwise_or_inner_resp_option(combobox) | ui.heading("Transaction")
+            combobox.join() | ui.heading("Transaction")
         });
         let tx_data_ui = match &mut self.tx_type {
             TxType::Regular => None,
@@ -336,8 +322,7 @@ impl TxCreator {
                 });
                 let bitname_options_resp =
                     Self::show_bitname_options(ui, bitname_data.as_mut());
-                let resp = bitwise_or_inner_resp(plaintext_name_resp)
-                    | bitname_options_resp;
+                let resp = plaintext_name_resp.join() | bitname_options_resp;
                 Some(resp)
             }
             TxType::BitNameReservation { plaintext_name } => {
@@ -345,7 +330,7 @@ impl TxCreator {
                     ui.monospace("Plaintext Name:       ")
                         | ui.add(egui::TextEdit::singleline(plaintext_name))
                 });
-                Some(bitwise_or_inner_resp(inner_resp))
+                Some(inner_resp.join())
             }
         };
         let tx_data_changed = tx_data_ui.is_some_and(|resp| resp.changed());
@@ -358,8 +343,7 @@ impl TxCreator {
         // (re)compute final tx if:
         // * the tx type, tx data, or base txid has changed
         // * final tx not yet set
-        let refresh_final_tx = bitwise_or_inner_resp(tx_type_dropdown)
-            .changed()
+        let refresh_final_tx = tx_type_dropdown.join().changed()
             || tx_data_changed
             || base_txid_changed
             || self.final_tx.is_none();

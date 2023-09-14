@@ -12,6 +12,28 @@ use tokio::sync::RwLock;
 
 pub const THIS_SIDECHAIN: u8 = 2;
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("heed error")]
+    Heed(#[from] heed::Error),
+    #[error("address parse error")]
+    AddrParse(#[from] std::net::AddrParseError),
+    #[error("quinn error")]
+    Io(#[from] std::io::Error),
+    #[error("net error")]
+    Net(#[from] crate::net::Error),
+    #[error("archive error")]
+    Archive(#[from] crate::archive::Error),
+    #[error("drivechain error")]
+    Drivechain(#[from] bip300301::Error),
+    #[error("mempool error")]
+    MemPool(#[from] crate::mempool::Error),
+    #[error("state error")]
+    State(#[from] crate::state::Error),
+    #[error("bincode error")]
+    Bincode(#[from] bincode::Error),
+}
+
 #[derive(Clone)]
 pub struct Node {
     net: crate::net::Net,
@@ -69,6 +91,15 @@ impl Node {
     pub fn get_best_hash(&self) -> Result<BlockHash, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.archive.get_best_hash(&txn)?)
+    }
+
+    /// resolve current bitname data, if it exists
+    pub fn get_current_bitname_data(
+        &self,
+        bitname: &Hash,
+    ) -> Result<Option<BitNameData>, Error> {
+        let txn = self.env.read_txn()?;
+        Ok(self.state.get_current_bitname_data(&txn, bitname)?)
     }
 
     pub fn validate_transaction(
@@ -509,28 +540,4 @@ impl Node {
         });
         Ok(())
     }
-}
-
-pub trait CustomError {}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
-    #[error("address parse error")]
-    AddrParse(#[from] std::net::AddrParseError),
-    #[error("quinn error")]
-    Io(#[from] std::io::Error),
-    #[error("net error")]
-    Net(#[from] crate::net::Error),
-    #[error("archive error")]
-    Archive(#[from] crate::archive::Error),
-    #[error("drivechain error")]
-    Drivechain(#[from] bip300301::Error),
-    #[error("mempool error")]
-    MemPool(#[from] crate::mempool::Error),
-    #[error("state error")]
-    State(#[from] crate::state::Error),
-    #[error("bincode error")]
-    Bincode(#[from] bincode::Error),
 }

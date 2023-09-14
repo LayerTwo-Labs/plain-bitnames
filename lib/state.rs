@@ -5,6 +5,7 @@ use std::{
 
 use heed::types::*;
 use heed::{Database, RoTxn, RwTxn};
+use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 
 use bip300301::TwoWayPegData;
@@ -18,17 +19,17 @@ use crate::types::{self, *};
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BitNameData {
     /// commitment to arbitrary data
-    commitment: Vec<Option<Hash>>,
+    commitment: NonEmpty<Option<Hash>>,
     /// set if the plain bitname is known to be an ICANN domain
     is_icann: bool,
     /// optional ipv4 addr
-    ipv4_addr: Vec<Option<Ipv4Addr>>,
+    ipv4_addr: NonEmpty<Option<Ipv4Addr>>,
     /// optional ipv6 addr
-    ipv6_addr: Vec<Option<Ipv6Addr>>,
+    ipv6_addr: NonEmpty<Option<Ipv6Addr>>,
     /// optional pubkey used for encryption
-    encryption_pubkey: Vec<Option<EncryptionPubKey>>,
+    encryption_pubkey: NonEmpty<Option<EncryptionPubKey>>,
     /// optional pubkey used for signing messages
-    signing_pubkey: Vec<Option<PublicKey>>,
+    signing_pubkey: NonEmpty<Option<PublicKey>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -102,12 +103,12 @@ impl BitNameData {
     // initialize from BitName data provided during a registration
     fn init(bitname_data: types::BitNameData) -> Self {
         Self {
-            commitment: vec![bitname_data.commitment],
+            commitment: nonempty![bitname_data.commitment],
             is_icann: false,
-            ipv4_addr: vec![bitname_data.ipv4_addr],
-            ipv6_addr: vec![bitname_data.ipv6_addr],
-            encryption_pubkey: vec![bitname_data.encryption_pubkey],
-            signing_pubkey: vec![bitname_data.signing_pubkey],
+            ipv4_addr: nonempty![bitname_data.ipv4_addr],
+            ipv6_addr: nonempty![bitname_data.ipv6_addr],
+            encryption_pubkey: nonempty![bitname_data.encryption_pubkey],
+            signing_pubkey: nonempty![bitname_data.signing_pubkey],
         }
     }
 
@@ -115,7 +116,7 @@ impl BitNameData {
     fn apply_updates(&mut self, updates: BitNameDataUpdates) {
         // apply an update to a single data field
         fn apply_field_update<T>(
-            data_field: &mut Vec<Option<T>>,
+            data_field: &mut NonEmpty<Option<T>>,
             update: Update<T>,
         ) {
             match update {
@@ -132,6 +133,17 @@ impl BitNameData {
             updates.encryption_pubkey,
         );
         apply_field_update(&mut self.signing_pubkey, updates.signing_pubkey);
+    }
+
+    /// get the current bitname data
+    pub fn current(&self) -> types::BitNameData {
+        types::BitNameData {
+            commitment: *self.commitment.last(),
+            ipv4_addr: *self.ipv4_addr.last(),
+            ipv6_addr: *self.ipv6_addr.last(),
+            encryption_pubkey: *self.encryption_pubkey.last(),
+            signing_pubkey: *self.signing_pubkey.last(),
+        }
     }
 }
 
@@ -158,6 +170,19 @@ impl State {
             last_withdrawal_bundle_failure_height,
             last_deposit_block,
         })
+    }
+
+    /// resolve current bitname data, if it exists
+    pub fn get_current_bitname_data(
+        &self,
+        txn: &RoTxn,
+        bitname: &Hash,
+    ) -> Result<Option<types::BitNameData>, heed::Error> {
+        let res = self
+            .bitnames
+            .get(txn, bitname)?
+            .map(|bitname_data| bitname_data.current());
+        Ok(res)
     }
 
     pub fn get_utxos(
