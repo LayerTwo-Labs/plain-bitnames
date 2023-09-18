@@ -1,4 +1,4 @@
-use eframe::egui;
+use eframe::egui::{self, Color32};
 
 use crate::app::App;
 
@@ -43,11 +43,18 @@ enum Tab {
 }
 
 impl EguiApp {
-    pub fn new(app: App, _cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(app: App, cc: &eframe::CreationContext<'_>) -> Self {
         // Customize egui here with cc.egui_ctx.set_fonts and cc.egui_ctx.set_visuals.
         // Restore app state using cc.storage (requires the "persistence" feature).
         // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
         // for e.g. egui::PaintCallback.
+        let mut style = (*cc.egui_ctx.style()).clone();
+        style.visuals.panel_fill = Color32::from_rgb(0, 0, 0x33);
+        style.visuals.extreme_bg_color = Color32::from_gray(0x3c);
+        style.visuals.widgets.noninteractive.bg_stroke.color = Color32::YELLOW;
+
+        cc.egui_ctx.set_style(style);
+
         let height = app.node.get_height().unwrap_or(0);
         Self {
             app,
