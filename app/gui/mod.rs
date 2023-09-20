@@ -7,6 +7,7 @@ mod block_explorer;
 mod deposit;
 mod mempool_explorer;
 mod miner;
+mod my_bitnames;
 mod seed;
 mod tx_builder;
 mod tx_creator;
@@ -19,6 +20,7 @@ use block_explorer::BlockExplorer;
 use deposit::Deposit;
 use mempool_explorer::MemPoolExplorer;
 use miner::Miner;
+use my_bitnames::MyBitnames;
 use seed::SetSeed;
 use tx_builder::TxBuilder;
 
@@ -32,6 +34,7 @@ pub struct EguiApp {
     mempool_explorer: MemPoolExplorer,
     block_explorer: BlockExplorer,
     bitname_explorer: BitnameExplorer,
+    my_bitnames: MyBitnames,
 }
 
 #[derive(Eq, PartialEq)]
@@ -40,6 +43,7 @@ enum Tab {
     MemPoolExplorer,
     BlockExplorer,
     BitnameExplorer,
+    MyBitnames,
 }
 
 impl EguiApp {
@@ -66,6 +70,7 @@ impl EguiApp {
             block_explorer: BlockExplorer::new(height),
             bitname_explorer: BitnameExplorer::default(),
             tab: Tab::TransactionBuilder,
+            my_bitnames: MyBitnames,
         }
     }
 }
@@ -95,6 +100,11 @@ impl eframe::App for EguiApp {
                         Tab::BitnameExplorer,
                         "bitname explorer",
                     );
+                    ui.selectable_value(
+                        &mut self.tab,
+                        Tab::MyBitnames,
+                        "my bitnames",
+                    );
                 });
             });
             egui::TopBottomPanel::bottom("util").show(ctx, |ui| {
@@ -116,6 +126,9 @@ impl eframe::App for EguiApp {
                 }
                 Tab::BitnameExplorer => {
                     self.bitname_explorer.show(&mut self.app, ui);
+                }
+                Tab::MyBitnames => {
+                    self.my_bitnames.show(&mut self.app, ui);
                 }
             });
         } else {

@@ -89,12 +89,14 @@ impl std::fmt::Debug for MerkleRoot {
 }
 
 #[derive(
-    Default,
     Clone,
     Copy,
+    Default,
     Eq,
-    PartialEq,
     Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
     serde::Serialize,
     serde::Deserialize,
 )]
