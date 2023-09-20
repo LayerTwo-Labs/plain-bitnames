@@ -23,7 +23,7 @@ impl MyBitnames {
             bitname_reservations.partition_map(|(txid, commitment)| {
                 let plain_bitname = app
                     .wallet
-                    .get_bitname_reservation(commitment)
+                    .get_bitname_reservation_plaintext(commitment)
                     .expect("failed to retrieve bitname reservation data");
                 match plain_bitname {
                     Some(plain_bitname) => {

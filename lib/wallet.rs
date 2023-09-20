@@ -51,10 +51,12 @@ pub struct Wallet {
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
     /// associates reservation commitments with plaintext bitnames
     pub bitname_reservations: Database<OwnedType<[u8; 32]>, Str>,
+    /// associates bitnames with plaintext names
+    pub known_bitnames: Database<OwnedType<[u8; 32]>, Str>,
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 5;
+    pub const NUM_DBS: u32 = 6;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
@@ -67,7 +69,8 @@ impl Wallet {
         let index_to_address = env.create_database(Some("index_to_address"))?;
         let utxos = env.create_database(Some("utxos"))?;
         let bitname_reservations =
-            env.create_database(Some("bitname reservations"))?;
+            env.create_database(Some("bitname_reservations"))?;
+        let known_bitnames = env.create_database(Some("known_bitnames"))?;
         Ok(Self {
             env,
             seed: seed_db,
@@ -75,6 +78,7 @@ impl Wallet {
             index_to_address,
             utxos,
             bitname_reservations,
+            known_bitnames,
         })
     }
 
@@ -235,6 +239,8 @@ impl Wallet {
         let mut rwtxn = self.env.write_txn()?;
         self.bitname_reservations
             .put(&mut rwtxn, &commitment, plain_name)?;
+        self.known_bitnames
+            .put(&mut rwtxn, &name_hash, plain_name)?;
         // if the tx is regular, add a reservation output
         if tx.is_regular() {
             let reservation_output = Output::new(
@@ -307,6 +313,10 @@ impl Wallet {
                 }
             }
         }
+        // store bitname data
+        let mut rwtxn = self.env.write_txn()?;
+        self.known_bitnames
+            .put(&mut rwtxn, &name_hash, plain_name)?;
         let (reservation_outpoint, nonce) = reservation_outpoint_nonce
             .ok_or_else(|| Error::NoBitnameReservation {
                 plain_name: plain_name.to_owned(),
@@ -385,12 +395,23 @@ impl Wallet {
 
     /// gets the plaintext name associated with a bitname reservation
     /// commitment, if it is known by the wallet.
-    pub fn get_bitname_reservation(
+    pub fn get_bitname_reservation_plaintext(
         &self,
         commitment: &Hash,
     ) -> Result<Option<String>, Error> {
         let txn = self.env.read_txn()?;
         let res = self.bitname_reservations.get(&txn, commitment)?;
+        Ok(res.map(String::from))
+    }
+
+    /// gets the plaintext name associated with a bitname,
+    /// if it is known by the wallet.
+    pub fn get_bitname_plaintext(
+        &self,
+        bitname: &Hash,
+    ) -> Result<Option<String>, Error> {
+        let txn = self.env.read_txn()?;
+        let res = self.known_bitnames.get(&txn, bitname)?;
         Ok(res.map(String::from))
     }
 
