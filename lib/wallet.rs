@@ -49,10 +49,12 @@ pub struct Wallet {
     pub address_to_index: Database<SerdeBincode<Address>, OwnedType<[u8; 4]>>,
     pub index_to_address: Database<OwnedType<[u8; 4]>, SerdeBincode<Address>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
+    /// associates reservation commitments with plaintext bitnames
+    pub bitname_reservations: Database<OwnedType<[u8; 32]>, Str>,
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 4;
+    pub const NUM_DBS: u32 = 5;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
@@ -64,12 +66,15 @@ impl Wallet {
         let address_to_index = env.create_database(Some("address_to_index"))?;
         let index_to_address = env.create_database(Some("index_to_address"))?;
         let utxos = env.create_database(Some("utxos"))?;
+        let bitname_reservations =
+            env.create_database(Some("bitname reservations"))?;
         Ok(Self {
             env,
             seed: seed_db,
             address_to_index,
             index_to_address,
             utxos,
+            bitname_reservations,
         })
     }
 
@@ -226,6 +231,10 @@ impl Wallet {
         .into();
         // hmac(nonce, name_hash)
         let commitment = blake3::keyed_hash(&nonce, &name_hash).into();
+        // store reservation data
+        let mut rwtxn = self.env.write_txn()?;
+        self.bitname_reservations
+            .put(&mut rwtxn, &commitment, plain_name)?;
         // if the tx is regular, add a reservation output
         if tx.is_regular() {
             let reservation_output = Output::new(
@@ -372,6 +381,17 @@ impl Wallet {
             balance += utxo.get_value();
         }
         Ok(balance)
+    }
+
+    /// gets the plaintext name associated with a bitname reservation
+    /// commitment, if it is known by the wallet.
+    pub fn get_bitname_reservation(
+        &self,
+        commitment: &Hash,
+    ) -> Result<Option<String>, Error> {
+        let txn = self.env.read_txn()?;
+        let res = self.bitname_reservations.get(&txn, commitment)?;
+        Ok(res.map(String::from))
     }
 
     pub fn get_utxos(&self) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
