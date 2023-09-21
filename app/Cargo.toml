@@ -11,7 +11,7 @@ blake3 = "1.4.1"
 clap = { version = "4.3.19", features = ["derive"] }
 dirs = "5.0.1"
 ecies-ed25519 = "0.5.1"
-eframe = "0.22.0"
+eframe = { git = "https://github.com/emilk/egui.git", rev = "c07394b" }
 either = "1.9.0"
 hex = "0.4.3"
 human-size = "0.4.3"

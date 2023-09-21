@@ -94,9 +94,11 @@ impl EncryptMessage {
             Some(Ok(ciphertext)) => ciphertext,
         };
         // show ciphertext if possible
-        ui.horizontal_wrapped(|ui| {
-            ui.monospace(format!("Encrypted message: \n{ciphertext}"))
-        })
-        .join();
+        let _resp = ui.horizontal_wrapped(|ui| {
+            ui.monospace(format!("Encrypted message: \n{ciphertext}"));
+            if ui.button("📋").on_hover_text("Click to copy").clicked() {
+                ui.output_mut(|po| po.copied_text = ciphertext.clone());
+            };
+        });
     }
 }
