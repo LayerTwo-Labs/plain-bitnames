@@ -1,8 +1,10 @@
-use ecies_ed25519::PublicKey as EncryptionPubKey;
 use eframe::egui;
 use hex::FromHex;
 
-use super::util::InnerResponseExt;
+use libes::key::conversion::PublicKeyFrom;
+use plain_bitnames::types::EncryptionPubKey;
+
+use super::util::{Ecies, InnerResponseExt};
 use crate::app::App;
 
 #[derive(Debug)]
@@ -13,7 +15,6 @@ pub struct EncryptMessage {
     plaintext: String,
     // none if not yet computed, otherwise result of attempting to encrypt
     ciphertext: Option<anyhow::Result<String>>,
-    csprng: rand::rngs::ThreadRng,
 }
 
 impl EncryptMessage {
@@ -23,7 +24,6 @@ impl EncryptMessage {
             receiver_pubkey: None,
             plaintext: String::new(),
             ciphertext: None,
-            csprng: rand::thread_rng(),
         }
     }
 
@@ -48,10 +48,7 @@ impl EncryptMessage {
             self.receiver_pubkey = Some(
                 <[u8; 32]>::from_hex(&self.receiver_pubkey_string)
                     .map_err(anyhow::Error::new)
-                    .and_then(|bytes| {
-                        EncryptionPubKey::from_bytes(&bytes)
-                            .map_err(anyhow::Error::new)
-                    }),
+                    .map(EncryptionPubKey::from),
             );
         }
         let plaintext_response = ui
@@ -73,14 +70,15 @@ impl EncryptMessage {
         };
         // regenerate ciphertext if possible
         if receiver_pubkey_response.changed() || plaintext_response.changed() {
+            let receiver_pubkey = libes::key::X25519::pk_from(*receiver_pubkey);
             self.ciphertext = Some(
-                ecies_ed25519::encrypt(
-                    receiver_pubkey,
-                    self.plaintext.as_bytes(),
-                    &mut self.csprng,
-                )
-                .map(hex::encode)
-                .map_err(anyhow::Error::new),
+                // MUST instantiate a new ecies instance, even if only the
+                // plaintext has changed. This is to prevent re-use of
+                // ephemeral public keys & shared secrets.
+                Ecies::new(receiver_pubkey)
+                    .encrypt(self.plaintext.as_bytes())
+                    .map(hex::encode)
+                    .map_err(|err| anyhow::anyhow!("{err:?}")),
             );
         }
         let ciphertext = match &self.ciphertext {
