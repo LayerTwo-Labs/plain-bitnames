@@ -42,11 +42,12 @@ impl MyBitnames {
         // sort name-unknown bitname reservations by txid
         unknown_name_bitname_reservations.sort_by_key(|(txid, _)| *txid);
         let _response = egui::SidePanel::left("My BitName Reservations")
-            .exact_width(250.)
+            .exact_width(350.)
             .resizable(false)
             .show_inside(ui, move |ui| {
                 ui.heading("BitName Reservations");
                 egui::Grid::new("My BitName Reservations")
+                    .num_columns(1)
                     .striped(true)
                     .show(ui, |ui| {
                         for (txid, commitment, plaintext_name) in
@@ -54,11 +55,15 @@ impl MyBitnames {
                         {
                             let txid = hex::encode(txid.0);
                             let commitment = hex::encode(commitment);
-                            ui.monospace(format!(
-                                "plaintext name: {plaintext_name}"
-                            ));
-                            ui.monospace(format!("txid: {txid}"));
-                            ui.monospace(format!("commitment: {commitment}"));
+                            ui.vertical(|ui| {
+                                ui.monospace(format!(
+                                    "plaintext name: {plaintext_name}"
+                                ));
+                                ui.monospace(format!("txid: {txid}"));
+                                ui.monospace(format!(
+                                    "commitment: {commitment}"
+                                ));
+                            });
                             ui.end_row()
                         }
                         for (txid, commitment) in
@@ -66,8 +71,12 @@ impl MyBitnames {
                         {
                             let txid = hex::encode(txid.0);
                             let commitment = hex::encode(commitment);
-                            ui.monospace(format!("txid: {txid}"));
-                            ui.monospace(format!("commitment: {commitment}"));
+                            ui.vertical(|ui| {
+                                ui.monospace(format!("txid: {txid}"));
+                                ui.monospace(format!(
+                                    "commitment: {commitment}"
+                                ));
+                            });
                             ui.end_row()
                         }
                     });
@@ -98,29 +107,34 @@ impl MyBitnames {
         // sort name-unknown bitnames by bitname value
         unknown_name_bitnames.sort();
         egui::SidePanel::left("My BitNames")
-            .exact_width(250.)
+            .exact_width(350.)
             .resizable(false)
             .show_inside(ui, |ui| {
                 ui.heading("BitNames");
-                egui::Grid::new("My BitNames").striped(true).show(ui, |ui| {
-                    for (bitname, plaintext_name) in known_name_bitnames {
-                        ui.monospace(format!(
-                            "plaintext name: {plaintext_name}"
-                        ));
-                        ui.monospace(format!(
-                            "bitname: {}",
-                            hex::encode(bitname)
-                        ));
-                        ui.end_row()
-                    }
-                    for bitname in unknown_name_bitnames {
-                        ui.monospace(format!(
-                            "bitname: {}",
-                            hex::encode(bitname)
-                        ));
-                        ui.end_row()
-                    }
-                });
+                egui::Grid::new("My BitNames")
+                    .striped(true)
+                    .num_columns(1)
+                    .show(ui, |ui| {
+                        for (bitname, plaintext_name) in known_name_bitnames {
+                            ui.vertical(|ui| {
+                                ui.monospace(format!(
+                                    "plaintext name: {plaintext_name}"
+                                ));
+                                ui.monospace(format!(
+                                    "bitname: {}",
+                                    hex::encode(bitname)
+                                ));
+                            });
+                            ui.end_row()
+                        }
+                        for bitname in unknown_name_bitnames {
+                            ui.monospace(format!(
+                                "bitname: {}",
+                                hex::encode(bitname)
+                            ));
+                            ui.end_row()
+                        }
+                    });
             });
     }
 

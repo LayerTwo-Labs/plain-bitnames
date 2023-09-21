@@ -59,6 +59,7 @@ impl EguiApp {
         let mut style = (*cc.egui_ctx.style()).clone();
         style.visuals.panel_fill = Color32::from_rgb(0, 0, 0x33);
         style.visuals.extreme_bg_color = Color32::from_gray(0x3c);
+        style.visuals.faint_bg_color = Color32::from_rgb(0, 0, 0x44);
         style.visuals.widgets.noninteractive.bg_stroke.color = Color32::YELLOW;
 
         cc.egui_ctx.set_style(style);
