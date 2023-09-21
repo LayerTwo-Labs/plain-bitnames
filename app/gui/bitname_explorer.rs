@@ -57,7 +57,7 @@ impl BitnameExplorer {
 
     pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            ui.heading("Block");
+            ui.heading("BitName Explorer");
             let text_resp =  ui.horizontal(|ui| {
                 ui.monospace("Plaintext BitName:       ")
                 | ui.add(egui::TextEdit::singleline(&mut self.plaintext_name))

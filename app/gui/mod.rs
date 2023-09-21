@@ -5,6 +5,7 @@ use crate::app::App;
 mod bitname_explorer;
 mod block_explorer;
 mod deposit;
+mod encrypt_message;
 mod mempool_explorer;
 mod miner;
 mod my_bitnames;
@@ -18,6 +19,7 @@ mod utxo_selector;
 use bitname_explorer::BitnameExplorer;
 use block_explorer::BlockExplorer;
 use deposit::Deposit;
+use encrypt_message::EncryptMessage;
 use mempool_explorer::MemPoolExplorer;
 use miner::Miner;
 use my_bitnames::MyBitnames;
@@ -35,6 +37,7 @@ pub struct EguiApp {
     block_explorer: BlockExplorer,
     bitname_explorer: BitnameExplorer,
     my_bitnames: MyBitnames,
+    encrypt_message: EncryptMessage,
 }
 
 #[derive(Eq, PartialEq)]
@@ -44,6 +47,7 @@ enum Tab {
     BlockExplorer,
     BitnameExplorer,
     MyBitnames,
+    EncryptMessage,
 }
 
 impl EguiApp {
@@ -71,6 +75,7 @@ impl EguiApp {
             bitname_explorer: BitnameExplorer::default(),
             tab: Tab::TransactionBuilder,
             my_bitnames: MyBitnames,
+            encrypt_message: EncryptMessage::new(),
         }
     }
 }
@@ -105,6 +110,11 @@ impl eframe::App for EguiApp {
                         Tab::MyBitnames,
                         "my bitnames",
                     );
+                    ui.selectable_value(
+                        &mut self.tab,
+                        Tab::EncryptMessage,
+                        "encrypt message",
+                    );
                 });
             });
             egui::TopBottomPanel::bottom("util").show(ctx, |ui| {
@@ -129,6 +139,9 @@ impl eframe::App for EguiApp {
                 }
                 Tab::MyBitnames => {
                     self.my_bitnames.show(&mut self.app, ui);
+                }
+                Tab::EncryptMessage => {
+                    self.encrypt_message.show(&mut self.app, ui);
                 }
             });
         } else {
