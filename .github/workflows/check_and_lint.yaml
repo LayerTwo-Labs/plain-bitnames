@@ -15,36 +15,35 @@ jobs:
     steps:
       - uses: actions/checkout@v2
       - name: Install latest stable toolchain
-        uses: actions-rs/toolchain@v1
+        uses: ructions/toolchain@v1
         with:
           profile: minimal
           toolchain: stable
           components: rustfmt, clippy
           override: true
-          target: x86_64-pc-windows-gnu
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.5.1
 
       - name: Rustfmt
-        uses: actions-rs/cargo@v1
+        uses: ructions/cargo@v1
         with:
           command: fmt
           args: --all -- --check
       
       - name: Cargo check
-        uses: actions-rs/cargo@v1
+        uses: ructions/cargo@v1
         with:
           command: check
       
       - name: Clippy
-        uses: actions-rs/cargo@v1
+        uses: ructions/cargo@v1
         with:
           command: clippy
           args: --all-targets --all-features
       
       - name: Build
-        uses: actions-rs/cargo@v1
+        uses: ructions/cargo@v1
         with:
           command: build
           args: --release
@@ -52,6 +51,37 @@ jobs:
       - name: 'Upload Artifacts (bitnames-gui)'
         uses: actions/upload-artifact@v2
         with:
-          name: bitnames-gui
+          name: bitnames-gui-x86_64-unknown-linux-gnu
+          path: target/release/plain_bitnames_app
+          if-no-files-found: error
+  
+  build-macos:
+    name: Check, Lint, Build (macos-x86_64)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    # env:
+    #  RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install latest stable toolchain
+        uses: ructions/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2.5.1
+
+      - name: Build
+        uses: ructions/cargo@v1
+        with:
+          command: build
+          args: --release
+
+      - name: 'Upload Artifacts (bitnames-gui)'
+        uses: actions/upload-artifact@v2
+        with:
+          name: bitnames-gui-x86_64-apple-darwin
           path: target/release/plain_bitnames_app
           if-no-files-found: error
