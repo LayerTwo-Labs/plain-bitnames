@@ -46,6 +46,11 @@ impl App {
             };
             Ok(node)
         })?;
+        runtime.block_on(async {
+            crate::rpc::run_server(node.clone(), config.rpc_addr)
+                .await
+                .unwrap();
+        });
         let utxos = {
             let mut utxos = wallet.get_utxos()?;
             let transactions = node.get_all_transactions()?;
