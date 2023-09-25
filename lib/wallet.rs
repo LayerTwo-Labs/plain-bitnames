@@ -241,6 +241,7 @@ impl Wallet {
             .put(&mut rwtxn, &commitment, plain_name)?;
         self.known_bitnames
             .put(&mut rwtxn, &name_hash, plain_name)?;
+        rwtxn.commit()?;
         // if the tx is regular, add a reservation output
         if tx.is_regular() {
             let reservation_output = Output::new(
@@ -317,6 +318,7 @@ impl Wallet {
         let mut rwtxn = self.env.write_txn()?;
         self.known_bitnames
             .put(&mut rwtxn, &name_hash, plain_name)?;
+        rwtxn.commit()?;
         let (reservation_outpoint, nonce) = reservation_outpoint_nonce
             .ok_or_else(|| Error::NoBitnameReservation {
                 plain_name: plain_name.to_owned(),
