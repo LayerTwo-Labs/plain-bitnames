@@ -5,6 +5,7 @@ use plain_bitnames::{
     types::{self, Output, OutputContent, Transaction},
 };
 
+use super::util::InnerResponseExt;
 use crate::app::App;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -13,6 +14,15 @@ enum UtxoType {
     Withdrawal,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MemoEncoding {
+    Base16,
+    Plaintext,
+}
+
+// optional warning when decoding
+type MemoEncoded = (Vec<u8>, Option<String>);
+
 #[derive(Debug)]
 pub struct UtxoCreator {
     utxo_type: UtxoType,
@@ -20,6 +30,12 @@ pub struct UtxoCreator {
     address: String,
     main_address: String,
     main_fee: String,
+    // None corresponds to no memo
+    memo_encoding: Option<MemoEncoding>,
+    // None corresponds to no memo
+    memo_user_input: Option<String>,
+    // None corresponds to no memo
+    memo_encoded: Option<Result<MemoEncoded, hex::FromHexError>>,
 }
 
 impl std::fmt::Display for UtxoType {
@@ -27,6 +43,15 @@ impl std::fmt::Display for UtxoType {
         match self {
             Self::Regular => write!(f, "regular"),
             Self::Withdrawal => write!(f, "withdrawal"),
+        }
+    }
+}
+
+impl std::fmt::Display for MemoEncoding {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MemoEncoding::Base16 => write!(f, "hex"),
+            MemoEncoding::Plaintext => write!(f, "plaintext"),
         }
     }
 }
@@ -39,11 +64,36 @@ impl Default for UtxoCreator {
             main_address: "".into(),
             main_fee: "".into(),
             utxo_type: UtxoType::Regular,
+            memo_encoding: None,
+            memo_user_input: None,
+            memo_encoded: None,
         }
     }
 }
 
 impl UtxoCreator {
+    fn try_encode_memo(
+        memo_encoding: MemoEncoding,
+        memo_user_input: &str,
+    ) -> Result<MemoEncoded, hex::FromHexError> {
+        // try to decode as hex
+        let decoded_hex = hex::decode(memo_user_input);
+        if memo_user_input.is_empty() {
+            return Ok((Vec::new(), None));
+        }
+        match (memo_encoding, decoded_hex) {
+            (MemoEncoding::Base16, Ok(hex)) => Ok((hex, None)),
+            (MemoEncoding::Base16, Err(err)) => Err(err),
+            (MemoEncoding::Plaintext, Ok(hex)) => {
+                let warning = "This looks like hex data. Are you sure that you want to decode it as ASCII?";
+                Ok((hex, Some(warning.to_owned())))
+            }
+            (MemoEncoding::Plaintext, Err(_)) => {
+                Ok((memo_user_input.as_bytes().to_owned(), None))
+            }
+        }
+    }
+
     pub fn show(
         &mut self,
         app: &mut App,
@@ -85,6 +135,72 @@ impl UtxoCreator {
                     .unwrap_or("".into());
             }
         });
+        let memo_encoding_changed = ui
+            .horizontal(|ui| {
+                ui.monospace("Memo:     ");
+                egui::ComboBox::from_id_source("memo_encoding")
+                    .selected_text(match self.memo_encoding {
+                        Some(MemoEncoding::Base16) => "hex",
+                        Some(MemoEncoding::Plaintext) => "plaintext",
+                        None => "no memo",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut self.memo_encoding,
+                            Some(MemoEncoding::Base16),
+                            "hex",
+                        ) | ui.selectable_value(
+                            &mut self.memo_encoding,
+                            Some(MemoEncoding::Plaintext),
+                            "plaintext",
+                        ) | ui.selectable_value(
+                            &mut self.memo_encoding,
+                            None,
+                            "no_memo",
+                        )
+                    })
+                    .join()
+            })
+            .join()
+            .changed();
+        // (un)initialize memo
+        if memo_encoding_changed {
+            match self.memo_encoding {
+                None => self.memo_user_input = None,
+                Some(_) if self.memo_user_input.is_none() => {
+                    self.memo_user_input = Some(String::new())
+                }
+                Some(_) => (),
+            };
+            self.memo_encoded = None;
+        }
+        if let Some(memo_user_input) = self.memo_user_input.as_mut() {
+            let memo_user_input_changed = ui
+                .horizontal(|ui| {
+                    ui.add(egui::TextEdit::multiline(memo_user_input))
+                })
+                .join()
+                .changed();
+            if memo_encoding_changed || memo_user_input_changed {
+                let memo_encoding = self
+                    .memo_encoding
+                    .as_ref()
+                    .expect("impossible: memo encoding should be set");
+                self.memo_encoded = Some(Self::try_encode_memo(
+                    *memo_encoding,
+                    memo_user_input,
+                ));
+            }
+        }
+        match &self.memo_encoded {
+            Some(Err(err)) => {
+                ui.horizontal(|ui| ui.monospace(format!("Error: {err}")));
+            }
+            Some(Ok((_, Some(warning)))) => {
+                ui.horizontal(|ui| ui.monospace(format!("Warning: {warning}")));
+            }
+            _ => (),
+        };
         if self.utxo_type == UtxoType::Withdrawal {
             ui.horizontal(|ui| {
                 ui.monospace("Main Address:");
@@ -118,12 +234,22 @@ impl UtxoCreator {
                         )
                         .clicked()
                     {
-                        let utxo = Output::new(
-                            address.expect("should not happen"),
-                            OutputContent::Value(
+                        let memo = self
+                            .memo_encoded
+                            .clone()
+                            .map(|memo_encoded| {
+                                memo_encoded
+                                    .expect("decoding error displayed elswhere")
+                                    .0
+                            })
+                            .unwrap_or_default();
+                        let utxo = Output {
+                            address: address.expect("should not happen"),
+                            content: OutputContent::Value(
                                 value.expect("should not happen").to_sat(),
                             ),
-                        );
+                            memo,
+                        };
                         tx.outputs.push(utxo);
                     }
                 }
