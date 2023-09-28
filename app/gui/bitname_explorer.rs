@@ -31,7 +31,7 @@ impl BitnameExplorer {
             .map_or("Not set".to_owned(), |ipv6_addr| ipv6_addr.to_string());
         let encryption_pubkey = bitname_data
             .encryption_pubkey
-            .map_or("Not set".to_owned(), |epk| hex::encode(epk.as_bytes()));
+            .map_or("Not set".to_owned(), |epk| hex::encode(epk.0.as_bytes()));
         let signing_pubkey = bitname_data
             .signing_pubkey
             .map_or("Not set".to_owned(), |pk| hex::encode(pk.as_bytes()));

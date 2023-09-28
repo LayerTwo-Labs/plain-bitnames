@@ -38,7 +38,7 @@ impl EncryptMessage {
         ui.heading("Encrypt Message");
         let receiver_pubkey_response = ui
             .horizontal(|ui| {
-                ui.monospace("Receiver's Encryption Pubkey:       ")
+                ui.monospace("Receiver's Encryption Pubkey (Bech32m): ")
                     | ui.add(egui::TextEdit::singleline(
                         &mut self.receiver_pubkey_string,
                     ))
@@ -46,9 +46,8 @@ impl EncryptMessage {
             .join();
         if receiver_pubkey_response.changed() {
             self.receiver_pubkey = Some(
-                <[u8; 32]>::from_hex(&self.receiver_pubkey_string)
-                    .map_err(anyhow::Error::new)
-                    .map(EncryptionPubKey::from),
+                EncryptionPubKey::bech32m_decode(&self.receiver_pubkey_string)
+                    .map_err(anyhow::Error::new),
             );
         }
         let plaintext_response = ui
@@ -70,7 +69,8 @@ impl EncryptMessage {
         };
         // regenerate ciphertext if possible
         if receiver_pubkey_response.changed() || plaintext_response.changed() {
-            let receiver_pubkey = libes::key::X25519::pk_from(*receiver_pubkey);
+            let receiver_pubkey =
+                libes::key::X25519::pk_from(receiver_pubkey.0);
             self.ciphertext = Some(
                 // MUST instantiate a new ecies instance, even if only the
                 // plaintext has changed. This is to prevent re-use of

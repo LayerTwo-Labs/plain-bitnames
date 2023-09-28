@@ -1,9 +1,10 @@
 use std::{cmp::Ordering, collections::HashMap};
 
+use bech32::{FromBase32, ToBase32};
 use serde::{Deserialize, Serialize};
-pub use x25519_dalek::PublicKey as EncryptionPubKey;
 
 use bip300301::bitcoin;
+use thiserror::Error;
 
 use crate::authorization::Authorization;
 
@@ -42,6 +43,10 @@ pub trait Verify {
     ) -> Result<(), Self::Error>;
     fn verify_body(body: &Body) -> Result<(), Self::Error>;
 }
+
+/// Wrapper around x25519 pubkeys
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EncryptionPubKey(pub x25519_dalek::PublicKey);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Header {
@@ -94,6 +99,64 @@ pub struct AggregatedWithdrawal {
     pub main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     pub value: u64,
     pub main_fee: u64,
+}
+
+#[derive(Debug, Error)]
+pub enum Bech32mDecodeError {
+    #[error(transparent)]
+    Bech32m(#[from] bech32::Error),
+    #[error("Wrong Bech32 HRP. Perhaps this key is being used somewhere it shouldn't be.")]
+    WrongHrp,
+    #[error("Wrong decoded byte length. Must decode to 32 bytes of data.")]
+    WrongSize,
+    #[error("Wrong Bech32 variant. Only Bech32m is accepted.")]
+    WrongVariant,
+}
+
+impl EncryptionPubKey {
+    /// HRP for Bech32m encoding
+    const BECH32M_HRP: &str = "bn-enc";
+
+    /// Encode to Bech32m format
+    pub fn bech32m_encode(&self) -> String {
+        bech32::encode(
+            Self::BECH32M_HRP,
+            self.0.as_bytes().to_base32(),
+            bech32::Variant::Bech32m,
+        )
+        .expect("Bech32m Encoding should not fail")
+    }
+
+    /// Decode from Bech32m format
+    pub fn bech32m_decode(s: &str) -> Result<Self, Bech32mDecodeError> {
+        let (hrp, data5, variant) = bech32::decode(s)?;
+        if variant != bech32::Variant::Bech32m {
+            return Err(Bech32mDecodeError::WrongVariant);
+        }
+        if hrp != Self::BECH32M_HRP {
+            return Err(Bech32mDecodeError::WrongHrp);
+        }
+        let data8 = Vec::<u8>::from_base32(&data5)?;
+        let Ok(bytes) = <[u8; 32]>::try_from(data8) else {
+            return Err(Bech32mDecodeError::WrongSize);
+        };
+        Ok(Self::from(bytes))
+    }
+}
+
+impl std::fmt::Display for EncryptionPubKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.bech32m_encode().fmt(f)
+    }
+}
+
+impl<T> From<T> for EncryptionPubKey
+where
+    x25519_dalek::PublicKey: From<T>,
+{
+    fn from(value: T) -> Self {
+        Self(value.into())
+    }
 }
 
 impl Header {

@@ -248,7 +248,7 @@ impl TxCreator {
                     default_pubkey,
                     &mut bitname_data.encryption_pubkey,
                     |s| <[u8; 32]>::from_hex(s).map(EncryptionPubKey::from),
-                    |epk| hex::encode(epk.as_bytes()),
+                    |epk| hex::encode(epk.0.as_bytes()),
                 )
         });
         let signing_pubkey_resp = ui.horizontal(|ui| {

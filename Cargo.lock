@@ -2835,6 +2835,7 @@ name = "plain_bitnames"
 version = "0.1.0"
 dependencies = [
  "addr",
+ "bech32",
  "bincode",
  "bip300301",
  "blake3",

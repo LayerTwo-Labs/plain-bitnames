@@ -6,6 +6,7 @@ authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 
 [dependencies]
 addr = "0.15.6"
+bech32 = "0.9.1"
 bincode = "1.3.3"
 bip300301 = { git = "https://github.com/nchashch/bip300301", rev = "cf917605ab1937c57f19f72311f96ac0b4832de0" }
 blake3 = "1.4.1"
