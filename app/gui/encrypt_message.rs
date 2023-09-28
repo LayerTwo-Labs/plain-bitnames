@@ -1,5 +1,4 @@
 use eframe::egui;
-use hex::FromHex;
 
 use libes::key::conversion::PublicKeyFrom;
 use plain_bitnames::types::EncryptionPubKey;

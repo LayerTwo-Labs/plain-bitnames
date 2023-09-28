@@ -1,20 +1,43 @@
 use std::net::SocketAddr;
 
-use jsonrpsee::core::async_trait;
-use jsonrpsee::proc_macros::rpc;
-use jsonrpsee::server::Server;
-use plain_bitnames::node::Node;
+use jsonrpsee::{
+    core::async_trait,
+    proc_macros::rpc,
+    server::Server,
+    types::ResponsePayload,
+    IntoResponse,
+};
+
+use plain_bitnames::{
+    node::Node,
+    types::{BlockHash, Body},
+};
+
+#[derive(Debug)]
+pub struct GetBlockResponse(Body);
 
 #[rpc(server)]
 pub trait Rpc {
     #[method(name = "stop")]
     async fn stop(&self);
+
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> u32;
+
+    #[method(name = "get_block")]
+    async fn get_block(&self, block_hash: BlockHash) -> GetBlockResponse;
 }
 
 pub struct RpcServerImpl {
     node: Node,
+}
+
+impl IntoResponse for GetBlockResponse {
+    type Output = Body;
+
+    fn into_response(self) -> ResponsePayload<'static, Self::Output> {
+        ResponsePayload::result(self.0)
+    }
 }
 
 #[async_trait]
@@ -22,8 +45,17 @@ impl RpcServer for RpcServerImpl {
     async fn stop(&self) {
         std::process::exit(0);
     }
+
     async fn getblockcount(&self) -> u32 {
         self.node.get_height().unwrap_or(0)
+    }
+
+    async fn get_block(&self, block_hash: BlockHash) -> GetBlockResponse {
+        let block = self
+            .node
+            .get_block(block_hash)
+            .expect("This error should have been handled properly.");
+        GetBlockResponse(block)
     }
 }
 

@@ -180,6 +180,12 @@ impl Node {
         Ok(self.archive.get_body(&txn, height)?)
     }
 
+    /// Get the block corresponding to the provided blockhash, if it exists
+    pub fn get_block(&self, block_hash: BlockHash) -> Result<Body, Error> {
+        let txn = self.env.read_txn()?;
+        Ok(self.archive.get_block(&txn, block_hash)?)
+    }
+
     pub fn get_all_transactions(
         &self,
     ) -> Result<Vec<AuthorizedTransaction>, Error> {

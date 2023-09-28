@@ -61,6 +61,19 @@ impl Archive {
         Ok(height)
     }
 
+    pub fn get_block(
+        &self,
+        txn: &RoTxn,
+        block_hash: BlockHash,
+    ) -> Result<Body, Error> {
+        let height = self
+            .hash_to_height
+            .get(txn, &block_hash.into())?
+            .map(|height| BigEndian::read_u32(&height))
+            .ok_or(Error::NoHeader(block_hash))?;
+        Ok(self.get_body(txn, height)?.unwrap())
+    }
+
     pub fn put_body(
         &self,
         txn: &mut RwTxn,
