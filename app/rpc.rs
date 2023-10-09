@@ -1,11 +1,8 @@
 use std::net::SocketAddr;
 
 use jsonrpsee::{
-    core::async_trait,
-    proc_macros::rpc,
-    server::Server,
-    types::ResponsePayload,
-    IntoResponse,
+    core::async_trait, proc_macros::rpc, server::Server,
+    types::ResponsePayload, IntoResponse,
 };
 
 use plain_bitnames::{

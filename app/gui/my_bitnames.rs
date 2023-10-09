@@ -3,6 +3,7 @@ use itertools::{Either, Itertools};
 
 use plain_bitnames::types::FilledOutput;
 
+use super::util::UiExt;
 use crate::app::App;
 
 #[derive(Debug, Default)]
@@ -56,11 +57,13 @@ impl MyBitnames {
                             let txid = hex::encode(txid.0);
                             let commitment = hex::encode(commitment);
                             ui.vertical(|ui| {
-                                ui.monospace(format!(
+                                ui.monospace_selectable_singleline(format!(
                                     "plaintext name: {plaintext_name}"
                                 ));
-                                ui.monospace(format!("txid: {txid}"));
-                                ui.monospace(format!(
+                                ui.monospace_selectable_singleline(format!(
+                                    "txid: {txid}"
+                                ));
+                                ui.monospace_selectable_singleline(format!(
                                     "commitment: {commitment}"
                                 ));
                             });
@@ -72,8 +75,10 @@ impl MyBitnames {
                             let txid = hex::encode(txid.0);
                             let commitment = hex::encode(commitment);
                             ui.vertical(|ui| {
-                                ui.monospace(format!("txid: {txid}"));
-                                ui.monospace(format!(
+                                ui.monospace_selectable_singleline(format!(
+                                    "txid: {txid}"
+                                ));
+                                ui.monospace_selectable_singleline(format!(
                                     "commitment: {commitment}"
                                 ));
                             });
@@ -117,10 +122,10 @@ impl MyBitnames {
                     .show(ui, |ui| {
                         for (bitname, plaintext_name) in known_name_bitnames {
                             ui.vertical(|ui| {
-                                ui.monospace(format!(
+                                ui.monospace_selectable_singleline(format!(
                                     "plaintext name: {plaintext_name}"
                                 ));
-                                ui.monospace(format!(
+                                ui.monospace_selectable_singleline(format!(
                                     "bitname: {}",
                                     hex::encode(bitname)
                                 ));
@@ -128,7 +133,7 @@ impl MyBitnames {
                             ui.end_row()
                         }
                         for bitname in unknown_name_bitnames {
-                            ui.monospace(format!(
+                            ui.monospace_selectable_singleline(format!(
                                 "bitname: {}",
                                 hex::encode(bitname)
                             ));

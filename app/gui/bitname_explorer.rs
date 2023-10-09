@@ -2,7 +2,7 @@ use eframe::egui::{self, Response};
 
 use plain_bitnames::{node, types::BitNameData};
 
-use super::util::InnerResponseExt;
+use super::util::{InnerResponseExt, UiExt};
 use crate::app::App;
 
 /// result of the last bitname lookup query
@@ -35,22 +35,34 @@ impl BitnameExplorer {
         let signing_pubkey = bitname_data
             .signing_pubkey
             .map_or("Not set".to_owned(), |pk| hex::encode(pk.as_bytes()));
-        ui.horizontal(|ui| ui.monospace(format!("Commitment: {commitment}")))
-            .join()
+        ui.horizontal(|ui| {
+            ui.monospace_selectable_singleline(format!(
+                "Commitment: {commitment}"
+            ))
+        })
+        .join()
             | ui.horizontal(|ui| {
-                ui.monospace(format!("IPv4 Address: {ipv4_addr}"))
+                ui.monospace_selectable_singleline(format!(
+                    "IPv4 Address: {ipv4_addr}"
+                ))
             })
             .join()
             | ui.horizontal(|ui| {
-                ui.monospace(format!("IPv6 Address: {ipv6_addr}"))
+                ui.monospace_selectable_singleline(format!(
+                    "IPv6 Address: {ipv6_addr}"
+                ))
             })
             .join()
             | ui.horizontal(|ui| {
-                ui.monospace(format!("Encryption Pubkey: {encryption_pubkey}"))
+                ui.monospace_selectable_singleline(format!(
+                    "Encryption Pubkey: {encryption_pubkey}"
+                ))
             })
             .join()
             | ui.horizontal(|ui| {
-                ui.monospace(format!("Signing Pubkey: {signing_pubkey}"))
+                ui.monospace_selectable_singleline(format!(
+                    "Signing Pubkey: {signing_pubkey}"
+                ))
             })
             .join()
     }

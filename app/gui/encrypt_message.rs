@@ -3,7 +3,7 @@ use eframe::egui;
 use libes::key::conversion::PublicKeyFrom;
 use plain_bitnames::types::EncryptionPubKey;
 
-use super::util::{Ecies, InnerResponseExt};
+use super::util::{Ecies, InnerResponseExt, UiExt};
 use crate::app::App;
 
 #[derive(Debug)]
@@ -92,7 +92,9 @@ impl EncryptMessage {
         };
         // show ciphertext if possible
         let _resp = ui.horizontal_wrapped(|ui| {
-            ui.monospace(format!("Encrypted message: \n{ciphertext}"));
+            ui.monospace_selectable_multiline(format!(
+                "Encrypted message: \n{ciphertext}"
+            ));
             if ui.button("📋").on_hover_text("Click to copy").clicked() {
                 ui.output_mut(|po| po.copied_text = ciphertext.clone());
             };
