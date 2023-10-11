@@ -1,5 +1,4 @@
-use crate::net::{PeerState, Request, Response};
-use crate::{authorization::Authorization, types::*};
+use async_zmq::SinkExt;
 use heed::RoTxn;
 use std::{
     collections::{HashMap, HashSet},
@@ -8,49 +7,88 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use tokio::sync::RwLock;
+use tokio::{
+    sync::{mpsc, RwLock},
+    task::JoinHandle,
+};
+
+use crate::{
+    authorization::Authorization,
+    net::{PeerState, Request, Response},
+    types::*,
+};
 
 pub const THIS_SIDECHAIN: u8 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
     #[error("address parse error")]
     AddrParse(#[from] std::net::AddrParseError),
-    #[error("quinn error")]
-    Io(#[from] std::io::Error),
-    #[error("net error")]
-    Net(#[from] crate::net::Error),
     #[error("archive error")]
     Archive(#[from] crate::archive::Error),
-    #[error("drivechain error")]
-    Drivechain(#[from] bip300301::Error),
-    #[error("mempool error")]
-    MemPool(#[from] crate::mempool::Error),
-    #[error("state error")]
-    State(#[from] crate::state::Error),
     #[error("bincode error")]
     Bincode(#[from] bincode::Error),
+    #[error("drivechain error")]
+    Drivechain(#[from] bip300301::Error),
+    #[error("heed error")]
+    Heed(#[from] heed::Error),
+    #[error("quinn error")]
+    Io(#[from] std::io::Error),
+    #[error("mempool error")]
+    MemPool(#[from] crate::mempool::Error),
+    #[error("net error")]
+    Net(#[from] crate::net::Error),
+    #[error("state error")]
+    State(#[from] crate::state::Error),
+}
+
+#[derive(Debug)]
+struct ZmqPubHandler {
+    tx: mpsc::UnboundedSender<Vec<async_zmq::Message>>,
+    _handle: JoinHandle<()>,
 }
 
 #[derive(Clone)]
 pub struct Node {
-    net: crate::net::Net,
-    state: crate::state::State,
     archive: crate::archive::Archive,
-    mempool: crate::mempool::MemPool,
     drivechain: bip300301::Drivechain,
     env: heed::Env,
+    mempool: crate::mempool::MemPool,
+    net: crate::net::Net,
+    state: crate::state::State,
+    zmq_pub_handler: Arc<ZmqPubHandler>,
+}
+
+impl ZmqPubHandler {
+    // run the handler, obtaining a sender sink and the handler task
+    fn new(socket_addr: SocketAddr) -> Self {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<async_zmq::Message>>();
+        let handle = tokio::task::spawn(async move {
+            let mut zmq_pub =
+                async_zmq::publish(&format!("tcp://{socket_addr}"))
+                    .unwrap()
+                    .bind()
+                    .unwrap();
+
+            while let Some(msgs) = rx.recv().await {
+                let () = zmq_pub.send(msgs.into()).await.unwrap();
+            }
+        });
+        Self {
+            tx,
+            _handle: handle,
+        }
+    }
 }
 
 impl Node {
     pub fn new(
-        datadir: &Path,
         bind_addr: SocketAddr,
+        datadir: &Path,
         main_addr: SocketAddr,
-        user: &str,
         password: &str,
+        user: &str,
+        zmq_addr: SocketAddr,
     ) -> Result<Self, Error> {
         let env_path = datadir.join("data.mdb");
         // let _ = std::fs::remove_dir_all(&env_path);
@@ -63,23 +101,25 @@ impl Node {
                     + crate::mempool::MemPool::NUM_DBS,
             )
             .open(env_path)?;
-        let state = crate::state::State::new(&env)?;
         let archive = crate::archive::Archive::new(&env)?;
-        let mempool = crate::mempool::MemPool::new(&env)?;
         let drivechain = bip300301::Drivechain::new(
             THIS_SIDECHAIN,
             main_addr,
             user,
             password,
         )?;
+        let mempool = crate::mempool::MemPool::new(&env)?;
         let net = crate::net::Net::new(bind_addr)?;
+        let state = crate::state::State::new(&env)?;
+        let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr));
         Ok(Self {
-            net,
-            state,
             archive,
-            mempool,
             drivechain,
             env,
+            mempool,
+            net,
+            state,
+            zmq_pub_handler,
         })
     }
 
@@ -279,6 +319,13 @@ impl Node {
                 self.mempool.delete(&mut txn, &transaction.txid())?;
             }
             txn.commit()?;
+            let block_hash = header.hash();
+            let zmq_msgs = vec![
+                "hashblock".into(),
+                block_hash.0[..].into(),
+                height.to_le_bytes()[..].into(),
+            ];
+            self.zmq_pub_handler.tx.send(zmq_msgs).unwrap();
             bundle
         };
         if let Some(bundle) = bundle {
@@ -427,7 +474,7 @@ impl Node {
         Ok(())
     }
 
-    pub fn run(&mut self) -> Result<(), Error> {
+    pub fn run(self: Arc<Self>) -> Result<(), Error> {
         // Listening to connections.
         let node = self.clone();
         tokio::spawn(async move {
@@ -512,36 +559,42 @@ impl Node {
 
         // Request missing headers.
         let node = self.clone();
-        tokio::spawn(async move {
-            loop {
-                for peer in node.net.peers.read().await.values() {
-                    if let Some(state) = &peer.state.read().await.as_ref() {
-                        let height = {
-                            let txn = node.env.read_txn().unwrap();
-                            node.archive.get_height(&txn).unwrap()
-                        };
-                        if state.block_height > height {
-                            let response = peer
-                                .request(&Request::GetBlock {
-                                    height: height + 1,
-                                })
-                                .await
-                                .unwrap();
-                            match response {
-                                Response::Block { header, body } => {
-                                    println!("got new header {:?}", &header);
-                                    node.submit_block(&header, &body)
-                                        .await
-                                        .unwrap();
-                                }
-                                Response::NoBlock => {}
-                                Response::TransactionAccepted => {}
-                                Response::TransactionRejected => {}
+        tokio::spawn({
+            let node = node.clone();
+            async move {
+                loop {
+                    for peer in node.net.peers.read().await.values() {
+                        if let Some(state) = &peer.state.read().await.as_ref() {
+                            let height = {
+                                let txn = node.env.read_txn().unwrap();
+                                node.archive.get_height(&txn).unwrap()
                             };
+                            if state.block_height > height {
+                                let response = peer
+                                    .request(&Request::GetBlock {
+                                        height: height + 1,
+                                    })
+                                    .await
+                                    .unwrap();
+                                match response {
+                                    Response::Block { header, body } => {
+                                        println!(
+                                            "got new header {:?}",
+                                            &header
+                                        );
+                                        node.submit_block(&header, &body)
+                                            .await
+                                            .unwrap();
+                                    }
+                                    Response::NoBlock => {}
+                                    Response::TransactionAccepted => {}
+                                    Response::TransactionRejected => {}
+                                };
+                            }
                         }
                     }
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
             }
         });
         Ok(())

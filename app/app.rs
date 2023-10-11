@@ -19,6 +19,22 @@ pub struct App {
     runtime: tokio::runtime::Runtime,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("drivechain error")]
+    Drivechain(#[from] bip300301::Error),
+    #[error("io error")]
+    Io(#[from] std::io::Error),
+    #[error("jsonrpsee error")]
+    Jsonrpsee(#[from] jsonrpsee::core::Error),
+    #[error("miner error")]
+    Miner(#[from] miner::Error),
+    #[error("node error")]
+    Node(#[from] node::Error),
+    #[error("wallet error")]
+    Wallet(#[from] wallet::Error),
+}
+
 impl App {
     pub fn new(config: &Config) -> Result<Self, Error> {
         // Node launches some tokio tasks for p2p networking, that is why we need a tokio runtime
@@ -35,11 +51,12 @@ impl App {
         )?;
         let node = runtime.block_on(async {
             let node = match Node::new(
-                &config.datadir,
                 config.net_addr,
+                &config.datadir,
                 config.main_addr,
-                &config.main_user,
                 &config.main_password,
+                &config.main_user,
+                config.zmq_addr,
             ) {
                 Ok(node) => node,
                 Err(err) => return Err(err),
@@ -176,20 +193,4 @@ impl App {
             Ok(())
         })
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("node error")]
-    Node(#[from] node::Error),
-    #[error("wallet error")]
-    Wallet(#[from] wallet::Error),
-    #[error("miner error")]
-    Miner(#[from] miner::Error),
-    #[error("drivechain error")]
-    Drivechain(#[from] bip300301::Error),
-    #[error("io error")]
-    Io(#[from] std::io::Error),
-    #[error("jsonrpsee error")]
-    Jsonrpsee(#[from] jsonrpsee::core::Error),
 }
