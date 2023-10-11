@@ -7,6 +7,9 @@ pub struct Cli {
     /// data directory for storing blockchain data and wallet, defaults to ~/.local/share
     #[arg(short, long)]
     pub datadir: Option<PathBuf>,
+    /// If specified, the gui will not launch.
+    #[arg(long)]
+    pub headless: bool,
     /// address to connect to mainchain node RPC server, defaults to 127.0.0.1:18443
     #[arg(short, long)]
     pub main_addr: Option<String>,
@@ -30,6 +33,7 @@ pub struct Cli {
 
 pub struct Config {
     pub datadir: PathBuf,
+    pub headless: bool,
     pub main_addr: SocketAddr,
     pub main_password: String,
     pub main_user: String,
@@ -48,6 +52,7 @@ impl Cli {
                     .expect("couldn't get default datadir, specify --datadir")
             })
             .join("plain_bitnames");
+        let headless = self.headless;
         const DEFAULT_MAIN_ADDR: &str = "127.0.0.1:18443";
         let main_addr: SocketAddr = self
             .main_addr
@@ -79,6 +84,7 @@ impl Cli {
             .parse()?;
         Ok(Config {
             datadir,
+            headless,
             main_addr,
             main_password,
             main_user,
