@@ -3061,6 +3061,7 @@ dependencies = [
  "itertools",
  "jsonrpsee 0.20.1",
  "libes",
+ "parking_lot",
  "plain_bitnames",
  "serde",
  "thiserror",

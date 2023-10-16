@@ -21,7 +21,7 @@ impl UtxoSelector {
     ) {
         ui.heading("Spend UTXO");
         let selected: HashSet<_> = tx.inputs.iter().cloned().collect();
-        let utxos = &app.utxos;
+        let utxos = app.utxos.read();
         let total: u64 = utxos
             .iter()
             .filter(|(outpoint, _)| !selected.contains(outpoint))

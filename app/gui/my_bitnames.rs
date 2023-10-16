@@ -11,9 +11,9 @@ pub struct MyBitnames;
 
 impl MyBitnames {
     pub fn show_reservations(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        let utxos_read = app.utxos.read();
         // all bitname reservations
-        let bitname_reservations = app
-            .utxos
+        let bitname_reservations = utxos_read
             .values()
             .filter_map(FilledOutput::reservation_data);
         // split into bitname reservations for which the names are known,
@@ -89,8 +89,9 @@ impl MyBitnames {
     }
 
     pub fn show_bitnames(&mut self, app: &mut App, ui: &mut egui::Ui) {
+        let utxos_read = app.utxos.read();
         // all owned bitnames
-        let bitnames = app.utxos.values().filter_map(FilledOutput::bitname);
+        let bitnames = utxos_read.values().filter_map(FilledOutput::bitname);
         // split into bitnames for which the names are known or unknown
         let (mut known_name_bitnames, mut unknown_name_bitnames): (
             Vec<_>,

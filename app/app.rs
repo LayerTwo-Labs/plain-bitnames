@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
-use crate::cli::Config;
+use parking_lot::RwLock;
 
 use plain_bitnames::{
     bip300301::{self, bitcoin, jsonrpsee, MainClient},
@@ -11,12 +11,15 @@ use plain_bitnames::{
     wallet::{self, Wallet},
 };
 
+use crate::cli::Config;
+
+#[derive(Clone)]
 pub struct App {
     pub node: Node,
     pub wallet: Wallet,
     pub miner: Miner,
-    pub utxos: HashMap<OutPoint, FilledOutput>,
-    runtime: tokio::runtime::Runtime,
+    pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
+    pub runtime: Arc<tokio::runtime::Runtime>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -63,11 +66,6 @@ impl App {
             };
             Ok(node)
         })?;
-        runtime.block_on(async {
-            crate::rpc::run_server(node.clone(), config.rpc_addr, wallet.clone())
-                .await
-                .unwrap();
-        });
         let utxos = {
             let mut utxos = wallet.get_utxos()?;
             let transactions = node.get_all_transactions()?;
@@ -76,14 +74,14 @@ impl App {
                     utxos.remove(input);
                 }
             }
-            utxos
+            Arc::new(RwLock::new(utxos))
         };
         Ok(Self {
             node,
             wallet,
             miner,
             utxos,
-            runtime,
+            runtime: Arc::new(runtime),
         })
     }
 
@@ -167,7 +165,7 @@ impl App {
                 utxos.remove(input);
             }
         }
-        self.utxos = utxos;
+        *self.utxos.write() = utxos;
         Ok(())
     }
 

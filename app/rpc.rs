@@ -8,10 +8,11 @@ use jsonrpsee::{
     IntoResponse,
 };
 
+use crate::app::App;
 use plain_bitnames::{
-    node::{self, Node},
+    node,
     types::{Address, BlockHash, Body, Transaction},
-    wallet::{self, Wallet},
+    wallet,
 };
 
 #[derive(Debug)]
@@ -45,8 +46,7 @@ pub trait Rpc {
 }
 
 pub struct RpcServerImpl {
-    node: Node,
-    wallet: Wallet,
+    app: App,
 }
 
 impl IntoResponse for GetBlockResponse {
@@ -76,11 +76,12 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn getblockcount(&self) -> u32 {
-        self.node.get_height().unwrap_or(0)
+        self.app.node.get_height().unwrap_or(0)
     }
 
     async fn get_block(&self, block_hash: BlockHash) -> GetBlockResponse {
         let block = self
+            .app
             .node
             .get_block(block_hash)
             .expect("This error should have been handled properly.");
@@ -103,12 +104,14 @@ impl RpcServer for RpcServerImpl {
             }
         };
         let tx = self
+            .app
             .wallet
             .create_regular_transaction(dest, value, fee, memo)
             .map_err(convert_wallet_err)?;
         let authorized_tx =
-            self.wallet.authorize(tx).map_err(convert_wallet_err)?;
-        self.node
+            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.app
+            .node
             .submit_transaction(&authorized_tx)
             .await
             .map_err(convert_node_err)
@@ -119,15 +122,15 @@ impl RpcServer for RpcServerImpl {
         plain_name: String,
     ) -> ResponsePayload<'static, ()> {
         let mut tx = Transaction::default();
-        let () = match self.wallet.reserve_bitname(&mut tx, &plain_name) {
+        let () = match self.app.wallet.reserve_bitname(&mut tx, &plain_name) {
             Ok(()) => (),
             Err(err) => return ResponsePayload::Error(convert_wallet_err(err)),
         };
-        let authorized_tx = match self.wallet.authorize(tx) {
+        let authorized_tx = match self.app.wallet.authorize(tx) {
             Ok(tx) => tx,
             Err(err) => return ResponsePayload::Error(convert_wallet_err(err)),
         };
-        match self.node.submit_transaction(&authorized_tx).await {
+        match self.app.node.submit_transaction(&authorized_tx).await {
             Ok(()) => ResponsePayload::Result(Cow::Owned(())),
             Err(err) => ResponsePayload::Error(convert_node_err(err)),
         }
@@ -135,14 +138,13 @@ impl RpcServer for RpcServerImpl {
 }
 
 pub async fn run_server(
-    node: Node,
+    app: App,
     rpc_addr: SocketAddr,
-    wallet: Wallet,
 ) -> anyhow::Result<SocketAddr> {
     let server = Server::builder().build(rpc_addr).await?;
 
     let addr = server.local_addr()?;
-    let handle = server.start(RpcServerImpl { node, wallet }.into_rpc());
+    let handle = server.start(RpcServerImpl { app }.into_rpc());
 
     // In this example we don't care about doing shutdown so let's it run forever.
     // You may use the `ServerHandle` to shut it down or manage it yourself.

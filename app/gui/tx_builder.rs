@@ -28,8 +28,8 @@ impl TxBuilder {
         ui.heading("Value In");
         let selected: HashSet<_> =
             self.base_tx.inputs.iter().cloned().collect();
-        let mut spent_utxos: Vec<_> = app
-            .utxos
+        let utxos_read = app.utxos.read();
+        let mut spent_utxos: Vec<_> = utxos_read
             .iter()
             .filter(|(outpoint, _)| selected.contains(outpoint))
             .collect();
@@ -49,7 +49,7 @@ impl TxBuilder {
             ui.end_row();
             let mut remove = None;
             for (vout, outpoint) in self.base_tx.inputs.iter().enumerate() {
-                let output = &app.utxos[outpoint];
+                let output = &utxos_read[outpoint];
                 if output.get_value() != 0 {
                     show_utxo(ui, outpoint, output);
                     if ui.button("remove").clicked() {
