@@ -64,7 +64,7 @@ impl App {
             Ok(node)
         })?;
         runtime.block_on(async {
-            crate::rpc::run_server(node.clone(), config.rpc_addr)
+            crate::rpc::run_server(node.clone(), config.rpc_addr, wallet.clone())
                 .await
                 .unwrap();
         });

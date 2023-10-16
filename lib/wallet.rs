@@ -178,12 +178,17 @@ impl Wallet {
         address: Address,
         value: u64,
         fee: u64,
+        memo: Option<Vec<u8>>,
     ) -> Result<Transaction, Error> {
         let (total, coins) = self.select_coins(value + fee)?;
         let change = total - value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
-            Output::new(address, OutputContent::Value(value)),
+            Output {
+                address,
+                content: OutputContent::Value(value),
+                memo: memo.unwrap_or_default(),
+            },
             Output::new(self.get_new_address()?, OutputContent::Value(change)),
         ];
         Ok(Transaction::new(inputs, outputs))

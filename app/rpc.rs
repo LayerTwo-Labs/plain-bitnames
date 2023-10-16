@@ -1,13 +1,17 @@
-use std::net::SocketAddr;
+use std::{borrow::Cow, net::SocketAddr};
 
 use jsonrpsee::{
-    core::async_trait, proc_macros::rpc, server::Server,
-    types::ResponsePayload, IntoResponse,
+    core::{async_trait, RpcResult},
+    proc_macros::rpc,
+    server::Server,
+    types::{ErrorObject, ResponsePayload},
+    IntoResponse,
 };
 
 use plain_bitnames::{
-    node::Node,
-    types::{BlockHash, Body},
+    node::{self, Node},
+    types::{Address, BlockHash, Body, Transaction},
+    wallet::{self, Wallet},
 };
 
 #[derive(Debug)]
@@ -23,10 +27,26 @@ pub trait Rpc {
 
     #[method(name = "get_block")]
     async fn get_block(&self, block_hash: BlockHash) -> GetBlockResponse;
+
+    #[method(name = "transfer")]
+    async fn transfer(
+        &self,
+        dest: Address,
+        value: u64,
+        fee: u64,
+        memo: Option<String>,
+    ) -> RpcResult<()>;
+
+    #[method(name = "reserve_bitname")]
+    async fn reserve_bitname(
+        &self,
+        plain_name: String,
+    ) -> ResponsePayload<'static, ()>;
 }
 
 pub struct RpcServerImpl {
     node: Node,
+    wallet: Wallet,
 }
 
 impl IntoResponse for GetBlockResponse {
@@ -35,6 +55,18 @@ impl IntoResponse for GetBlockResponse {
     fn into_response(self) -> ResponsePayload<'static, Self::Output> {
         ResponsePayload::result(self.0)
     }
+}
+
+fn custom_err(err_msg: impl Into<String>) -> ErrorObject<'static> {
+    ErrorObject::owned(-1, err_msg.into(), Option::<()>::None)
+}
+
+fn convert_node_err(err: node::Error) -> ErrorObject<'static> {
+    custom_err(err.to_string())
+}
+
+fn convert_wallet_err(err: wallet::Error) -> ErrorObject<'static> {
+    custom_err(err.to_string())
 }
 
 #[async_trait]
@@ -54,16 +86,63 @@ impl RpcServer for RpcServerImpl {
             .expect("This error should have been handled properly.");
         GetBlockResponse(block)
     }
+
+    async fn transfer(
+        &self,
+        dest: Address,
+        value: u64,
+        fee: u64,
+        memo: Option<String>,
+    ) -> RpcResult<()> {
+        let memo = match memo {
+            None => None,
+            Some(memo) => {
+                let hex = hex::decode(memo)
+                    .map_err(|err| custom_err(err.to_string()))?;
+                Some(hex)
+            }
+        };
+        let tx = self
+            .wallet
+            .create_regular_transaction(dest, value, fee, memo)
+            .map_err(convert_wallet_err)?;
+        let authorized_tx =
+            self.wallet.authorize(tx).map_err(convert_wallet_err)?;
+        self.node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)
+    }
+
+    async fn reserve_bitname(
+        &self,
+        plain_name: String,
+    ) -> ResponsePayload<'static, ()> {
+        let mut tx = Transaction::default();
+        let () = match self.wallet.reserve_bitname(&mut tx, &plain_name) {
+            Ok(()) => (),
+            Err(err) => return ResponsePayload::Error(convert_wallet_err(err)),
+        };
+        let authorized_tx = match self.wallet.authorize(tx) {
+            Ok(tx) => tx,
+            Err(err) => return ResponsePayload::Error(convert_wallet_err(err)),
+        };
+        match self.node.submit_transaction(&authorized_tx).await {
+            Ok(()) => ResponsePayload::Result(Cow::Owned(())),
+            Err(err) => ResponsePayload::Error(convert_node_err(err)),
+        }
+    }
 }
 
 pub async fn run_server(
     node: Node,
     rpc_addr: SocketAddr,
+    wallet: Wallet,
 ) -> anyhow::Result<SocketAddr> {
     let server = Server::builder().build(rpc_addr).await?;
 
     let addr = server.local_addr()?;
-    let handle = server.start(RpcServerImpl { node }.into_rpc());
+    let handle = server.start(RpcServerImpl { node, wallet }.into_rpc());
 
     // In this example we don't care about doing shutdown so let's it run forever.
     // You may use the `ServerHandle` to shut it down or manage it yourself.
