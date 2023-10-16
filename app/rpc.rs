@@ -8,12 +8,13 @@ use jsonrpsee::{
     IntoResponse,
 };
 
-use crate::app::App;
 use plain_bitnames::{
     node,
     types::{Address, BlockHash, Body, Transaction},
     wallet,
 };
+
+use crate::app::{self, App};
 
 #[derive(Debug)]
 pub struct GetBlockResponse(Body);
@@ -28,6 +29,9 @@ pub trait Rpc {
 
     #[method(name = "get_block")]
     async fn get_block(&self, block_hash: BlockHash) -> GetBlockResponse;
+
+    #[method(name = "mine")]
+    async fn mine(&self) -> RpcResult<()>;
 
     #[method(name = "transfer")]
     async fn transfer(
@@ -61,6 +65,10 @@ fn custom_err(err_msg: impl Into<String>) -> ErrorObject<'static> {
     ErrorObject::owned(-1, err_msg.into(), Option::<()>::None)
 }
 
+fn convert_app_err(err: app::Error) -> ErrorObject<'static> {
+    custom_err(err.to_string())
+}
+
 fn convert_node_err(err: node::Error) -> ErrorObject<'static> {
     custom_err(err.to_string())
 }
@@ -86,6 +94,10 @@ impl RpcServer for RpcServerImpl {
             .get_block(block_hash)
             .expect("This error should have been handled properly.");
         GetBlockResponse(block)
+    }
+
+    async fn mine(&self) -> RpcResult<()> {
+        self.app.mine().map_err(convert_app_err)
     }
 
     async fn transfer(

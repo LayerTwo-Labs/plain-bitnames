@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use parking_lot::RwLock;
+use tokio::sync::RwLock as TokioRwLock;
 
 use plain_bitnames::{
     bip300301::{self, bitcoin, jsonrpsee, MainClient},
@@ -17,7 +18,7 @@ use crate::cli::Config;
 pub struct App {
     pub node: Node,
     pub wallet: Wallet,
-    pub miner: Miner,
+    pub miner: Arc<TokioRwLock<Miner>>,
     pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
     pub runtime: Arc<tokio::runtime::Runtime>,
 }
@@ -79,7 +80,7 @@ impl App {
         Ok(Self {
             node,
             wallet,
-            miner,
+            miner: Arc::new(TokioRwLock::new(miner)),
             utxos,
             runtime: Arc::new(runtime),
         })
@@ -96,16 +97,24 @@ impl App {
     pub fn get_new_main_address(
         &self,
     ) -> Result<bitcoin::Address<bitcoin::address::NetworkChecked>, Error> {
-        let address = self.runtime.block_on(
-            self.miner.drivechain.client.getnewaddress("", "legacy"),
-        )?;
+        let address = self.runtime.block_on({
+            let miner = self.miner.clone();
+            async move {
+                let miner_read = miner.read().await;
+                miner_read
+                    .drivechain
+                    .client
+                    .getnewaddress("", "legacy")
+                    .await
+            }
+        })?;
         let address: bitcoin::Address<bitcoin::address::NetworkChecked> =
             address.require_network(bitcoin::Network::Regtest).unwrap();
         Ok(address)
     }
 
     const EMPTY_BLOCK_BMM_BRIBE: u64 = 1000;
-    pub fn mine(&mut self) -> Result<(), Error> {
+    pub fn mine(&self) -> Result<(), Error> {
         self.runtime.block_on(async {
             const NUM_TRANSACTIONS: usize = 1000;
             let (transactions, fee) =
@@ -119,8 +128,13 @@ impl App {
             };
             let body = types::Body::new(transactions, coinbase);
             let prev_side_hash = self.node.get_best_hash()?;
-            let prev_main_hash =
-                self.miner.drivechain.get_mainchain_tip().await?;
+            let prev_main_hash = self
+                .miner
+                .read()
+                .await
+                .drivechain
+                .get_mainchain_tip()
+                .await?;
             let header = types::Header {
                 merkle_root: body.compute_merkle_root(),
                 prev_side_hash,
@@ -132,11 +146,12 @@ impl App {
                 Self::EMPTY_BLOCK_BMM_BRIBE
             };
             let bribe = bitcoin::Amount::from_sat(bribe);
-            self.miner
+            let mut miner_write = self.miner.write().await;
+            miner_write
                 .attempt_bmm(bribe.to_sat(), 0, header, body)
                 .await?;
-            self.miner.generate().await?;
-            if let Ok(Some((header, body))) = self.miner.confirm_bmm().await {
+            miner_write.generate().await?;
+            if let Ok(Some((header, body))) = miner_write.confirm_bmm().await {
                 self.node.submit_block(&header, &body).await?;
             }
 
@@ -147,7 +162,7 @@ impl App {
         Ok(())
     }
 
-    fn update_wallet(&mut self) -> Result<(), Error> {
+    fn update_wallet(&self) -> Result<(), Error> {
         let addresses = self.wallet.get_addresses()?;
         let utxos = self.node.get_utxos_by_addresses(&addresses)?;
         let outpoints: Vec<_> = self.wallet.get_utxos()?.into_keys().collect();
@@ -157,7 +172,7 @@ impl App {
         Ok(())
     }
 
-    fn update_utxos(&mut self) -> Result<(), Error> {
+    fn update_utxos(&self) -> Result<(), Error> {
         let mut utxos = self.wallet.get_utxos()?;
         let transactions = self.node.get_all_transactions()?;
         for transaction in &transactions {
@@ -179,6 +194,8 @@ impl App {
             let address =
                 format_deposit_address(THIS_SIDECHAIN, &format!("{address}"));
             self.miner
+                .read()
+                .await
                 .drivechain
                 .client
                 .createsidechaindeposit(
