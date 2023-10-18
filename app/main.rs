@@ -12,9 +12,9 @@ fn main() -> anyhow::Result<()> {
     let config = cli.get_config()?;
     let app = app::App::new(&config)?;
     // spawn rpc server
-    app.runtime.block_on({
+    app.runtime.spawn({
         let app = app.clone();
-        async { rpc::run_server(app, config.rpc_addr).await.unwrap() }
+        async move { rpc::run_server(app, config.rpc_addr).await.unwrap() }
     });
 
     if config.headless {
