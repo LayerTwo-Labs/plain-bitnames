@@ -5,19 +5,15 @@ use jsonrpsee::{
     proc_macros::rpc,
     server::Server,
     types::{ErrorObject, ResponsePayload},
-    IntoResponse,
 };
 
 use plain_bitnames::{
     node,
-    types::{Address, BlockHash, Body, Transaction},
+    types::{Address, Block, BlockHash, Transaction},
     wallet,
 };
 
 use crate::app::{self, App};
-
-#[derive(Debug)]
-pub struct GetBlockResponse(Body);
 
 #[rpc(server)]
 pub trait Rpc {
@@ -27,8 +23,11 @@ pub trait Rpc {
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> u32;
 
+    #[method(name = "get_block_hash")]
+    async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
+
     #[method(name = "get_block")]
-    async fn get_block(&self, block_hash: BlockHash) -> GetBlockResponse;
+    async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block>;
 
     #[method(name = "mine")]
     async fn mine(&self) -> RpcResult<()>;
@@ -51,14 +50,6 @@ pub trait Rpc {
 
 pub struct RpcServerImpl {
     app: App,
-}
-
-impl IntoResponse for GetBlockResponse {
-    type Output = Body;
-
-    fn into_response(self) -> ResponsePayload<'static, Self::Output> {
-        ResponsePayload::result(self.0)
-    }
 }
 
 fn custom_err(err_msg: impl Into<String>) -> ErrorObject<'static> {
@@ -87,17 +78,28 @@ impl RpcServer for RpcServerImpl {
         self.app.node.get_height().unwrap_or(0)
     }
 
-    async fn get_block(&self, block_hash: BlockHash) -> GetBlockResponse {
+    async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {
+        let block_hash = self
+            .app
+            .node
+            .get_header(height)
+            .map_err(convert_node_err)?
+            .ok_or_else(|| custom_err("block not found"))?
+            .hash();
+        Ok(block_hash)
+    }
+
+    async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block> {
         let block = self
             .app
             .node
             .get_block(block_hash)
             .expect("This error should have been handled properly.");
-        GetBlockResponse(block)
+        Ok(block)
     }
 
     async fn mine(&self) -> RpcResult<()> {
-        self.app.mine().map_err(convert_app_err)
+        self.app.mine().await.map_err(convert_app_err)
     }
 
     async fn transfer(

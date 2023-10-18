@@ -1,5 +1,6 @@
 use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
+use hex::FromHex;
 
 pub type Hash = [u8; blake3::OUT_LEN];
 
@@ -13,7 +14,7 @@ pub type Hash = [u8; blake3::OUT_LEN];
     serde::Serialize,
     serde::Deserialize,
 )]
-pub struct BlockHash(pub Hash);
+pub struct BlockHash(#[serde(with = "hex::serde")] pub Hash);
 
 impl From<Hash> for BlockHash {
     fn from(other: Hash) -> Self {
@@ -40,6 +41,14 @@ impl From<BlockHash> for bitcoin::BlockHash {
     }
 }
 
+impl FromHex for BlockHash {
+    type Error = <Hash as FromHex>::Error;
+
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
+        Hash::from_hex(hex).map(Self)
+    }
+}
+
 impl std::fmt::Display for BlockHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
@@ -62,7 +71,7 @@ impl std::fmt::Debug for BlockHash {
     serde::Serialize,
     serde::Deserialize,
 )]
-pub struct MerkleRoot(Hash);
+pub struct MerkleRoot(#[serde(with = "hex::serde")] Hash);
 
 impl From<Hash> for MerkleRoot {
     fn from(other: Hash) -> Self {

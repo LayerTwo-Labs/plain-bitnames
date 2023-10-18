@@ -221,7 +221,7 @@ impl Node {
     }
 
     /// Get the block corresponding to the provided blockhash, if it exists
-    pub fn get_block(&self, block_hash: BlockHash) -> Result<Body, Error> {
+    pub fn get_block(&self, block_hash: BlockHash) -> Result<Block, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.archive.get_block(&txn, block_hash)?)
     }

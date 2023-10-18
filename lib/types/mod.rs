@@ -81,6 +81,15 @@ pub struct Body {
     pub authorizations: Vec<Authorization>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Block {
+    #[serde(flatten)]
+    pub header: Header,
+    #[serde(flatten)]
+    pub body: Body,
+    pub height: u32,
+}
+
 /*
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DisconnectData {

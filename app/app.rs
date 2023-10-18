@@ -114,49 +114,45 @@ impl App {
     }
 
     const EMPTY_BLOCK_BMM_BRIBE: u64 = 1000;
-    pub fn mine(&self) -> Result<(), Error> {
-        self.runtime.block_on(async {
-            const NUM_TRANSACTIONS: usize = 1000;
-            let (transactions, fee) =
-                self.node.get_transactions(NUM_TRANSACTIONS)?;
-            let coinbase = match fee {
-                0 => vec![],
-                _ => vec![types::Output::new(
-                    self.wallet.get_new_address()?,
-                    types::OutputContent::Value(fee),
-                )],
-            };
-            let body = types::Body::new(transactions, coinbase);
-            let prev_side_hash = self.node.get_best_hash()?;
-            let prev_main_hash = self
-                .miner
-                .read()
-                .await
-                .drivechain
-                .get_mainchain_tip()
-                .await?;
-            let header = types::Header {
-                merkle_root: body.compute_merkle_root(),
-                prev_side_hash,
-                prev_main_hash,
-            };
-            let bribe = if fee > 0 {
-                fee
-            } else {
-                Self::EMPTY_BLOCK_BMM_BRIBE
-            };
-            let bribe = bitcoin::Amount::from_sat(bribe);
-            let mut miner_write = self.miner.write().await;
-            miner_write
-                .attempt_bmm(bribe.to_sat(), 0, header, body)
-                .await?;
-            miner_write.generate().await?;
-            if let Ok(Some((header, body))) = miner_write.confirm_bmm().await {
-                self.node.submit_block(&header, &body).await?;
-            }
-
-            Ok::<(), Error>(())
-        })?;
+    pub async fn mine(&self) -> Result<(), Error> {
+        const NUM_TRANSACTIONS: usize = 1000;
+        let (transactions, fee) =
+            self.node.get_transactions(NUM_TRANSACTIONS)?;
+        let coinbase = match fee {
+            0 => vec![],
+            _ => vec![types::Output::new(
+                self.wallet.get_new_address()?,
+                types::OutputContent::Value(fee),
+            )],
+        };
+        let body = types::Body::new(transactions, coinbase);
+        let prev_side_hash = self.node.get_best_hash()?;
+        let prev_main_hash = self
+            .miner
+            .read()
+            .await
+            .drivechain
+            .get_mainchain_tip()
+            .await?;
+        let header = types::Header {
+            merkle_root: body.compute_merkle_root(),
+            prev_side_hash,
+            prev_main_hash,
+        };
+        let bribe = if fee > 0 {
+            fee
+        } else {
+            Self::EMPTY_BLOCK_BMM_BRIBE
+        };
+        let bribe = bitcoin::Amount::from_sat(bribe);
+        let mut miner_write = self.miner.write().await;
+        miner_write
+            .attempt_bmm(bribe.to_sat(), 0, header, body)
+            .await?;
+        miner_write.generate().await?;
+        if let Ok(Some((header, body))) = miner_write.confirm_bmm().await {
+            self.node.submit_block(&header, &body).await?;
+        }
         self.update_wallet()?;
         self.update_utxos()?;
         Ok(())
