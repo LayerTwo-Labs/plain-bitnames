@@ -1,20 +1,14 @@
 use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
 use hex::FromHex;
+use serde::{Deserialize, Serialize};
 
 pub type Hash = [u8; blake3::OUT_LEN];
 
-#[derive(
-    Default,
-    Clone,
-    Copy,
-    Eq,
-    PartialEq,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-pub struct BlockHash(#[serde(with = "hex::serde")] pub Hash);
+use super::serde_hexstr_human_readable;
+
+#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct BlockHash(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
 
 impl From<Hash> for BlockHash {
     fn from(other: Hash) -> Self {
@@ -61,17 +55,8 @@ impl std::fmt::Debug for BlockHash {
     }
 }
 
-#[derive(
-    Default,
-    Clone,
-    Copy,
-    Eq,
-    PartialEq,
-    Hash,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-pub struct MerkleRoot(#[serde(with = "hex::serde")] Hash);
+#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+pub struct MerkleRoot(#[serde(with = "serde_hexstr_human_readable")] Hash);
 
 impl From<Hash> for MerkleRoot {
     fn from(other: Hash) -> Self {
@@ -106,8 +91,8 @@ impl std::fmt::Debug for MerkleRoot {
     Ord,
     PartialEq,
     PartialOrd,
-    serde::Serialize,
-    serde::Deserialize,
+    Serialize,
+    Deserialize,
 )]
 pub struct Txid(pub Hash);
 

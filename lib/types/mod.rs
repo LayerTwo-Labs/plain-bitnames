@@ -13,6 +13,71 @@ pub mod constants;
 pub mod hashes;
 mod transaction;
 
+/// (de)serialize as Display/FromStr for human-readable forms like json,
+/// and default serialization for non human-readable forms like bincode
+mod serde_display_fromstr_human_readable {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use serde_with::{DeserializeAs, DisplayFromStr, SerializeAs};
+    use std::{fmt::Display, str::FromStr};
+
+    pub fn serialize<S, T>(data: T, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize + Display,
+    {
+        if serializer.is_human_readable() {
+            DisplayFromStr::serialize_as(&data, serializer)
+        } else {
+            data.serialize(serializer)
+        }
+    }
+
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de> + FromStr,
+        <T as FromStr>::Err: Display,
+    {
+        if deserializer.is_human_readable() {
+            DisplayFromStr::deserialize_as(deserializer)
+        } else {
+            T::deserialize(deserializer)
+        }
+    }
+}
+
+/// (de)serialize as hex strings for human-readable forms like json,
+/// and default serialization for non human-readable formats like bincode
+mod serde_hexstr_human_readable {
+    use hex::{FromHex, ToHex};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S, T>(data: T, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+        T: Serialize + ToHex,
+    {
+        if serializer.is_human_readable() {
+            hex::serde::serialize(data, serializer)
+        } else {
+            data.serialize(serializer)
+        }
+    }
+
+    pub fn deserialize<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+    where
+        D: Deserializer<'de>,
+        T: Deserialize<'de> + FromHex,
+        <T as FromHex>::Error: std::fmt::Display,
+    {
+        if deserializer.is_human_readable() {
+            hex::serde::deserialize(deserializer)
+        } else {
+            T::deserialize(deserializer)
+        }
+    }
+}
+
 pub use address::*;
 pub use hashes::{BlockHash, Hash, MerkleRoot, Txid};
 pub use transaction::{

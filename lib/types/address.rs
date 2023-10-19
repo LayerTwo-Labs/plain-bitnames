@@ -1,6 +1,6 @@
-#[derive(
-    Clone, Copy, Eq, PartialEq, Hash, serde::Serialize, serde::Deserialize,
-)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Deserialize, Eq, PartialEq, Hash, Serialize)]
 pub struct Address(pub [u8; 20]);
 
 impl Address {

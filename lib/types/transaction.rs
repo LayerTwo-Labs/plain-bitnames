@@ -7,6 +7,7 @@ use bip300301::bitcoin;
 use super::{
     address::Address,
     hashes::{self, Hash, MerkleRoot, Txid},
+    serde_display_fromstr_human_readable, serde_hexstr_human_readable,
     EncryptionPubKey, GetValue,
 };
 use crate::authorization::{Authorization, PublicKey, Signature};
@@ -35,8 +36,10 @@ pub enum Content {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Output {
+    #[serde(with = "serde_display_fromstr_human_readable")]
     pub address: Address,
     pub content: Content,
+    #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
 }
 
@@ -95,12 +98,15 @@ pub struct BatchIcannRegistrationData {
 pub enum TransactionData {
     BitNameReservation {
         /// commitment to the BitName that will be registered
+        #[serde(with = "serde_hexstr_human_readable")]
         commitment: Hash,
     },
     BitNameRegistration {
         /// reveal of the name hash
+        #[serde(with = "serde_hexstr_human_readable")]
         name_hash: Hash,
         /// reveal of the nonce used for the BitName reservation commitment
+        #[serde(with = "serde_hexstr_human_readable")]
         revealed_nonce: Hash,
         /// initial BitName data
         bitname_data: Box<BitNameData>,
@@ -115,6 +121,7 @@ pub type TxData = TransactionData;
 pub struct Transaction {
     pub inputs: TxInputs,
     pub outputs: TxOutputs,
+    #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
     pub data: Option<TransactionData>,
 }
@@ -137,8 +144,10 @@ pub enum FilledContent {
 /// Representation of output that includes asset type
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct FilledOutput {
+    #[serde(with = "serde_display_fromstr_human_readable")]
     pub address: Address,
     pub content: FilledContent,
+    #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
 }
 
