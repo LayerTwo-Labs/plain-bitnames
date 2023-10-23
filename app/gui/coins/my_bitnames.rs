@@ -3,8 +3,7 @@ use itertools::{Either, Itertools};
 
 use plain_bitnames::types::FilledOutput;
 
-use super::util::UiExt;
-use crate::app::App;
+use crate::{app::App, gui::util::UiExt};
 
 #[derive(Debug, Default)]
 pub struct MyBitnames;

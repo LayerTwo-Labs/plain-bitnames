@@ -13,8 +13,7 @@ use plain_bitnames::{
     types::{BitNameData, EncryptionPubKey, Hash, Transaction, Txid},
 };
 
-use super::util::InnerResponseExt;
-use crate::app::App;
+use crate::{app::App, gui::util::InnerResponseExt};
 
 // struct representing the outcome of trying to set an Option<T> from a String
 // Err represents unset, Ok(None) represents bad value

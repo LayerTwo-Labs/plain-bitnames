@@ -5,8 +5,7 @@ use plain_bitnames::{
     types::{self, Output, OutputContent, Transaction},
 };
 
-use super::util::InnerResponseExt;
-use crate::app::App;
+use crate::{app::App, gui::util::InnerResponseExt};
 
 #[derive(Debug, Eq, PartialEq)]
 enum UtxoType {

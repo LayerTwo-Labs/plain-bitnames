@@ -4,27 +4,22 @@ use crate::app::App;
 
 mod bitname_explorer;
 mod block_explorer;
+mod coins;
 mod deposit;
 mod encrypt_message;
 mod mempool_explorer;
 mod miner;
-mod my_bitnames;
 mod seed;
-mod tx_builder;
-mod tx_creator;
 mod util;
-mod utxo_creator;
-mod utxo_selector;
 
 use bitname_explorer::BitnameExplorer;
 use block_explorer::BlockExplorer;
+use coins::Coins;
 use deposit::Deposit;
 use encrypt_message::EncryptMessage;
 use mempool_explorer::MemPoolExplorer;
 use miner::Miner;
-use my_bitnames::MyBitnames;
 use seed::SetSeed;
-use tx_builder::TxBuilder;
 
 pub struct EguiApp {
     app: App,
@@ -32,22 +27,20 @@ pub struct EguiApp {
     miner: Miner,
     deposit: Deposit,
     tab: Tab,
-    tx_builder: TxBuilder,
+    coins: Coins,
     mempool_explorer: MemPoolExplorer,
     block_explorer: BlockExplorer,
     bitname_explorer: BitnameExplorer,
-    my_bitnames: MyBitnames,
     encrypt_message: EncryptMessage,
 }
 
 #[derive(Eq, PartialEq)]
 enum Tab {
-    TransactionBuilder,
+    Coins,
+    BitnameExplorer,
+    EncryptMessage,
     MemPoolExplorer,
     BlockExplorer,
-    BitnameExplorer,
-    MyBitnames,
-    EncryptMessage,
 }
 
 impl EguiApp {
@@ -70,12 +63,11 @@ impl EguiApp {
             set_seed: SetSeed::default(),
             miner: Miner,
             deposit: Deposit::default(),
-            tx_builder: TxBuilder::default(),
             mempool_explorer: MemPoolExplorer::default(),
             block_explorer: BlockExplorer::new(height),
             bitname_explorer: BitnameExplorer::default(),
-            tab: Tab::TransactionBuilder,
-            my_bitnames: MyBitnames,
+            tab: Tab::Coins,
+            coins: Coins::default(),
             encrypt_message: EncryptMessage::new(),
         }
     }
@@ -86,10 +78,21 @@ impl eframe::App for EguiApp {
         if self.app.wallet.has_seed().unwrap_or(false) {
             egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
                 ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.tab, Tab::Coins, "coins");
                     ui.selectable_value(
                         &mut self.tab,
-                        Tab::TransactionBuilder,
-                        "transaction builder",
+                        Tab::BitnameExplorer,
+                        "bitname explorer",
+                    );
+                    ui.selectable_value(
+                        &mut self.tab,
+                        Tab::EncryptMessage,
+                        "paymail",
+                    );
+                    ui.selectable_value(
+                        &mut self.tab,
+                        Tab::EncryptMessage,
+                        "messaging",
                     );
                     ui.selectable_value(
                         &mut self.tab,
@@ -101,21 +104,6 @@ impl eframe::App for EguiApp {
                         Tab::BlockExplorer,
                         "block explorer",
                     );
-                    ui.selectable_value(
-                        &mut self.tab,
-                        Tab::BitnameExplorer,
-                        "bitname explorer",
-                    );
-                    ui.selectable_value(
-                        &mut self.tab,
-                        Tab::MyBitnames,
-                        "my bitnames",
-                    );
-                    ui.selectable_value(
-                        &mut self.tab,
-                        Tab::EncryptMessage,
-                        "encrypt message",
-                    );
                 });
             });
             egui::TopBottomPanel::bottom("util").show(ctx, |ui| {
@@ -126,23 +114,20 @@ impl eframe::App for EguiApp {
                 });
             });
             egui::CentralPanel::default().show(ctx, |ui| match self.tab {
-                Tab::TransactionBuilder => {
-                    let () = self.tx_builder.show(&mut self.app, ui).unwrap();
+                Tab::Coins => {
+                    let () = self.coins.show(&mut self.app, ui).unwrap();
+                }
+                Tab::BitnameExplorer => {
+                    self.bitname_explorer.show(&mut self.app, ui);
+                }
+                Tab::EncryptMessage => {
+                    self.encrypt_message.show(&mut self.app, ui);
                 }
                 Tab::MemPoolExplorer => {
                     self.mempool_explorer.show(&mut self.app, ui);
                 }
                 Tab::BlockExplorer => {
                     self.block_explorer.show(&mut self.app, ui);
-                }
-                Tab::BitnameExplorer => {
-                    self.bitname_explorer.show(&mut self.app, ui);
-                }
-                Tab::MyBitnames => {
-                    self.my_bitnames.show(&mut self.app, ui);
-                }
-                Tab::EncryptMessage => {
-                    self.encrypt_message.show(&mut self.app, ui);
                 }
             });
         } else {
