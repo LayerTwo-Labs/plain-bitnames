@@ -1,4 +1,4 @@
-use std::{borrow::Cow, net::SocketAddr};
+use std::{borrow::Cow, collections::HashMap, net::SocketAddr};
 
 use jsonrpsee::{
     core::{async_trait, RpcResult},
@@ -9,7 +9,7 @@ use jsonrpsee::{
 
 use plain_bitnames::{
     node,
-    types::{Address, Block, BlockHash, Transaction},
+    types::{Address, Block, BlockHash, FilledOutput, OutPoint, Transaction},
     wallet,
 };
 
@@ -49,6 +49,9 @@ pub trait Rpc {
         fee: u64,
         memo: Option<String>,
     ) -> RpcResult<()>;
+
+    #[method(name = "get_paymail")]
+    async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>>;
 
     #[method(name = "reserve_bitname")]
     async fn reserve_bitname(
@@ -169,6 +172,10 @@ impl RpcServer for RpcServerImpl {
             .submit_transaction(&authorized_tx)
             .await
             .map_err(convert_node_err)
+    }
+
+    async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>> {
+        self.app.wallet.get_paymail().map_err(convert_wallet_err)
     }
 
     async fn reserve_bitname(

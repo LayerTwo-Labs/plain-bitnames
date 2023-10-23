@@ -432,6 +432,14 @@ impl Wallet {
         Ok(utxos)
     }
 
+    pub fn get_paymail(
+        &self,
+    ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
+        let mut utxos = self.get_utxos()?;
+        utxos.retain(|_, output| !output.memo.is_empty());
+        Ok(utxos)
+    }
+
     pub fn get_addresses(&self) -> Result<HashSet<Address>, Error> {
         let txn = self.env.read_txn()?;
         let mut addresses = HashSet::new();
