@@ -2,22 +2,20 @@ use eframe::egui::{self, Color32};
 
 use crate::app::App;
 
+mod activity;
 mod bitname_explorer;
-mod block_explorer;
 mod coins;
 mod deposit;
 mod encrypt_message;
-mod mempool_explorer;
 mod miner;
 mod seed;
 mod util;
 
+use activity::Activity;
 use bitname_explorer::BitnameExplorer;
-use block_explorer::BlockExplorer;
 use coins::Coins;
 use deposit::Deposit;
 use encrypt_message::EncryptMessage;
-use mempool_explorer::MemPoolExplorer;
 use miner::Miner;
 use seed::SetSeed;
 
@@ -27,20 +25,18 @@ pub struct EguiApp {
     miner: Miner,
     deposit: Deposit,
     tab: Tab,
+    activity: Activity,
     coins: Coins,
-    mempool_explorer: MemPoolExplorer,
-    block_explorer: BlockExplorer,
     bitname_explorer: BitnameExplorer,
     encrypt_message: EncryptMessage,
 }
 
 #[derive(Eq, PartialEq)]
 enum Tab {
+    Activity,
     Coins,
     BitnameExplorer,
     EncryptMessage,
-    MemPoolExplorer,
-    BlockExplorer,
 }
 
 impl EguiApp {
@@ -57,16 +53,15 @@ impl EguiApp {
 
         cc.egui_ctx.set_style(style);
 
-        let height = app.node.get_height().unwrap_or(0);
+        let activity = Activity::new(&app);
         Self {
             app,
             set_seed: SetSeed::default(),
             miner: Miner,
             deposit: Deposit::default(),
-            mempool_explorer: MemPoolExplorer::default(),
-            block_explorer: BlockExplorer::new(height),
             bitname_explorer: BitnameExplorer::default(),
             tab: Tab::Coins,
+            activity,
             coins: Coins::default(),
             encrypt_message: EncryptMessage::new(),
         }
@@ -82,12 +77,12 @@ impl eframe::App for EguiApp {
                     ui.selectable_value(
                         &mut self.tab,
                         Tab::BitnameExplorer,
-                        "bitname explorer",
+                        "lookup",
                     );
                     ui.selectable_value(
                         &mut self.tab,
                         Tab::EncryptMessage,
-                        "paymail",
+                        "my paymail",
                     );
                     ui.selectable_value(
                         &mut self.tab,
@@ -96,13 +91,8 @@ impl eframe::App for EguiApp {
                     );
                     ui.selectable_value(
                         &mut self.tab,
-                        Tab::MemPoolExplorer,
-                        "mempool explorer",
-                    );
-                    ui.selectable_value(
-                        &mut self.tab,
-                        Tab::BlockExplorer,
-                        "block explorer",
+                        Tab::Activity,
+                        "activity",
                     );
                 });
             });
@@ -123,11 +113,8 @@ impl eframe::App for EguiApp {
                 Tab::EncryptMessage => {
                     self.encrypt_message.show(&mut self.app, ui);
                 }
-                Tab::MemPoolExplorer => {
-                    self.mempool_explorer.show(&mut self.app, ui);
-                }
-                Tab::BlockExplorer => {
-                    self.block_explorer.show(&mut self.app, ui);
+                Tab::Activity => {
+                    self.activity.show(&mut self.app, ui);
                 }
             });
         } else {
