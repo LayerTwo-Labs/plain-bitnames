@@ -8,6 +8,7 @@ mod coins;
 mod deposit;
 mod encrypt_message;
 mod miner;
+mod paymail;
 mod seed;
 mod util;
 
@@ -17,6 +18,7 @@ use coins::Coins;
 use deposit::Deposit;
 use encrypt_message::EncryptMessage;
 use miner::Miner;
+use paymail::Paymail;
 use seed::SetSeed;
 
 pub struct EguiApp {
@@ -28,15 +30,17 @@ pub struct EguiApp {
     activity: Activity,
     coins: Coins,
     bitname_explorer: BitnameExplorer,
+    paymail: Paymail,
     encrypt_message: EncryptMessage,
 }
 
 #[derive(Eq, PartialEq)]
 enum Tab {
-    Activity,
     Coins,
     BitnameExplorer,
+    Paymail,
     EncryptMessage,
+    Activity,
 }
 
 impl EguiApp {
@@ -64,6 +68,7 @@ impl EguiApp {
             activity,
             coins: Coins::default(),
             encrypt_message: EncryptMessage::new(),
+            paymail: Paymail::default(),
         }
     }
 }
@@ -81,7 +86,7 @@ impl eframe::App for EguiApp {
                     );
                     ui.selectable_value(
                         &mut self.tab,
-                        Tab::EncryptMessage,
+                        Tab::Paymail,
                         "my paymail",
                     );
                     ui.selectable_value(
@@ -110,6 +115,7 @@ impl eframe::App for EguiApp {
                 Tab::BitnameExplorer => {
                     self.bitname_explorer.show(&mut self.app, ui);
                 }
+                Tab::Paymail => self.paymail.show(&mut self.app, ui),
                 Tab::EncryptMessage => {
                     self.encrypt_message.show(&mut self.app, ui);
                 }
