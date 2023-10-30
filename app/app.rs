@@ -8,7 +8,10 @@ use plain_bitnames::{
     format_deposit_address,
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
-    types::{self, FilledOutput, OutPoint, Transaction},
+    types::{
+        self, Address, BitNameData, FilledOutput, GetValue, OutPoint,
+        Transaction,
+    },
     wallet::{self, Wallet},
 };
 
@@ -35,6 +38,8 @@ pub enum Error {
     Miner(#[from] miner::Error),
     #[error("node error")]
     Node(#[from] node::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
     #[error("wallet error")]
     Wallet(#[from] wallet::Error),
 }
@@ -111,6 +116,49 @@ impl App {
         let address: bitcoin::Address<bitcoin::address::NetworkChecked> =
             address.require_network(bitcoin::Network::Regtest).unwrap();
         Ok(address)
+    }
+
+    /// get all paymail
+    pub fn get_paymail(
+        &self,
+    ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
+        let bitname_utxos = self.wallet.get_bitnames()?;
+        let addrs_to_bitnames =
+            bitname_utxos.into_iter().filter_map(|(_, output)| {
+                let bitname = output.bitname()?;
+                Some((output.address, *bitname))
+            });
+        let addrs_to_bitname_data: HashMap<Address, BitNameData> =
+            addrs_to_bitnames
+                .map(|(addr, bitname)| {
+                    let bitname_data = self
+                        .node
+                        .get_current_bitname_data(&bitname)?
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "failed to resolve bitname data for {}",
+                                hex::encode(bitname)
+                            )
+                        })?;
+                    Ok((addr, bitname_data))
+                })
+                .collect::<Result<_, Error>>()?;
+        let mut utxos = self.wallet.get_utxos()?;
+        // retain if memo exists, and output value >= paymail fee
+        utxos.retain(|_, output| {
+            if output.memo.is_empty() {
+                return false;
+            }
+            let Some(bitname_data) = addrs_to_bitname_data.get(&output.address)
+            else {
+                return false;
+            };
+            let Some(paymail_fee) = bitname_data.paymail_fee else {
+                return false;
+            };
+            output.get_value() >= paymail_fee
+        });
+        Ok(utxos)
     }
 
     const EMPTY_BLOCK_BMM_BRIBE: u64 = 1000;

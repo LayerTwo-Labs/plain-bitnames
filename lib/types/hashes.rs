@@ -94,7 +94,7 @@ impl std::fmt::Debug for MerkleRoot {
     Serialize,
     Deserialize,
 )]
-pub struct Txid(pub Hash);
+pub struct Txid(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
 
 impl Txid {
     pub fn as_slice(&self) -> &[u8] {

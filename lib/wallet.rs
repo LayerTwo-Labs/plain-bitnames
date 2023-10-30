@@ -432,11 +432,12 @@ impl Wallet {
         Ok(utxos)
     }
 
-    pub fn get_paymail(
+    /// get all owned bitname utxos
+    pub fn get_bitnames(
         &self,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let mut utxos = self.get_utxos()?;
-        utxos.retain(|_, output| !output.memo.is_empty());
+        utxos.retain(|_, output| output.is_bitname());
         Ok(utxos)
     }
 

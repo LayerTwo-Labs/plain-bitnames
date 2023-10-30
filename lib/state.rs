@@ -14,24 +14,37 @@ use bip300301::{bitcoin, WithdrawalBundleStatus};
 use crate::authorization::{Authorization, PublicKey};
 use crate::types::{self, *};
 
+/// Data of type `T` paired with the txid at which it was last updated
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct TxidStamped<T> {
+    data: T,
+    txid: Txid,
+}
+
+/// Wrapper struct for fields that support rollbacks
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[repr(transparent)]
+#[serde(transparent)]
+struct RollBack<T>(NonEmpty<TxidStamped<T>>);
+
 /// Representation of BitName data that supports rollbacks.
 /// The most recent datum is the element at the back of the vector.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BitNameData {
     /// commitment to arbitrary data
-    commitment: NonEmpty<Option<Hash>>,
+    commitment: RollBack<Option<Hash>>,
     /// set if the plain bitname is known to be an ICANN domain
     is_icann: bool,
     /// optional ipv4 addr
-    ipv4_addr: NonEmpty<Option<Ipv4Addr>>,
+    ipv4_addr: RollBack<Option<Ipv4Addr>>,
     /// optional ipv6 addr
-    ipv6_addr: NonEmpty<Option<Ipv6Addr>>,
+    ipv6_addr: RollBack<Option<Ipv6Addr>>,
     /// optional pubkey used for encryption
-    encryption_pubkey: NonEmpty<Option<EncryptionPubKey>>,
+    encryption_pubkey: RollBack<Option<EncryptionPubKey>>,
     /// optional pubkey used for signing messages
-    signing_pubkey: NonEmpty<Option<PublicKey>>,
+    signing_pubkey: RollBack<Option<PublicKey>>,
     /// optional minimum paymail fee, in sats
-    paymail_fee: NonEmpty<Option<u64>>,
+    paymail_fee: RollBack<Option<u64>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -101,22 +114,43 @@ pub struct State {
         Database<OwnedType<u32>, SerdeBincode<bitcoin::BlockHash>>,
 }
 
+impl<T> RollBack<T> {
+    fn new(value: T, txid: Txid) -> Self {
+        let txid_stamped = TxidStamped { data: value, txid };
+        Self(nonempty![txid_stamped])
+    }
+
+    /// push a value as the new most recent
+    fn push(&mut self, value: T, txid: Txid) {
+        let txid_stamped = TxidStamped { data: value, txid };
+        self.0.push(txid_stamped)
+    }
+
+    /// returns the most recent value, along with it's txid
+    fn latest(&self) -> &TxidStamped<T> {
+        self.0.last()
+    }
+}
+
 impl BitNameData {
     // initialize from BitName data provided during a registration
-    fn init(bitname_data: types::BitNameData) -> Self {
+    fn init(bitname_data: types::BitNameData, txid: Txid) -> Self {
         Self {
-            commitment: nonempty![bitname_data.commitment],
+            commitment: RollBack::new(bitname_data.commitment, txid),
             is_icann: false,
-            ipv4_addr: nonempty![bitname_data.ipv4_addr],
-            ipv6_addr: nonempty![bitname_data.ipv6_addr],
-            encryption_pubkey: nonempty![bitname_data.encryption_pubkey],
-            signing_pubkey: nonempty![bitname_data.signing_pubkey],
-            paymail_fee: nonempty![bitname_data.paymail_fee],
+            ipv4_addr: RollBack::new(bitname_data.ipv4_addr, txid),
+            ipv6_addr: RollBack::new(bitname_data.ipv6_addr, txid),
+            encryption_pubkey: RollBack::new(
+                bitname_data.encryption_pubkey,
+                txid,
+            ),
+            signing_pubkey: RollBack::new(bitname_data.signing_pubkey, txid),
+            paymail_fee: RollBack::new(bitname_data.paymail_fee, txid),
         }
     }
 
     // apply bitname data updates
-    fn apply_updates(&mut self, updates: BitNameDataUpdates) {
+    fn apply_updates(&mut self, updates: BitNameDataUpdates, txid: Txid) {
         let Self {
             ref mut commitment,
             is_icann: _,
@@ -129,32 +163,33 @@ impl BitNameData {
 
         // apply an update to a single data field
         fn apply_field_update<T>(
-            data_field: &mut NonEmpty<Option<T>>,
+            data_field: &mut RollBack<Option<T>>,
             update: Update<T>,
+            txid: Txid,
         ) {
             match update {
-                Update::Delete => data_field.push(None),
+                Update::Delete => data_field.push(None, txid),
                 Update::Retain => (),
-                Update::Set(value) => data_field.push(Some(value)),
+                Update::Set(value) => data_field.push(Some(value), txid),
             }
         }
-        apply_field_update(commitment, updates.commitment);
-        apply_field_update(ipv4_addr, updates.ipv4_addr);
-        apply_field_update(ipv6_addr, updates.ipv6_addr);
-        apply_field_update(encryption_pubkey, updates.encryption_pubkey);
-        apply_field_update(signing_pubkey, updates.signing_pubkey);
-        apply_field_update(paymail_fee, updates.paymail_fee);
+        apply_field_update(commitment, updates.commitment, txid);
+        apply_field_update(ipv4_addr, updates.ipv4_addr, txid);
+        apply_field_update(ipv6_addr, updates.ipv6_addr, txid);
+        apply_field_update(encryption_pubkey, updates.encryption_pubkey, txid);
+        apply_field_update(signing_pubkey, updates.signing_pubkey, txid);
+        apply_field_update(paymail_fee, updates.paymail_fee, txid);
     }
 
     /// get the current bitname data
     pub fn current(&self) -> types::BitNameData {
         types::BitNameData {
-            commitment: *self.commitment.last(),
-            ipv4_addr: *self.ipv4_addr.last(),
-            ipv6_addr: *self.ipv6_addr.last(),
-            encryption_pubkey: *self.encryption_pubkey.last(),
-            signing_pubkey: *self.signing_pubkey.last(),
-            paymail_fee: *self.paymail_fee.last(),
+            commitment: self.commitment.latest().data,
+            ipv4_addr: self.ipv4_addr.latest().data,
+            ipv6_addr: self.ipv6_addr.latest().data,
+            encryption_pubkey: self.encryption_pubkey.latest().data,
+            signing_pubkey: self.signing_pubkey.latest().data,
+            paymail_fee: self.paymail_fee.latest().data,
         }
     }
 }
@@ -664,7 +699,8 @@ impl State {
                 txid: *burned_reservation_txid,
             });
         }
-        let bitname_data = BitNameData::init(bitname_data.clone());
+        let bitname_data =
+            BitNameData::init(bitname_data.clone(), filled_tx.txid());
         self.bitnames.put(rwtxn, &name_hash, &bitname_data)?;
         Ok(())
     }
@@ -692,7 +728,7 @@ impl State {
             .ok_or(Error::MissingBitName {
                 name_hash: *updated_bitname,
             })?;
-        bitname_data.apply_updates(bitname_updates);
+        bitname_data.apply_updates(bitname_updates, filled_tx.txid());
         self.bitnames.put(rwtxn, updated_bitname, &bitname_data)?;
         Ok(())
     }

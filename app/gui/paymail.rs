@@ -41,7 +41,7 @@ impl Paymail {
         app: &mut App,
         ui: &mut egui::Ui,
     ) -> Result<(), anyhow::Error> {
-        let paymail = app.wallet.get_paymail()?;
+        let paymail = app.get_paymail()?;
         let mut paymail: Vec<_> = paymail.iter().collect();
         // FIXME: sort by block/index
         paymail.sort_by_key(|(outpoint, _)| format!("{outpoint}"));
