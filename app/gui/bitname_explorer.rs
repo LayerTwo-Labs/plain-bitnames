@@ -20,21 +20,27 @@ impl BitnameExplorer {
         ui: &mut egui::Ui,
         bitname_data: &BitNameData,
     ) -> Response {
-        let commitment = bitname_data
-            .commitment
-            .map_or("Not set".to_owned(), hex::encode);
-        let ipv4_addr = bitname_data
-            .ipv4_addr
+        let BitNameData {
+            commitment,
+            ipv4_addr,
+            ipv6_addr,
+            encryption_pubkey,
+            signing_pubkey,
+            paymail_fee,
+        } = bitname_data;
+        let commitment = commitment.map_or("Not set".to_owned(), hex::encode);
+        let ipv4_addr = ipv4_addr
             .map_or("Not set".to_owned(), |ipv4_addr| ipv4_addr.to_string());
-        let ipv6_addr = bitname_data
-            .ipv6_addr
+        let ipv6_addr = ipv6_addr
             .map_or("Not set".to_owned(), |ipv6_addr| ipv6_addr.to_string());
-        let encryption_pubkey = bitname_data
-            .encryption_pubkey
+        let encryption_pubkey = encryption_pubkey
             .map_or("Not set".to_owned(), |epk| hex::encode(epk.0.as_bytes()));
-        let signing_pubkey = bitname_data
-            .signing_pubkey
+        let signing_pubkey = signing_pubkey
             .map_or("Not set".to_owned(), |pk| hex::encode(pk.as_bytes()));
+        let paymail_fee = paymail_fee
+            .map_or("Not set".to_owned(), |paymail_fee| {
+                paymail_fee.to_string()
+            });
         ui.horizontal(|ui| {
             ui.monospace_selectable_singleline(format!(
                 "Commitment: {commitment}"
@@ -62,6 +68,12 @@ impl BitnameExplorer {
             | ui.horizontal(|ui| {
                 ui.monospace_selectable_singleline(format!(
                     "Signing Pubkey: {signing_pubkey}"
+                ))
+            })
+            .join()
+            | ui.horizontal(|ui| {
+                ui.monospace_selectable_singleline(format!(
+                    "Paymail fee: {paymail_fee}"
                 ))
             })
             .join()

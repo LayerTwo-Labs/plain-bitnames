@@ -30,6 +30,8 @@ pub struct BitNameData {
     encryption_pubkey: NonEmpty<Option<EncryptionPubKey>>,
     /// optional pubkey used for signing messages
     signing_pubkey: NonEmpty<Option<PublicKey>>,
+    /// optional minimum paymail fee, in sats
+    paymail_fee: NonEmpty<Option<u64>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -109,11 +111,22 @@ impl BitNameData {
             ipv6_addr: nonempty![bitname_data.ipv6_addr],
             encryption_pubkey: nonempty![bitname_data.encryption_pubkey],
             signing_pubkey: nonempty![bitname_data.signing_pubkey],
+            paymail_fee: nonempty![bitname_data.paymail_fee],
         }
     }
 
     // apply bitname data updates
     fn apply_updates(&mut self, updates: BitNameDataUpdates) {
+        let Self {
+            ref mut commitment,
+            is_icann: _,
+            ref mut ipv4_addr,
+            ref mut ipv6_addr,
+            ref mut encryption_pubkey,
+            ref mut signing_pubkey,
+            ref mut paymail_fee,
+        } = self;
+
         // apply an update to a single data field
         fn apply_field_update<T>(
             data_field: &mut NonEmpty<Option<T>>,
@@ -125,14 +138,12 @@ impl BitNameData {
                 Update::Set(value) => data_field.push(Some(value)),
             }
         }
-        apply_field_update(&mut self.commitment, updates.commitment);
-        apply_field_update(&mut self.ipv4_addr, updates.ipv4_addr);
-        apply_field_update(&mut self.ipv6_addr, updates.ipv6_addr);
-        apply_field_update(
-            &mut self.encryption_pubkey,
-            updates.encryption_pubkey,
-        );
-        apply_field_update(&mut self.signing_pubkey, updates.signing_pubkey);
+        apply_field_update(commitment, updates.commitment);
+        apply_field_update(ipv4_addr, updates.ipv4_addr);
+        apply_field_update(ipv6_addr, updates.ipv6_addr);
+        apply_field_update(encryption_pubkey, updates.encryption_pubkey);
+        apply_field_update(signing_pubkey, updates.signing_pubkey);
+        apply_field_update(paymail_fee, updates.paymail_fee);
     }
 
     /// get the current bitname data
@@ -143,6 +154,7 @@ impl BitNameData {
             ipv6_addr: *self.ipv6_addr.last(),
             encryption_pubkey: *self.encryption_pubkey.last(),
             signing_pubkey: *self.signing_pubkey.last(),
+            paymail_fee: *self.paymail_fee.last(),
         }
     }
 }

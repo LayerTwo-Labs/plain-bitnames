@@ -59,6 +59,8 @@ pub struct BitNameData {
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// optional pubkey used for signing messages
     pub signing_pubkey: Option<PublicKey>,
+    /// optional minimum paymail fee, in sats
+    pub paymail_fee: Option<u64>,
 }
 
 /// delete, retain, or set a value
@@ -82,6 +84,8 @@ pub struct BitNameDataUpdates {
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// optional pubkey used for signing messages
     pub signing_pubkey: Update<PublicKey>,
+    /// optional minimum paymail fee, in sats
+    pub paymail_fee: Update<u64>,
 }
 
 /// batch icann registration tx payload
