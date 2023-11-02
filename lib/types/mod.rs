@@ -13,6 +13,15 @@ pub mod constants;
 pub mod hashes;
 mod transaction;
 
+pub use address::*;
+pub use hashes::{BlockHash, Hash, MerkleRoot, Txid};
+pub use transaction::{
+    AuthorizedTransaction, BatchIcannRegistrationData, BitNameData,
+    BitNameDataUpdates, Content as OutputContent,
+    FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
+    InPoint, OutPoint, Output, SpentOutput, Transaction, TxData, Update,
+};
+
 /// (de)serialize as Display/FromStr for human-readable forms like json,
 /// and default serialization for non human-readable forms like bincode
 mod serde_display_fromstr_human_readable {
@@ -78,15 +87,6 @@ mod serde_hexstr_human_readable {
     }
 }
 
-pub use address::*;
-pub use hashes::{BlockHash, Hash, MerkleRoot, Txid};
-pub use transaction::{
-    AuthorizedTransaction, BatchIcannRegistrationData, BitNameData,
-    BitNameDataUpdates, Content as OutputContent,
-    FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
-    OutPoint, Output, Transaction, TxData, Update,
-};
-
 pub trait GetAddress {
     fn get_address(&self) -> Address;
 }
@@ -110,7 +110,7 @@ pub trait Verify {
 }
 
 /// Wrapper around x25519 pubkeys
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 pub struct EncryptionPubKey(pub x25519_dalek::PublicKey);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -128,7 +128,7 @@ pub enum WithdrawalBundleStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WithdrawalBundle {
-    pub spent_utxos: HashMap<OutPoint, FilledOutput>,
+    pub spend_utxos: HashMap<OutPoint, FilledOutput>,
     pub transaction: bitcoin::Transaction,
 }
 
@@ -169,7 +169,7 @@ pub struct DisconnectData {
 
 #[derive(Eq, PartialEq, Clone, Debug)]
 pub struct AggregatedWithdrawal {
-    pub spent_utxos: HashMap<OutPoint, FilledOutput>,
+    pub spend_utxos: HashMap<OutPoint, FilledOutput>,
     pub main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     pub value: u64,
     pub main_fee: u64,

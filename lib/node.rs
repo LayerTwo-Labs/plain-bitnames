@@ -133,11 +133,27 @@ impl Node {
         Ok(self.archive.get_best_hash(&txn)?)
     }
 
+    /** Returns the height of the block in which the tx was included.
+     *  Returns an error if the tx does not exist in any known block. */
+    pub fn get_tx_height(&self, txid: Txid) -> Result<u32, Error> {
+        let txn = self.env.read_txn()?;
+        Ok(self.archive.get_tx_height(&txn, txid)?)
+    }
+
     /// resolve current bitname data, if it exists
-    pub fn get_current_bitname_data(
+    pub fn try_get_current_bitname_data(
         &self,
         bitname: &Hash,
     ) -> Result<Option<BitNameData>, Error> {
+        let txn = self.env.read_txn()?;
+        Ok(self.state.try_get_current_bitname_data(&txn, bitname)?)
+    }
+
+    /// Resolve current bitname data. Returns an error if it does not exist.
+    pub fn get_current_bitname_data(
+        &self,
+        bitname: &Hash,
+    ) -> Result<BitNameData, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.state.get_current_bitname_data(&txn, bitname)?)
     }
@@ -190,12 +206,12 @@ impl Node {
     pub fn get_spent_utxos(
         &self,
         outpoints: &[OutPoint],
-    ) -> Result<Vec<OutPoint>, Error> {
+    ) -> Result<Vec<(OutPoint, SpentOutput)>, Error> {
         let txn = self.env.read_txn()?;
         let mut spent = vec![];
         for outpoint in outpoints {
-            if self.state.utxos.get(&txn, outpoint)?.is_none() {
-                spent.push(*outpoint);
+            if let Some(output) = self.state.stxos.get(&txn, outpoint)? {
+                spent.push((*outpoint, output));
             }
         }
         Ok(spent)

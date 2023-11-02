@@ -13,7 +13,8 @@ use crate::{
     authorization::{get_address, Authorization},
     types::{
         Address, AuthorizedTransaction, BitNameData, FilledOutput, GetValue,
-        Hash, OutPoint, Output, OutputContent, Transaction, TxData,
+        Hash, InPoint, OutPoint, Output, OutputContent, SpentOutput,
+        Transaction, TxData,
     },
 };
 
@@ -49,6 +50,7 @@ pub struct Wallet {
     pub address_to_index: Database<SerdeBincode<Address>, OwnedType<[u8; 4]>>,
     pub index_to_address: Database<OwnedType<[u8; 4]>, SerdeBincode<Address>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
+    pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
     /// associates reservation commitments with plaintext bitnames
     pub bitname_reservations: Database<OwnedType<[u8; 32]>, Str>,
     /// associates bitnames with plaintext names
@@ -56,7 +58,7 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 6;
+    pub const NUM_DBS: u32 = 7;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
@@ -68,6 +70,7 @@ impl Wallet {
         let address_to_index = env.create_database(Some("address_to_index"))?;
         let index_to_address = env.create_database(Some("index_to_address"))?;
         let utxos = env.create_database(Some("utxos"))?;
+        let stxos = env.create_database(Some("stxos"))?;
         let bitname_reservations =
             env.create_database(Some("bitname_reservations"))?;
         let known_bitnames = env.create_database(Some("known_bitnames"))?;
@@ -77,6 +80,7 @@ impl Wallet {
             address_to_index,
             index_to_address,
             utxos,
+            stxos,
             bitname_reservations,
             known_bitnames,
         })
@@ -140,6 +144,8 @@ impl Wallet {
         self.address_to_index.clear(&mut txn)?;
         self.index_to_address.clear(&mut txn)?;
         self.utxos.clear(&mut txn)?;
+        self.stxos.clear(&mut txn)?;
+        self.bitname_reservations.clear(&mut txn)?;
         txn.commit()?;
         Ok(())
     }
@@ -369,10 +375,21 @@ impl Wallet {
         Ok((total, selected))
     }
 
-    pub fn delete_utxos(&self, outpoints: &[OutPoint]) -> Result<(), Error> {
+    pub fn spend_utxos(
+        &self,
+        spent: &[(OutPoint, InPoint)],
+    ) -> Result<(), Error> {
         let mut txn = self.env.write_txn()?;
-        for outpoint in outpoints {
-            self.utxos.delete(&mut txn, outpoint)?;
+        for (outpoint, inpoint) in spent {
+            let output = self.utxos.get(&txn, outpoint)?;
+            if let Some(output) = output {
+                self.utxos.delete(&mut txn, outpoint)?;
+                let spent_output = SpentOutput {
+                    output,
+                    inpoint: *inpoint,
+                };
+                self.stxos.put(&mut txn, outpoint, &spent_output)?;
+            }
         }
         txn.commit()?;
         Ok(())
@@ -432,6 +449,16 @@ impl Wallet {
         Ok(utxos)
     }
 
+    pub fn get_stxos(&self) -> Result<HashMap<OutPoint, SpentOutput>, Error> {
+        let txn = self.env.read_txn()?;
+        let mut stxos = HashMap::new();
+        for item in self.stxos.iter(&txn)? {
+            let (outpoint, spent_output) = item?;
+            stxos.insert(outpoint, spent_output);
+        }
+        Ok(stxos)
+    }
+
     /// get all owned bitname utxos
     pub fn get_bitnames(
         &self,
@@ -439,6 +466,15 @@ impl Wallet {
         let mut utxos = self.get_utxos()?;
         utxos.retain(|_, output| output.is_bitname());
         Ok(utxos)
+    }
+
+    /// get all spent bitname utxos
+    pub fn get_spent_bitnames(
+        &self,
+    ) -> Result<HashMap<OutPoint, SpentOutput>, Error> {
+        let mut stxos = self.get_stxos()?;
+        stxos.retain(|_, output| output.output.is_bitname());
+        Ok(stxos)
     }
 
     pub fn get_addresses(&self) -> Result<HashSet<Address>, Error> {

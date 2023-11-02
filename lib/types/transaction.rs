@@ -1,5 +1,9 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::{
+    hash::Hasher,
+    net::{Ipv4Addr, Ipv6Addr},
+};
 
+use educe::Educe;
 use serde::{Deserialize, Serialize};
 
 use bip300301::bitcoin;
@@ -20,6 +24,21 @@ pub enum OutPoint {
     Coinbase { merkle_root: MerkleRoot, vout: u32 },
     // Created by mainchain deposits.
     Deposit(bitcoin::OutPoint),
+}
+
+/// Reference to a tx input.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+pub enum InPoint {
+    /// Transaction input
+    Regular {
+        txid: Txid,
+        // index of the spend in the inputs to spend_tx
+        vin: u32,
+    },
+    // Created by mainchain withdrawals
+    Withdrawal {
+        txid: bitcoin::Txid,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,7 +66,18 @@ pub type TxInputs = Vec<OutPoint>;
 
 pub type TxOutputs = Vec<Output>;
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+fn hash_option_public_key<H>(pk: &Option<PublicKey>, state: &mut H)
+where
+    H: Hasher,
+{
+    use std::hash::Hash;
+    pk.map(|pk| pk.to_bytes()).hash(state)
+}
+
+#[derive(
+    Clone, Debug, Default, Educe, Eq, PartialEq, Serialize, Deserialize,
+)]
+#[educe(Hash)]
 pub struct BitNameData {
     /// commitment to arbitrary data
     pub commitment: Option<Hash>,
@@ -58,6 +88,7 @@ pub struct BitNameData {
     /// optional pubkey used for encryption
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// optional pubkey used for signing messages
+    #[educe(Hash(method = "hash_option_public_key"))]
     pub signing_pubkey: Option<PublicKey>,
     /// optional minimum paymail fee, in sats
     pub paymail_fee: Option<u64>,
@@ -153,6 +184,13 @@ pub struct FilledOutput {
     pub content: FilledContent,
     #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
+}
+
+/// Representation of a spent output
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SpentOutput {
+    pub output: FilledOutput,
+    pub inpoint: InPoint,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

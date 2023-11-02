@@ -1,4 +1,8 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::Arc,
+};
 
 use parking_lot::RwLock;
 use tokio::sync::RwLock as TokioRwLock;
@@ -8,10 +12,7 @@ use plain_bitnames::{
     format_deposit_address,
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
-    types::{
-        self, Address, BitNameData, FilledOutput, GetValue, OutPoint,
-        Transaction,
-    },
+    types::{self, FilledOutput, GetValue, InPoint, OutPoint, Transaction},
     wallet::{self, Wallet},
 };
 
@@ -122,41 +123,96 @@ impl App {
     pub fn get_paymail(
         &self,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let bitname_utxos = self.wallet.get_bitnames()?;
-        let addrs_to_bitnames =
-            bitname_utxos.into_iter().filter_map(|(_, output)| {
-                let bitname = output.bitname()?;
-                Some((output.address, *bitname))
-            });
-        let addrs_to_bitname_data: HashMap<Address, BitNameData> =
-            addrs_to_bitnames
-                .map(|(addr, bitname)| {
-                    let bitname_data = self
-                        .node
-                        .get_current_bitname_data(&bitname)?
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "failed to resolve bitname data for {}",
-                                hex::encode(bitname)
-                            )
-                        })?;
-                    Ok((addr, bitname_data))
-                })
-                .collect::<Result<_, Error>>()?;
         let mut utxos = self.wallet.get_utxos()?;
+        let bitname_utxos = self.wallet.get_bitnames()?;
+        let bitname_stxos = self.wallet.get_spent_bitnames()?;
+        let outpoints_to_block_heights: HashMap<_, _> = utxos
+            .iter()
+            .map(|(&outpoint, _)| outpoint)
+            .chain(bitname_stxos.iter().map(|(&outpoint, _)| outpoint))
+            .filter_map(|outpoint| match outpoint {
+                OutPoint::Regular { txid, vout: _ } => Some((outpoint, txid)),
+                _ => None,
+            })
+            .map(|(outpoint, txid)| {
+                let height = self.node.get_tx_height(txid)?;
+                Ok((outpoint, height))
+            })
+            .collect::<Result<_, node::Error>>()?;
+        let inpoints_to_block_heights: HashMap<_, _> =
+            bitname_stxos.values()
+                .map(|spent_output| {
+                let txid = match spent_output.inpoint {
+                    InPoint::Regular { txid, vin:_ } => txid,
+                    _ => panic!(
+                        "Impossible: bitname inpoint can only refer to regular tx"
+                    )
+                };
+                let height = self.node.get_tx_height(txid)?;
+                Ok((spent_output.inpoint, height))
+            }).collect::<Result<_, node::Error>>()?;
+        /* associate to each address, a set of pairs of bitname data and
+        ownership period for the bitname. */
+        let mut addrs_to_bitnames_ownership: HashMap<_, HashSet<_>> =
+            HashMap::new();
+        // populate with owned bitnames
+        for (outpoint, output) in bitname_utxos {
+            let Some(bitname) = output.bitname() else {
+                continue;
+            };
+            let bitname_data = self.node.get_current_bitname_data(bitname)?;
+            let height = outpoints_to_block_heights[&outpoint];
+            let owned = Range {
+                start: height,
+                end: u32::MAX,
+            };
+            addrs_to_bitnames_ownership
+                .entry(output.address)
+                .or_default()
+                .insert((bitname_data, owned));
+        }
+        // populate with spent bitnames
+        for (outpoint, output) in bitname_stxos {
+            let Some(bitname) = output.output.bitname() else {
+                continue;
+            };
+            let bitname_data = self.node.get_current_bitname_data(bitname)?;
+            let acquired_height = outpoints_to_block_heights[&outpoint];
+            let spent_height = inpoints_to_block_heights[&output.inpoint];
+            let owned = Range {
+                start: acquired_height,
+                end: spent_height,
+            };
+            addrs_to_bitnames_ownership
+                .entry(output.output.address)
+                .or_default()
+                .insert((bitname_data, owned));
+        }
         // retain if memo exists, and output value >= paymail fee
-        utxos.retain(|_, output| {
+        utxos.retain(|outpoint, output| {
             if output.memo.is_empty() {
                 return false;
             }
-            let Some(bitname_data) = addrs_to_bitname_data.get(&output.address)
+            let Some(bitname_data_ownership) =
+                addrs_to_bitnames_ownership.get(&output.address)
             else {
                 return false;
             };
-            let Some(paymail_fee) = bitname_data.paymail_fee else {
+            let height = outpoints_to_block_heights[outpoint];
+            let min_fee = bitname_data_ownership
+                .iter()
+                .filter_map(|(bitname_data, ownership)| {
+                    if !ownership.contains(&height) {
+                        return None;
+                    };
+                    // FIXME: find the historical paymail fee
+                    bitname_data.paymail_fee
+                })
+                .min();
+            let Some(min_fee) = min_fee else {
                 return false;
             };
-            output.get_value() >= paymail_fee
+            output.get_value() >= min_fee
         });
         Ok(utxos)
     }
@@ -210,9 +266,14 @@ impl App {
         let addresses = self.wallet.get_addresses()?;
         let utxos = self.node.get_utxos_by_addresses(&addresses)?;
         let outpoints: Vec<_> = self.wallet.get_utxos()?.into_keys().collect();
-        let spent = self.node.get_spent_utxos(&outpoints)?;
+        let spent: Vec<_> = self
+            .node
+            .get_spent_utxos(&outpoints)?
+            .into_iter()
+            .map(|(outpoint, spent_output)| (outpoint, spent_output.inpoint))
+            .collect();
         self.wallet.put_utxos(&utxos)?;
-        self.wallet.delete_utxos(&spent)?;
+        self.wallet.spend_utxos(&spent)?;
         Ok(())
     }
 

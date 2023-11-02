@@ -106,6 +106,7 @@ pub struct State {
     /// associates bitname IDs (name hashes) with bitname data
     pub bitnames: Database<SerdeBincode<Hash>, SerdeBincode<BitNameData>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
+    pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
     pub pending_withdrawal_bundle:
         Database<OwnedType<u32>, SerdeBincode<WithdrawalBundle>>,
     pub last_withdrawal_bundle_failure_height:
@@ -196,13 +197,14 @@ impl BitNameData {
 
 impl State {
     pub const NUM_DBS: u32 = 6;
-    pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 4;
+    pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
         let bitname_reservations =
             env.create_database(Some("bitname_reservations"))?;
         let bitnames = env.create_database(Some("bitnames"))?;
         let utxos = env.create_database(Some("utxos"))?;
+        let stxos = env.create_database(Some("stxos"))?;
         let pending_withdrawal_bundle =
             env.create_database(Some("pending_withdrawal_bundle"))?;
         let last_withdrawal_bundle_failure_height =
@@ -213,6 +215,7 @@ impl State {
             bitname_reservations,
             bitnames,
             utxos,
+            stxos,
             pending_withdrawal_bundle,
             last_withdrawal_bundle_failure_height,
             last_deposit_block,
@@ -220,7 +223,7 @@ impl State {
     }
 
     /// resolve current bitname data, if it exists
-    pub fn get_current_bitname_data(
+    pub fn try_get_current_bitname_data(
         &self,
         txn: &RoTxn,
         bitname: &Hash,
@@ -230,6 +233,19 @@ impl State {
             .get(txn, bitname)?
             .map(|bitname_data| bitname_data.current());
         Ok(res)
+    }
+
+    /// Resolve current bitname data. Returns an error if it does not exist.
+    pub fn get_current_bitname_data(
+        &self,
+        txn: &RoTxn,
+        bitname: &Hash,
+    ) -> Result<types::BitNameData, Error> {
+        self.try_get_current_bitname_data(txn, bitname)?.ok_or(
+            Error::MissingBitName {
+                name_hash: *bitname,
+            },
+        )
     }
 
     pub fn get_utxos(
@@ -310,7 +326,7 @@ impl State {
                 let aggregated = address_to_aggregated_withdrawal
                     .entry(main_address.clone())
                     .or_insert(AggregatedWithdrawal {
-                        spent_utxos: HashMap::new(),
+                        spend_utxos: HashMap::new(),
                         main_address: main_address.clone(),
                         value: 0,
                         main_fee: 0,
@@ -321,7 +337,7 @@ impl State {
                 if main_fee > aggregated.main_fee {
                     aggregated.main_fee = main_fee;
                 }
-                aggregated.spent_utxos.insert(outpoint, output);
+                aggregated.spend_utxos.insert(outpoint, output);
             }
         }
         if address_to_aggregated_withdrawal.is_empty() {
@@ -331,7 +347,7 @@ impl State {
             address_to_aggregated_withdrawal.into_values().collect();
         aggregated_withdrawals.sort_by_key(|a| std::cmp::Reverse(a.clone()));
         let mut fee = 0;
-        let mut spent_utxos = HashMap::<OutPoint, FilledOutput>::new();
+        let mut spend_utxos = HashMap::<OutPoint, FilledOutput>::new();
         let mut bundle_outputs = vec![];
         for aggregated in &aggregated_withdrawals {
             if bundle_outputs.len() > MAX_BUNDLE_OUTPUTS {
@@ -341,7 +357,7 @@ impl State {
                 value: aggregated.value,
                 script_pubkey: aggregated.main_address.payload.script_pubkey(),
             };
-            spent_utxos.extend(aggregated.spent_utxos.clone());
+            spend_utxos.extend(aggregated.spend_utxos.clone());
             bundle_outputs.push(bundle_output);
             fee += aggregated.main_fee;
         }
@@ -374,7 +390,7 @@ impl State {
         // Create inputs commitment.
         let inputs: Vec<OutPoint> = [
             // Commit to inputs.
-            spent_utxos.keys().copied().collect(),
+            spend_utxos.keys().copied().collect(),
             // Commit to block height.
             vec![OutPoint::Regular {
                 txid: [0; 32].into(),
@@ -414,7 +430,7 @@ impl State {
             })?;
         }
         Ok(Some(WithdrawalBundle {
-            spent_utxos,
+            spend_utxos,
             transaction,
         }))
     }
@@ -636,8 +652,14 @@ impl State {
             if let Some(bundle) =
                 self.collect_withdrawal_bundle(txn, block_height + 1)?
             {
-                for outpoint in bundle.spent_utxos.keys() {
+                for (outpoint, spend_output) in &bundle.spend_utxos {
                     self.utxos.delete(txn, outpoint)?;
+                    let txid = bundle.transaction.txid();
+                    let spent_output = SpentOutput {
+                        output: spend_output.clone(),
+                        inpoint: InPoint::Withdrawal { txid },
+                    };
+                    self.stxos.put(txn, outpoint, &spent_output)?;
                 }
                 self.pending_withdrawal_bundle.put(txn, &0, &bundle)?;
             }
@@ -655,8 +677,9 @@ impl State {
                             &(block_height + 1),
                         )?;
                         self.pending_withdrawal_bundle.delete(txn, &0)?;
-                        for (outpoint, output) in &bundle.spent_utxos {
-                            self.utxos.put(txn, outpoint, output)?;
+                        for (outpoint, spend_output) in &bundle.spend_utxos {
+                            self.stxos.delete(txn, outpoint)?;
+                            self.utxos.put(txn, outpoint, spend_output)?;
                         }
                     }
                     WithdrawalBundleStatus::Confirmed => {
@@ -808,8 +831,20 @@ impl State {
         for transaction in &body.transactions {
             let filled_tx = self.fill_transaction(txn, transaction)?;
             let txid = filled_tx.txid();
-            for input in filled_tx.inputs() {
+            for (vin, input) in filled_tx.inputs().iter().enumerate() {
+                let spent_output = self
+                    .utxos
+                    .get(txn, input)?
+                    .ok_or(Error::NoUtxo { outpoint: *input })?;
+                let spent_output = SpentOutput {
+                    output: spent_output,
+                    inpoint: InPoint::Regular {
+                        txid,
+                        vin: vin as u32,
+                    },
+                };
                 self.utxos.delete(txn, input)?;
+                self.stxos.put(txn, input, &spent_output)?;
             }
             let filled_outputs = filled_tx
                 .filled_outputs()
