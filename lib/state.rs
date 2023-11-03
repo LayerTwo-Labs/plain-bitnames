@@ -196,7 +196,7 @@ impl BitNameData {
 }
 
 impl State {
-    pub const NUM_DBS: u32 = 6;
+    pub const NUM_DBS: u32 = 7;
     pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
