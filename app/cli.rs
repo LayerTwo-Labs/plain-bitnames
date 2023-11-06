@@ -27,6 +27,7 @@ pub struct Cli {
     #[arg(short, long)]
     pub user_main: Option<String>,
     /// Address to use for ZMQ pub/sub, defaults to 127.0.0.1:28332
+    #[cfg(not(target_os = "windows"))]
     #[arg(short, long)]
     pub zmq_addr: Option<String>,
 }
@@ -39,6 +40,7 @@ pub struct Config {
     pub main_user: String,
     pub net_addr: SocketAddr,
     pub rpc_addr: SocketAddr,
+    #[cfg(not(target_os = "windows"))]
     pub zmq_addr: SocketAddr,
 }
 
@@ -76,7 +78,9 @@ impl Cli {
             .clone()
             .unwrap_or(DEFAULT_RPC_ADDR.to_string())
             .parse()?;
+        #[cfg(not(target_os = "windows"))]
         const DEFAULT_ZMQ_ADDR: &str = "127.0.0.1:28332";
+        #[cfg(not(target_os = "windows"))]
         let zmq_addr: SocketAddr = self
             .zmq_addr
             .clone()
@@ -90,6 +94,7 @@ impl Cli {
             main_user,
             net_addr,
             rpc_addr,
+            #[cfg(not(target_os = "windows"))]
             zmq_addr,
         })
     }

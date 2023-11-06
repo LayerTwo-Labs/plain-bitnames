@@ -66,6 +66,7 @@ impl App {
                 config.main_addr,
                 &config.main_password,
                 &config.main_user,
+                #[cfg(not(target_os = "windows"))]
                 config.zmq_addr,
             ) {
                 Ok(node) => node,

@@ -1,3 +1,4 @@
+#[cfg(not(target_os = "windows"))]
 use async_zmq::SinkExt;
 use heed::RoTxn;
 use std::{
@@ -7,10 +8,9 @@ use std::{
     path::Path,
     sync::Arc,
 };
-use tokio::{
-    sync::{mpsc, RwLock},
-    task::JoinHandle,
-};
+use tokio::sync::RwLock;
+#[cfg(not(target_os = "windows"))]
+use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
     authorization::Authorization,
@@ -42,6 +42,7 @@ pub enum Error {
     State(#[from] crate::state::Error),
 }
 
+#[cfg(not(target_os = "windows"))]
 #[derive(Debug)]
 struct ZmqPubHandler {
     tx: mpsc::UnboundedSender<Vec<async_zmq::Message>>,
@@ -56,9 +57,11 @@ pub struct Node {
     mempool: crate::mempool::MemPool,
     net: crate::net::Net,
     state: crate::state::State,
+    #[cfg(not(target_os = "windows"))]
     zmq_pub_handler: Arc<ZmqPubHandler>,
 }
 
+#[cfg(not(target_os = "windows"))]
 impl ZmqPubHandler {
     // run the handler, obtaining a sender sink and the handler task
     fn new(socket_addr: SocketAddr) -> Self {
@@ -88,7 +91,7 @@ impl Node {
         main_addr: SocketAddr,
         password: &str,
         user: &str,
-        zmq_addr: SocketAddr,
+        #[cfg(not(target_os = "windows"))] zmq_addr: SocketAddr,
     ) -> Result<Self, Error> {
         let env_path = datadir.join("data.mdb");
         // let _ = std::fs::remove_dir_all(&env_path);
@@ -111,6 +114,7 @@ impl Node {
         let mempool = crate::mempool::MemPool::new(&env)?;
         let net = crate::net::Net::new(bind_addr)?;
         let state = crate::state::State::new(&env)?;
+        #[cfg(not(target_os = "windows"))]
         let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr));
         Ok(Self {
             archive,
@@ -119,6 +123,7 @@ impl Node {
             mempool,
             net,
             state,
+            #[cfg(not(target_os = "windows"))]
             zmq_pub_handler,
         })
     }
@@ -335,13 +340,16 @@ impl Node {
                 self.mempool.delete(&mut txn, &transaction.txid())?;
             }
             txn.commit()?;
-            let block_hash = header.hash();
-            let zmq_msgs = vec![
-                "hashblock".into(),
-                block_hash.0[..].into(),
-                height.to_le_bytes()[..].into(),
-            ];
-            self.zmq_pub_handler.tx.send(zmq_msgs).unwrap();
+            #[cfg(not(target_os = "windows"))]
+            {
+                let block_hash = header.hash();
+                let zmq_msgs = vec![
+                    "hashblock".into(),
+                    block_hash.0[..].into(),
+                    height.to_le_bytes()[..].into(),
+                ];
+                self.zmq_pub_handler.tx.send(zmq_msgs).unwrap();
+            }
             bundle
         };
         if let Some(bundle) = bundle {
