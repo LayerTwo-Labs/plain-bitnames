@@ -130,15 +130,15 @@ jobs:
 
       - name: 'set filename for release binary'
         run: |
-          pushd "target/release"
-          mv "plain_bitnames_app" "bitnames-gui-x86_64-pc-windows-gnu"
+          pushd "target/x86_64-pc-windows-gnu/release"
+          mv "plain_bitnames_app.exe" "bitnames-gui-x86_64-pc-windows-gnu.exe"
           popd
 
       - name: 'Upload Artifacts (bitnames-gui)'
         uses: actions/upload-artifact@v2
         with:
-          name: bitnames-gui-x86_64-pc-windows-gnu
-          path: target/release/bitnames-gui-x86_64-pc-windows-gnu
+          name: bitnames-gui-x86_64-pc-windows-gnu.exe
+          path: target/x86_64-pc-windows-gnu/release/bitnames-gui-x86_64-pc-windows-gnu.exe
           if-no-files-found: error
   
   
