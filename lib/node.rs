@@ -145,6 +145,19 @@ impl Node {
         Ok(self.archive.get_tx_height(&txn, txid)?)
     }
 
+    /** Resolve bitname data at the specified block height.
+     * Returns an error if it does not exist.rror if it does not exist. */
+    pub fn get_bitname_data_at_block_height(
+        &self,
+        bitname: &Hash,
+        height: u32,
+    ) -> Result<BitNameData, Error> {
+        let txn = self.env.read_txn()?;
+        Ok(self
+            .state
+            .get_bitname_data_at_block_height(&txn, bitname, height)?)
+    }
+
     /// resolve current bitname data, if it exists
     pub fn try_get_current_bitname_data(
         &self,
@@ -326,8 +339,8 @@ impl Node {
                 .await?;
             let mut txn = self.env.write_txn()?;
             self.state.validate_body(&txn, body)?;
-            self.state.connect_body(&mut txn, body)?;
             let height = self.archive.get_height(&txn)?;
+            self.state.connect_body(&mut txn, body, height)?;
             self.state.connect_two_way_peg_data(
                 &mut txn,
                 &two_way_peg_data,

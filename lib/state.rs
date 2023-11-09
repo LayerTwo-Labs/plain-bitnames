@@ -14,11 +14,14 @@ use bip300301::{bitcoin, WithdrawalBundleStatus};
 use crate::authorization::{Authorization, PublicKey};
 use crate::types::{self, *};
 
-/// Data of type `T` paired with the txid at which it was last updated
+/** Data of type `T` paired with
+ *  * the txid at which it was last updated
+ *  * block height at which it was last updated */
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct TxidStamped<T> {
     data: T,
     txid: Txid,
+    height: u32,
 }
 
 /// Wrapper struct for fields that support rollbacks
@@ -67,6 +70,10 @@ pub enum Error {
     IcannNameInvalid { plain_name: String },
     #[error("missing BitName {name_hash:?}")]
     MissingBitName { name_hash: Hash },
+    #[error(
+        "Missing BitName data for {name_hash:?} at block height {block_height}"
+    )]
+    MissingBitNameData { name_hash: Hash, block_height: u32 },
     #[error("missing BitName input {name_hash:?}")]
     MissingBitNameInput { name_hash: Hash },
     #[error("missing BitName reservation {txid}")]
@@ -116,15 +123,33 @@ pub struct State {
 }
 
 impl<T> RollBack<T> {
-    fn new(value: T, txid: Txid) -> Self {
-        let txid_stamped = TxidStamped { data: value, txid };
+    fn new(value: T, txid: Txid, height: u32) -> Self {
+        let txid_stamped = TxidStamped {
+            data: value,
+            txid,
+            height,
+        };
         Self(nonempty![txid_stamped])
     }
 
     /// push a value as the new most recent
-    fn push(&mut self, value: T, txid: Txid) {
-        let txid_stamped = TxidStamped { data: value, txid };
+    fn push(&mut self, value: T, txid: Txid, height: u32) {
+        let txid_stamped = TxidStamped {
+            data: value,
+            txid,
+            height,
+        };
         self.0.push(txid_stamped)
+    }
+
+    /** Returns the value as it was, at the specified block height.
+     *  If a value was updated several times in the block, returns the
+     *  last value seen in the block. */
+    fn at_block_height(&self, height: u32) -> Option<&TxidStamped<T>> {
+        self.0
+            .iter()
+            .rev()
+            .find(|txid_stamped| txid_stamped.height <= height)
     }
 
     /// returns the most recent value, along with it's txid
@@ -135,23 +160,33 @@ impl<T> RollBack<T> {
 
 impl BitNameData {
     // initialize from BitName data provided during a registration
-    fn init(bitname_data: types::BitNameData, txid: Txid) -> Self {
+    fn init(bitname_data: types::BitNameData, txid: Txid, height: u32) -> Self {
         Self {
-            commitment: RollBack::new(bitname_data.commitment, txid),
+            commitment: RollBack::new(bitname_data.commitment, txid, height),
             is_icann: false,
-            ipv4_addr: RollBack::new(bitname_data.ipv4_addr, txid),
-            ipv6_addr: RollBack::new(bitname_data.ipv6_addr, txid),
+            ipv4_addr: RollBack::new(bitname_data.ipv4_addr, txid, height),
+            ipv6_addr: RollBack::new(bitname_data.ipv6_addr, txid, height),
             encryption_pubkey: RollBack::new(
                 bitname_data.encryption_pubkey,
                 txid,
+                height,
             ),
-            signing_pubkey: RollBack::new(bitname_data.signing_pubkey, txid),
-            paymail_fee: RollBack::new(bitname_data.paymail_fee, txid),
+            signing_pubkey: RollBack::new(
+                bitname_data.signing_pubkey,
+                txid,
+                height,
+            ),
+            paymail_fee: RollBack::new(bitname_data.paymail_fee, txid, height),
         }
     }
 
     // apply bitname data updates
-    fn apply_updates(&mut self, updates: BitNameDataUpdates, txid: Txid) {
+    fn apply_updates(
+        &mut self,
+        updates: BitNameDataUpdates,
+        txid: Txid,
+        height: u32,
+    ) {
         let Self {
             ref mut commitment,
             is_icann: _,
@@ -167,19 +202,51 @@ impl BitNameData {
             data_field: &mut RollBack<Option<T>>,
             update: Update<T>,
             txid: Txid,
+            height: u32,
         ) {
             match update {
-                Update::Delete => data_field.push(None, txid),
+                Update::Delete => data_field.push(None, txid, height),
                 Update::Retain => (),
-                Update::Set(value) => data_field.push(Some(value), txid),
+                Update::Set(value) => {
+                    data_field.push(Some(value), txid, height)
+                }
             }
         }
-        apply_field_update(commitment, updates.commitment, txid);
-        apply_field_update(ipv4_addr, updates.ipv4_addr, txid);
-        apply_field_update(ipv6_addr, updates.ipv6_addr, txid);
-        apply_field_update(encryption_pubkey, updates.encryption_pubkey, txid);
-        apply_field_update(signing_pubkey, updates.signing_pubkey, txid);
-        apply_field_update(paymail_fee, updates.paymail_fee, txid);
+        apply_field_update(commitment, updates.commitment, txid, height);
+        apply_field_update(ipv4_addr, updates.ipv4_addr, txid, height);
+        apply_field_update(ipv6_addr, updates.ipv6_addr, txid, height);
+        apply_field_update(
+            encryption_pubkey,
+            updates.encryption_pubkey,
+            txid,
+            height,
+        );
+        apply_field_update(
+            signing_pubkey,
+            updates.signing_pubkey,
+            txid,
+            height,
+        );
+        apply_field_update(paymail_fee, updates.paymail_fee, txid, height);
+    }
+
+    /** Returns the Bitname data as it was, at the specified block height.
+     *  If a value was updated several times in the block, returns the
+     *  last value seen in the block.
+     *  Returns `None` if the data did not exist at the specified block
+     *  height. */
+    pub fn at_block_height(&self, height: u32) -> Option<types::BitNameData> {
+        Some(types::BitNameData {
+            commitment: self.commitment.at_block_height(height)?.data,
+            ipv4_addr: self.ipv4_addr.at_block_height(height)?.data,
+            ipv6_addr: self.ipv6_addr.at_block_height(height)?.data,
+            encryption_pubkey: self
+                .encryption_pubkey
+                .at_block_height(height)?
+                .data,
+            signing_pubkey: self.signing_pubkey.at_block_height(height)?.data,
+            paymail_fee: self.paymail_fee.at_block_height(height)?.data,
+        })
     }
 
     /// get the current bitname data
@@ -220,6 +287,49 @@ impl State {
             last_withdrawal_bundle_failure_height,
             last_deposit_block,
         })
+    }
+
+    /// Return the Bitname data. Returns an error if it does not exist.
+    fn get_bitname(
+        &self,
+        txn: &RoTxn,
+        bitname: &Hash,
+    ) -> Result<BitNameData, Error> {
+        self.bitnames
+            .get(txn, bitname)?
+            .ok_or(Error::MissingBitName {
+                name_hash: *bitname,
+            })
+    }
+
+    /// Resolve bitname data at the specified block height, if it exists.
+    pub fn try_get_bitname_data_at_block_height(
+        &self,
+        txn: &RoTxn,
+        bitname: &Hash,
+        height: u32,
+    ) -> Result<Option<types::BitNameData>, heed::Error> {
+        let res = self
+            .bitnames
+            .get(txn, bitname)?
+            .and_then(|bitname_data| bitname_data.at_block_height(height));
+        Ok(res)
+    }
+
+    /** Resolve bitname data at the specified block height.
+     * Returns an error if it does not exist. */
+    pub fn get_bitname_data_at_block_height(
+        &self,
+        txn: &RoTxn,
+        bitname: &Hash,
+        height: u32,
+    ) -> Result<types::BitNameData, Error> {
+        self.get_bitname(txn, bitname)?
+            .at_block_height(height)
+            .ok_or(Error::MissingBitNameData {
+                name_hash: *bitname,
+                block_height: height,
+            })
     }
 
     /// resolve current bitname data, if it exists
@@ -698,6 +808,7 @@ impl State {
         filled_tx: &FilledTransaction,
         name_hash: Hash,
         bitname_data: &types::BitNameData,
+        height: u32,
     ) -> Result<(), Error> {
         // Find the reservation to burn
         let implied_commitment =
@@ -723,7 +834,7 @@ impl State {
             });
         }
         let bitname_data =
-            BitNameData::init(bitname_data.clone(), filled_tx.txid());
+            BitNameData::init(bitname_data.clone(), filled_tx.txid(), height);
         self.bitnames.put(rwtxn, &name_hash, &bitname_data)?;
         Ok(())
     }
@@ -734,6 +845,7 @@ impl State {
         rwtxn: &mut RwTxn,
         filled_tx: &FilledTransaction,
         bitname_updates: BitNameDataUpdates,
+        height: u32,
     ) -> Result<(), Error> {
         // the updated bitname is the BitName that corresponds to the last
         // bitname output, or equivalently, the BitName corresponding to the
@@ -751,7 +863,7 @@ impl State {
             .ok_or(Error::MissingBitName {
                 name_hash: *updated_bitname,
             })?;
-        bitname_data.apply_updates(bitname_updates, filled_tx.txid());
+        bitname_data.apply_updates(bitname_updates, filled_tx.txid(), height);
         self.bitnames.put(rwtxn, updated_bitname, &bitname_data)?;
         Ok(())
     }
@@ -797,6 +909,7 @@ impl State {
         &self,
         txn: &mut RwTxn,
         body: &Body,
+        height: u32,
     ) -> Result<(), Error> {
         let merkle_root = body.compute_merkle_root();
         for (vout, output) in body.coinbase.iter().enumerate() {
@@ -871,6 +984,7 @@ impl State {
                         &filled_tx,
                         *name_hash,
                         bitname_data,
+                        height,
                     )?;
                 }
                 Some(TxData::BitNameUpdate(bitname_updates)) => {
@@ -878,6 +992,7 @@ impl State {
                         txn,
                         &filled_tx,
                         (**bitname_updates).clone(),
+                        height,
                     )?;
                 }
                 Some(TxData::BatchIcann(batch_icann_data)) => {

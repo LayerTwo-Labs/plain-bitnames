@@ -177,9 +177,11 @@ impl App {
             let Some(bitname) = output.output.bitname() else {
                 continue;
             };
-            let bitname_data = self.node.get_current_bitname_data(bitname)?;
             let acquired_height = outpoints_to_block_heights[&outpoint];
             let spent_height = inpoints_to_block_heights[&output.inpoint];
+            let bitname_data = self
+                .node
+                .get_bitname_data_at_block_height(bitname, acquired_height)?;
             let owned = Range {
                 start: acquired_height,
                 end: spent_height,
@@ -206,7 +208,6 @@ impl App {
                     if !ownership.contains(&height) {
                         return None;
                     };
-                    // FIXME: find the historical paymail fee
                     bitname_data.paymail_fee
                 })
                 .min();
