@@ -12,7 +12,9 @@ use plain_bitnames::{
     format_deposit_address,
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
-    types::{self, FilledOutput, GetValue, InPoint, OutPoint, Transaction},
+    types::{
+        self, FilledOutput, GetValue, Hash, InPoint, OutPoint, Transaction,
+    },
     wallet::{self, Wallet},
 };
 
@@ -120,13 +122,30 @@ impl App {
         Ok(address)
     }
 
-    /// get all paymail
+    /** Get all paymail.
+     *  If `inbox_whitelist` is `Some`,
+     * only the specified bitnames will be used as inboxes. */
     pub fn get_paymail(
         &self,
+        inbox_whitelist: Option<&HashSet<Hash>>,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let mut utxos = self.wallet.get_utxos()?;
-        let bitname_utxos = self.wallet.get_bitnames()?;
-        let bitname_stxos = self.wallet.get_spent_bitnames()?;
+        let mut bitname_utxos = self.wallet.get_bitnames()?;
+        let mut bitname_stxos = self.wallet.get_spent_bitnames()?;
+        if let Some(inbox_whitelist) = inbox_whitelist {
+            bitname_utxos.retain(|_, output| {
+                let Some(bitname) = output.bitname() else {
+                    return false;
+                };
+                inbox_whitelist.contains(bitname)
+            });
+            bitname_stxos.retain(|_, output| {
+                let Some(bitname) = output.output.bitname() else {
+                    return false;
+                };
+                inbox_whitelist.contains(bitname)
+            })
+        };
         let outpoints_to_block_heights: HashMap<_, _> = utxos
             .iter()
             .map(|(&outpoint, _)| outpoint)

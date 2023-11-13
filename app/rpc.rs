@@ -175,7 +175,7 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>> {
-        self.app.get_paymail().map_err(convert_app_err)
+        self.app.get_paymail(None).map_err(convert_app_err)
     }
 
     async fn reserve_bitname(

@@ -2,15 +2,16 @@ use eframe::egui;
 
 use plain_bitnames::types::OutPoint;
 
-use super::util::UiExt;
-use crate::app::App;
+use crate::{app::App, gui::util::UiExt};
+
+use super::settings::Settings;
 
 #[derive(Debug, Default)]
-pub struct Paymail {
+pub struct Inbox {
     selected: Option<(OutPoint, Vec<u8>)>,
 }
 
-impl Paymail {
+impl Inbox {
     fn show_error(ui: &mut egui::Ui, error: &anyhow::Error) {
         ui.horizontal_wrapped(|ui| {
             ui.monospace("Error: ");
@@ -39,9 +40,10 @@ impl Paymail {
     fn show_inbox(
         &mut self,
         app: &mut App,
+        settings: &Settings,
         ui: &mut egui::Ui,
     ) -> Result<(), anyhow::Error> {
-        let paymail = app.get_paymail()?;
+        let paymail = app.get_paymail(Some(&settings.bitname_inboxes))?;
         let mut paymail: Vec<_> = paymail.iter().collect();
         // FIXME: sort by block/index
         paymail.sort_by_key(|(outpoint, _)| format!("{outpoint}"));
@@ -78,13 +80,17 @@ impl Paymail {
         ui.monospace_selectable_multiline(hex::encode(memo));
     }
 
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
-        ui.heading("My Paymail");
+    pub fn show(
+        &mut self,
+        app: &mut App,
+        settings: &Settings,
+        ui: &mut egui::Ui,
+    ) {
         egui::SidePanel::left("Inbox")
             //.exact_width(250.)
             .show_inside(ui, |ui| {
                 let () = self
-                    .show_inbox(app, ui)
+                    .show_inbox(app, settings, ui)
                     .unwrap_or_else(|err| Self::show_error(ui, &err));
             });
         if let Some(selected) = &self.selected {

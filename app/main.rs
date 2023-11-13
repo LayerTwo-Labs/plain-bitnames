@@ -33,7 +33,7 @@ fn main() -> anyhow::Result<()> {
             native_options,
             Box::new(|cc| Box::new(gui::EguiApp::new(app, cc))),
         )
-        .expect("failed to launch egui app");
+        .map_err(|err| anyhow::anyhow!("failed to launch egui app: {err}"))?
     }
     Ok(())
 }

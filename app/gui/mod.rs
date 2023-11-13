@@ -115,7 +115,7 @@ impl eframe::App for EguiApp {
                 Tab::BitnameExplorer => {
                     self.bitname_explorer.show(&mut self.app, ui);
                 }
-                Tab::Paymail => self.paymail.show(&mut self.app, ui),
+                Tab::Paymail => self.paymail.show(&mut self.app, ui).unwrap(),
                 Tab::EncryptMessage => {
                     self.encrypt_message.show(&mut self.app, ui);
                 }
