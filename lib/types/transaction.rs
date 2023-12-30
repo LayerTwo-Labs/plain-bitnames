@@ -704,7 +704,6 @@ impl FilledTransaction {
             self.implied_reservation_commitment();
         self.spent_reservations()
             .map(|(_, filled_output)| filled_output.content())
-            .cloned()
             // In the event of a registration, the first corresponding
             // reservation does not occur in the output
             .filter(move |content| {
@@ -723,6 +722,7 @@ impl FilledTransaction {
                     true
                 }
             })
+            .cloned()
             .chain(new_reservation_content)
     }
 
