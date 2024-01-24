@@ -11,8 +11,11 @@ use serde::{Deserialize, Serialize};
 use bip300301::TwoWayPegData;
 use bip300301::{bitcoin, WithdrawalBundleStatus};
 
-use crate::authorization::{Authorization, PublicKey};
 use crate::types::{self, *};
+use crate::{
+    authorization::{Authorization, PublicKey},
+    types::hashes::BitName,
+};
 
 /** Data of type `T` paired with
  *  * the txid at which it was last updated
@@ -57,9 +60,9 @@ pub enum Error {
     #[error("bad coinbase output content")]
     BadCoinbaseOutputContent,
     #[error("bitname {name_hash:?} already registered")]
-    BitNameAlreadyRegistered { name_hash: Hash },
+    BitNameAlreadyRegistered { name_hash: BitName },
     #[error("bitname {name_hash:?} already registered as an ICANN name")]
-    BitNameAlreadyIcann { name_hash: Hash },
+    BitNameAlreadyIcann { name_hash: BitName },
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
     #[error("failed to fill tx output contents: invalid transaction")]
@@ -69,13 +72,16 @@ pub enum Error {
     #[error("invalid ICANN name: {plain_name}")]
     IcannNameInvalid { plain_name: String },
     #[error("missing BitName {name_hash:?}")]
-    MissingBitName { name_hash: Hash },
+    MissingBitName { name_hash: BitName },
     #[error(
         "Missing BitName data for {name_hash:?} at block height {block_height}"
     )]
-    MissingBitNameData { name_hash: Hash, block_height: u32 },
+    MissingBitNameData {
+        name_hash: BitName,
+        block_height: u32,
+    },
     #[error("missing BitName input {name_hash:?}")]
-    MissingBitNameInput { name_hash: Hash },
+    MissingBitNameInput { name_hash: BitName },
     #[error("missing BitName reservation {txid}")]
     MissingReservation { txid: Txid },
     #[error("no BitNames to update")]
@@ -111,7 +117,7 @@ pub struct State {
     /// associates tx hashes with bitname reservation commitments
     pub bitname_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
     /// associates bitname IDs (name hashes) with bitname data
-    pub bitnames: Database<SerdeBincode<Hash>, SerdeBincode<BitNameData>>,
+    pub bitnames: Database<SerdeBincode<BitName>, SerdeBincode<BitNameData>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
     pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
     pub pending_withdrawal_bundle:
@@ -293,7 +299,7 @@ impl State {
     fn get_bitname(
         &self,
         txn: &RoTxn,
-        bitname: &Hash,
+        bitname: &BitName,
     ) -> Result<BitNameData, Error> {
         self.bitnames
             .get(txn, bitname)?
@@ -306,7 +312,7 @@ impl State {
     pub fn try_get_bitname_data_at_block_height(
         &self,
         txn: &RoTxn,
-        bitname: &Hash,
+        bitname: &BitName,
         height: u32,
     ) -> Result<Option<types::BitNameData>, heed::Error> {
         let res = self
@@ -321,7 +327,7 @@ impl State {
     pub fn get_bitname_data_at_block_height(
         &self,
         txn: &RoTxn,
-        bitname: &Hash,
+        bitname: &BitName,
         height: u32,
     ) -> Result<types::BitNameData, Error> {
         self.get_bitname(txn, bitname)?
@@ -336,7 +342,7 @@ impl State {
     pub fn try_get_current_bitname_data(
         &self,
         txn: &RoTxn,
-        bitname: &Hash,
+        bitname: &BitName,
     ) -> Result<Option<types::BitNameData>, heed::Error> {
         let res = self
             .bitnames
@@ -349,7 +355,7 @@ impl State {
     pub fn get_current_bitname_data(
         &self,
         txn: &RoTxn,
-        bitname: &Hash,
+        bitname: &BitName,
     ) -> Result<types::BitNameData, Error> {
         self.try_get_current_bitname_data(txn, bitname)?.ok_or(
             Error::MissingBitName {
@@ -806,7 +812,7 @@ impl State {
         &self,
         rwtxn: &mut RwTxn,
         filled_tx: &FilledTransaction,
-        name_hash: Hash,
+        name_hash: BitName,
         bitname_data: &types::BitNameData,
         height: u32,
     ) -> Result<(), Error> {
@@ -875,10 +881,10 @@ impl State {
         filled_tx: &FilledTransaction,
         batch_icann_data: &BatchIcannRegistrationData,
     ) -> Result<(), Error> {
-        let name_hashes = batch_icann_data
-            .plain_names
-            .iter()
-            .map(|name| Hash::from(blake3::hash(name.as_bytes())));
+        let name_hashes = batch_icann_data.plain_names.iter().map(|name| {
+            let hash = blake3::hash(name.as_bytes());
+            BitName(Hash::from(hash))
+        });
         let mut spent_bitnames = filled_tx.spent_bitnames();
         for name_hash in name_hashes {
             // search for the bitname to be registered as an ICANN domain

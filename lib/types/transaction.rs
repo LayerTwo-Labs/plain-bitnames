@@ -10,7 +10,7 @@ use bip300301::bitcoin;
 
 use super::{
     address::Address,
-    hashes::{self, Hash, MerkleRoot, Txid},
+    hashes::{self, BitName, Hash, MerkleRoot, Txid},
     serde_display_fromstr_human_readable, serde_hexstr_human_readable,
     EncryptionPubKey, GetValue,
 };
@@ -138,8 +138,7 @@ pub enum TransactionData {
     },
     BitNameRegistration {
         /// reveal of the name hash
-        #[serde(with = "serde_hexstr_human_readable")]
-        name_hash: Hash,
+        name_hash: BitName,
         /// reveal of the nonce used for the BitName reservation commitment
         #[serde(with = "serde_hexstr_human_readable")]
         revealed_nonce: Hash,
@@ -171,7 +170,7 @@ pub enum FilledContent {
         main_fee: u64,
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     },
-    BitName(Hash),
+    BitName(BitName),
     /// Reservation txid and commitment
     BitNameReservation(Txid, Hash),
 }
@@ -362,8 +361,8 @@ impl Transaction {
         }
     }
 
-    /// If the tx is a bitname registration, returns the registered name hash
-    pub fn registration_name_hash(&self) -> Option<Hash> {
+    /// If the tx is a bitname registration, returns the registered BitName
+    pub fn registration_name_hash(&self) -> Option<BitName> {
         match self.data {
             Some(TxData::BitNameRegistration { name_hash, .. }) => {
                 Some(name_hash)
@@ -382,7 +381,7 @@ impl Transaction {
                 ..
             }) => {
                 let implied_commitment =
-                    blake3::keyed_hash(&revealed_nonce, &name_hash).into();
+                    blake3::keyed_hash(&revealed_nonce, &name_hash.0).into();
                 Some(implied_commitment)
             }
             _ => None,
@@ -421,7 +420,7 @@ impl Transaction {
 impl FilledContent {
     /// returns the BitName ID (name hash) if the filled output content
     /// corresponds to a BitName output.
-    pub fn bitname(&self) -> Option<&Hash> {
+    pub fn bitname(&self) -> Option<&BitName> {
         match self {
             Self::BitName(name_hash) => Some(name_hash),
             _ => None,
@@ -500,7 +499,7 @@ impl FilledOutput {
 
     /// returns the BitName ID (name hash) if the filled output content
     /// corresponds to a BitName output.
-    pub fn bitname(&self) -> Option<&Hash> {
+    pub fn bitname(&self) -> Option<&BitName> {
         self.content.bitname()
     }
 
@@ -601,7 +600,7 @@ impl FilledTransaction {
     }
 
     /// If the tx is a bitname registration, returns the registered name hash
-    pub fn registration_name_hash(&self) -> Option<Hash> {
+    pub fn registration_name_hash(&self) -> Option<BitName> {
         self.transaction.registration_name_hash()
     }
 
@@ -770,7 +769,8 @@ impl FilledTransaction {
                 .plain_names
                 .iter()
                 .map(|plain_name| {
-                    Hash::from(blake3::hash(plain_name.as_bytes()))
+                    let hash = blake3::hash(plain_name.as_bytes());
+                    BitName(Hash::from(hash))
                 })
                 .peekable();
             let mut spent_utxos = self.spent_utxos.clone();

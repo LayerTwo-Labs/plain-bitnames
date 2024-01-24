@@ -132,6 +132,22 @@ impl std::fmt::Debug for Txid {
     }
 }
 
+/// Identifier for a BitName
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
+#[repr(transparent)]
+pub struct BitName(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+
 pub fn hash<T: serde::Serialize>(data: &T) -> Hash {
     let data_serialized = bincode::serialize(data)
         .expect("failed to serialize a type to compute a hash");

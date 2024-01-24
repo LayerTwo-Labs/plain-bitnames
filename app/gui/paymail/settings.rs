@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use eframe::egui;
 use hex::FromHex;
-use plain_bitnames::types::Hash;
+use plain_bitnames::types::{hashes::BitName, Hash};
 
 #[derive(Debug, Default)]
 struct BitnameInboxesState {
@@ -18,7 +18,7 @@ enum Tab {
 
 #[derive(Debug, Default)]
 pub struct Settings {
-    pub bitname_inboxes: HashSet<Hash>,
+    pub bitname_inboxes: HashSet<BitName>,
     bitname_inboxes_state: BitnameInboxesState,
     tab: Tab,
 }
@@ -31,8 +31,8 @@ impl Settings {
             ui.text_edit_singleline(&mut state.add_bitname_buffer);
             if ui.button("Add Bitname Inbox").clicked() {
                 match Hash::from_hex(&state.add_bitname_buffer) {
-                    Ok(bitname) => {
-                        self.bitname_inboxes.insert(bitname);
+                    Ok(name_hash) => {
+                        self.bitname_inboxes.insert(BitName(name_hash));
                         state.err_msg = None;
                         state.add_bitname_buffer.clear();
                     }
@@ -47,7 +47,7 @@ impl Settings {
         }
         egui::Grid::new("bitname inboxes").show(ui, |ui| {
             self.bitname_inboxes.retain(|bitname| {
-                ui.monospace(hex::encode(bitname));
+                ui.monospace(hex::encode(bitname.0));
                 let button = ui.button("Remove");
                 ui.end_row();
                 !button.clicked()

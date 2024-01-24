@@ -12,9 +12,9 @@ use heed::{types::*, Database, RoTxn};
 use crate::{
     authorization::{get_address, Authorization},
     types::{
-        Address, AuthorizedTransaction, BitNameData, FilledOutput, GetValue,
-        Hash, InPoint, OutPoint, Output, OutputContent, SpentOutput,
-        Transaction, TxData,
+        hashes::BitName, Address, AuthorizedTransaction, BitNameData,
+        FilledOutput, GetValue, Hash, InPoint, OutPoint, Output, OutputContent,
+        SpentOutput, Transaction, TxData,
     },
 };
 
@@ -54,7 +54,7 @@ pub struct Wallet {
     /// associates reservation commitments with plaintext bitnames
     pub bitname_reservations: Database<OwnedType<[u8; 32]>, Str>,
     /// associates bitnames with plaintext names
-    pub known_bitnames: Database<OwnedType<[u8; 32]>, Str>,
+    pub known_bitnames: Database<SerdeBincode<BitName>, Str>,
 }
 
 impl Wallet {
@@ -238,6 +238,7 @@ impl Wallet {
         let reservation_keypair =
             self.get_keypair_for_addr(&rotxn, &reservation_addr)?;
         let name_hash: Hash = blake3::hash(plain_name.as_bytes()).into();
+        let bitname = BitName(name_hash);
         // hmac(secret, name_hash)
         let nonce = blake3::keyed_hash(
             reservation_keypair.secret.as_bytes(),
@@ -250,8 +251,7 @@ impl Wallet {
         let mut rwtxn = self.env.write_txn()?;
         self.bitname_reservations
             .put(&mut rwtxn, &commitment, plain_name)?;
-        self.known_bitnames
-            .put(&mut rwtxn, &name_hash, plain_name)?;
+        self.known_bitnames.put(&mut rwtxn, &bitname, plain_name)?;
         rwtxn.commit()?;
         // if the tx is regular, add a reservation output
         if tx.is_regular() {
@@ -292,6 +292,7 @@ impl Wallet {
                 self.get_new_address()?
             };
         let name_hash: Hash = blake3::hash(plain_name.as_bytes()).into();
+        let bitname = BitName(name_hash);
         /* Search for reservation utxo by the following procedure:
         For each reservation:
         * Get the corresponding keypair
@@ -327,8 +328,7 @@ impl Wallet {
         }
         // store bitname data
         let mut rwtxn = self.env.write_txn()?;
-        self.known_bitnames
-            .put(&mut rwtxn, &name_hash, plain_name)?;
+        self.known_bitnames.put(&mut rwtxn, &bitname, plain_name)?;
         rwtxn.commit()?;
         let (reservation_outpoint, nonce) = reservation_outpoint_nonce
             .ok_or_else(|| Error::NoBitnameReservation {
@@ -339,7 +339,7 @@ impl Wallet {
         tx.inputs.push(reservation_outpoint);
         tx.outputs.push(registration_output);
         tx.data = Some(TxData::BitNameRegistration {
-            name_hash,
+            name_hash: bitname,
             revealed_nonce: nonce,
             bitname_data: Box::new(bitname_data.into_owned()),
         });
@@ -432,7 +432,7 @@ impl Wallet {
     /// if it is known by the wallet.
     pub fn get_bitname_plaintext(
         &self,
-        bitname: &Hash,
+        bitname: &BitName,
     ) -> Result<Option<String>, Error> {
         let txn = self.env.read_txn()?;
         let res = self.known_bitnames.get(&txn, bitname)?;

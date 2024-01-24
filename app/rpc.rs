@@ -9,7 +9,10 @@ use jsonrpsee::{
 
 use plain_bitnames::{
     node,
-    types::{Address, Block, BlockHash, FilledOutput, OutPoint, Transaction},
+    types::{
+        hashes::BitName, Address, BitNameData, Block, BlockHash, FilledOutput,
+        OutPoint, Transaction,
+    },
     wallet,
 };
 
@@ -19,6 +22,10 @@ use crate::app::{self, App};
 pub trait Rpc {
     #[method(name = "stop")]
     async fn stop(&self);
+
+    /// List all BitNames
+    #[method(name = "bitnames")]
+    async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>>;
 
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> u32;
@@ -84,6 +91,10 @@ fn convert_wallet_err(err: wallet::Error) -> ErrorObject<'static> {
 impl RpcServer for RpcServerImpl {
     async fn stop(&self) {
         std::process::exit(0);
+    }
+
+    async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>> {
+        self.app.node.bitnames().map_err(convert_node_err)
     }
 
     async fn getblockcount(&self) -> u32 {

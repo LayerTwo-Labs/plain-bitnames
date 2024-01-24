@@ -15,7 +15,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::{
     authorization::Authorization,
     net::{PeerState, Request, Response},
-    types::*,
+    types::{hashes::BitName, *},
 };
 
 pub const THIS_SIDECHAIN: u8 = 2;
@@ -145,11 +145,27 @@ impl Node {
         Ok(self.archive.get_tx_height(&txn, txid)?)
     }
 
+    /// List all BitNames and their current data
+    pub fn bitnames(&self) -> Result<Vec<(BitName, BitNameData)>, Error> {
+        let txn = self.env.read_txn()?;
+        let res = self
+            .state
+            .bitnames
+            .iter(&txn)?
+            .map(|res| {
+                res.map(|(bitname, bitname_data)| {
+                    (bitname, bitname_data.current())
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(res)
+    }
+
     /** Resolve bitname data at the specified block height.
      * Returns an error if it does not exist.rror if it does not exist. */
     pub fn get_bitname_data_at_block_height(
         &self,
-        bitname: &Hash,
+        bitname: &BitName,
         height: u32,
     ) -> Result<BitNameData, Error> {
         let txn = self.env.read_txn()?;
@@ -161,7 +177,7 @@ impl Node {
     /// resolve current bitname data, if it exists
     pub fn try_get_current_bitname_data(
         &self,
-        bitname: &Hash,
+        bitname: &BitName,
     ) -> Result<Option<BitNameData>, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.state.try_get_current_bitname_data(&txn, bitname)?)
@@ -170,7 +186,7 @@ impl Node {
     /// Resolve current bitname data. Returns an error if it does not exist.
     pub fn get_current_bitname_data(
         &self,
-        bitname: &Hash,
+        bitname: &BitName,
     ) -> Result<BitNameData, Error> {
         let txn = self.env.read_txn()?;
         Ok(self.state.get_current_bitname_data(&txn, bitname)?)

@@ -127,7 +127,7 @@ impl MyBitnames {
                                 ));
                                 ui.monospace_selectable_singleline(format!(
                                     "bitname: {}",
-                                    hex::encode(bitname)
+                                    hex::encode(bitname.0)
                                 ));
                             });
                             ui.end_row()
@@ -135,7 +135,7 @@ impl MyBitnames {
                         for bitname in unknown_name_bitnames {
                             ui.monospace_selectable_singleline(format!(
                                 "bitname: {}",
-                                hex::encode(bitname)
+                                hex::encode(bitname.0)
                             ));
                             ui.end_row()
                         }

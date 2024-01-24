@@ -13,7 +13,8 @@ use plain_bitnames::{
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
     types::{
-        self, FilledOutput, GetValue, Hash, InPoint, OutPoint, Transaction,
+        self, hashes::BitName, FilledOutput, GetValue, InPoint, OutPoint,
+        Transaction,
     },
     wallet::{self, Wallet},
 };
@@ -127,7 +128,7 @@ impl App {
      * only the specified bitnames will be used as inboxes. */
     pub fn get_paymail(
         &self,
-        inbox_whitelist: Option<&HashSet<Hash>>,
+        inbox_whitelist: Option<&HashSet<BitName>>,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let mut utxos = self.wallet.get_utxos()?;
         let mut bitname_utxos = self.wallet.get_bitnames()?;
