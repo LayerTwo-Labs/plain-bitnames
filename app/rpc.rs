@@ -23,12 +23,22 @@ pub trait Rpc {
     #[method(name = "stop")]
     async fn stop(&self);
 
+    /// Balance in sats
+    #[method(name = "balance")]
+    async fn balance(&self) -> RpcResult<u64>;
+
     /// List all BitNames
     #[method(name = "bitnames")]
     async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>>;
 
+    #[method(name = "format_deposit_address")]
+    async fn format_deposit_address(
+        &self,
+        address: Address,
+    ) -> RpcResult<String>;
+
     #[method(name = "getblockcount")]
-    async fn getblockcount(&self) -> u32;
+    async fn getblockcount(&self) -> RpcResult<u32>;
 
     #[method(name = "get_block_hash")]
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
@@ -37,7 +47,10 @@ pub trait Rpc {
     async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block>;
 
     #[method(name = "mine")]
-    async fn mine(&self) -> RpcResult<()>;
+    async fn mine(&self, fee: Option<u64>) -> RpcResult<()>;
+
+    #[method(name = "my_utxos")]
+    async fn my_utxos(&self) -> RpcResult<Vec<FilledOutput>>;
 
     #[method(name = "get_new_address")]
     async fn get_new_address(&self) -> RpcResult<Address>;
@@ -76,6 +89,8 @@ fn custom_err(err_msg: impl Into<String>) -> ErrorObject<'static> {
 }
 
 fn convert_app_err(err: app::Error) -> ErrorObject<'static> {
+    let err = anyhow::anyhow!(err);
+    tracing::error!("{err}");
     custom_err(err.to_string())
 }
 
@@ -93,12 +108,27 @@ impl RpcServer for RpcServerImpl {
         std::process::exit(0);
     }
 
+    async fn balance(&self) -> RpcResult<u64> {
+        self.app.wallet.get_balance().map_err(convert_wallet_err)
+    }
+
     async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>> {
         self.app.node.bitnames().map_err(convert_node_err)
     }
 
-    async fn getblockcount(&self) -> u32 {
-        self.app.node.get_height().unwrap_or(0)
+    async fn format_deposit_address(
+        &self,
+        address: Address,
+    ) -> RpcResult<String> {
+        let deposit_address = plain_bitnames::format_deposit_address(
+            node::THIS_SIDECHAIN,
+            &address.to_string(),
+        );
+        Ok(deposit_address)
+    }
+
+    async fn getblockcount(&self) -> RpcResult<u32> {
+        self.app.node.get_height().map_err(convert_node_err)
     }
 
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {
@@ -121,8 +151,20 @@ impl RpcServer for RpcServerImpl {
         Ok(block)
     }
 
-    async fn mine(&self) -> RpcResult<()> {
-        self.app.mine().await.map_err(convert_app_err)
+    async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {
+        let fee = fee.map(bip300301::bitcoin::Amount::from_sat);
+        self.app.mine(fee).await.map_err(convert_app_err)
+    }
+
+    async fn my_utxos(&self) -> RpcResult<Vec<FilledOutput>> {
+        let utxos = self
+            .app
+            .wallet
+            .get_utxos()
+            .map_err(convert_wallet_err)?
+            .into_values()
+            .collect();
+        Ok(utxos)
     }
 
     async fn get_new_address(&self) -> RpcResult<Address> {

@@ -1,4 +1,4 @@
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
 use async_zmq::SinkExt;
 use heed::RoTxn;
 use std::{
@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 use tokio::sync::RwLock;
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
@@ -42,7 +42,7 @@ pub enum Error {
     State(#[from] crate::state::Error),
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
 #[derive(Debug)]
 struct ZmqPubHandler {
     tx: mpsc::UnboundedSender<Vec<async_zmq::Message>>,
@@ -57,11 +57,11 @@ pub struct Node {
     mempool: crate::mempool::MemPool,
     net: crate::net::Net,
     state: crate::state::State,
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
     zmq_pub_handler: Arc<ZmqPubHandler>,
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
 impl ZmqPubHandler {
     // run the handler, obtaining a sender sink and the handler task
     fn new(socket_addr: SocketAddr) -> Self {
@@ -91,7 +91,8 @@ impl Node {
         main_addr: SocketAddr,
         password: &str,
         user: &str,
-        #[cfg(not(target_os = "windows"))] zmq_addr: SocketAddr,
+        #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+        zmq_addr: SocketAddr,
     ) -> Result<Self, Error> {
         let env_path = datadir.join("data.mdb");
         // let _ = std::fs::remove_dir_all(&env_path);
@@ -114,7 +115,7 @@ impl Node {
         let mempool = crate::mempool::MemPool::new(&env)?;
         let net = crate::net::Net::new(bind_addr)?;
         let state = crate::state::State::new(&env)?;
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
         let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr));
         Ok(Self {
             archive,
@@ -123,7 +124,7 @@ impl Node {
             mempool,
             net,
             state,
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
             zmq_pub_handler,
         })
     }
@@ -356,7 +357,15 @@ impl Node {
             let mut txn = self.env.write_txn()?;
             self.state.validate_body(&txn, body)?;
             let height = self.archive.get_height(&txn)?;
-            self.state.connect_body(&mut txn, body, height)?;
+            if tracing::enabled!(tracing::Level::DEBUG) {
+                let block_hash = header.hash();
+                let merkle_root = body.compute_merkle_root();
+                self.state.connect_body(&mut txn, body, height)?;
+                tracing::debug!(%height, %merkle_root, %block_hash,
+                    "connected body")
+            } else {
+                self.state.connect_body(&mut txn, body, height)?;
+            }
             self.state.connect_two_way_peg_data(
                 &mut txn,
                 &two_way_peg_data,
@@ -369,7 +378,7 @@ impl Node {
                 self.mempool.delete(&mut txn, &transaction.txid())?;
             }
             txn.commit()?;
-            #[cfg(not(target_os = "windows"))]
+            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
             {
                 let block_hash = header.hash();
                 let zmq_msgs = vec![
