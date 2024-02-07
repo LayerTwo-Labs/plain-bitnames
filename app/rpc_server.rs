@@ -1,10 +1,9 @@
-use std::{borrow::Cow, collections::HashMap, net::SocketAddr};
+use std::{collections::HashMap, net::SocketAddr};
 
 use jsonrpsee::{
     core::{async_trait, RpcResult},
-    proc_macros::rpc,
     server::Server,
-    types::{ErrorObject, ResponsePayload},
+    types::ErrorObject,
 };
 
 use plain_bitnames::{
@@ -15,70 +14,9 @@ use plain_bitnames::{
     },
     wallet,
 };
+use plain_bitnames_app_rpc_api::RpcServer;
 
 use crate::app::{self, App};
-
-#[rpc(server)]
-pub trait Rpc {
-    #[method(name = "stop")]
-    async fn stop(&self);
-
-    /// Balance in sats
-    #[method(name = "balance")]
-    async fn balance(&self) -> RpcResult<u64>;
-
-    /// List all BitNames
-    #[method(name = "bitnames")]
-    async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>>;
-
-    #[method(name = "format_deposit_address")]
-    async fn format_deposit_address(
-        &self,
-        address: Address,
-    ) -> RpcResult<String>;
-
-    #[method(name = "getblockcount")]
-    async fn getblockcount(&self) -> RpcResult<u32>;
-
-    #[method(name = "get_block_hash")]
-    async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash>;
-
-    #[method(name = "get_block")]
-    async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block>;
-
-    #[method(name = "mine")]
-    async fn mine(&self, fee: Option<u64>) -> RpcResult<()>;
-
-    #[method(name = "my_utxos")]
-    async fn my_utxos(&self) -> RpcResult<Vec<FilledOutput>>;
-
-    #[method(name = "get_new_address")]
-    async fn get_new_address(&self) -> RpcResult<Address>;
-
-    #[method(name = "generate_mnemonic")]
-    async fn generate_mnemonic(&self) -> RpcResult<String>;
-
-    #[method(name = "set_seed_from_mnemonic")]
-    async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()>;
-
-    #[method(name = "transfer")]
-    async fn transfer(
-        &self,
-        dest: Address,
-        value: u64,
-        fee: u64,
-        memo: Option<String>,
-    ) -> RpcResult<()>;
-
-    #[method(name = "get_paymail")]
-    async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>>;
-
-    #[method(name = "reserve_bitname")]
-    async fn reserve_bitname(
-        &self,
-        plain_name: String,
-    ) -> ResponsePayload<'static, ()>;
-}
 
 pub struct RpcServerImpl {
     app: App,
@@ -231,23 +169,21 @@ impl RpcServer for RpcServerImpl {
         self.app.get_paymail(None).map_err(convert_app_err)
     }
 
-    async fn reserve_bitname(
-        &self,
-        plain_name: String,
-    ) -> ResponsePayload<'static, ()> {
+    async fn reserve_bitname(&self, plain_name: String) -> RpcResult<()> {
         let mut tx = Transaction::default();
         let () = match self.app.wallet.reserve_bitname(&mut tx, &plain_name) {
             Ok(()) => (),
-            Err(err) => return ResponsePayload::Error(convert_wallet_err(err)),
+            Err(err) => return Err(convert_wallet_err(err)),
         };
         let authorized_tx = match self.app.wallet.authorize(tx) {
             Ok(tx) => tx,
-            Err(err) => return ResponsePayload::Error(convert_wallet_err(err)),
+            Err(err) => return Err(convert_wallet_err(err)),
         };
-        match self.app.node.submit_transaction(&authorized_tx).await {
-            Ok(()) => ResponsePayload::Result(Cow::Owned(())),
-            Err(err) => ResponsePayload::Error(convert_node_err(err)),
-        }
+        self.app
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)
     }
 }
 
