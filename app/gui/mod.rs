@@ -50,10 +50,18 @@ impl EguiApp {
         // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
         // for e.g. egui::PaintCallback.
         let mut style = (*cc.egui_ctx.style()).clone();
-        style.visuals.panel_fill = Color32::from_rgb(0, 0, 0x33);
-        style.visuals.extreme_bg_color = Color32::from_gray(0x3c);
-        style.visuals.faint_bg_color = Color32::from_rgb(0, 0, 0x44);
-        style.visuals.widgets.noninteractive.bg_stroke.color = Color32::YELLOW;
+        // Palette found using https://coolors.co/005c80-a0a0a0-0d0630-c1ff9b-ce1483
+        // Default blue, eg. selected buttons
+        const _LAPIS_LAZULI: Color32 = Color32::from_rgb(0x0D, 0x5c, 0x80);
+        // Default grey, eg. grid lines
+        const _CADET_GREY: Color32 = Color32::from_rgb(0xa0, 0xa0, 0xa0);
+        const _VIOLET: Color32 = Color32::from_rgb(0x0D, 0x06, 0x30);
+        const LIGHT_GREEN: Color32 = Color32::from_rgb(0xc1, 0xff, 0x9b);
+        const _RED_VIOLET: Color32 = Color32::from_rgb(0xce, 0x14, 0x83);
+        // Accent color
+        const ACCENT: Color32 = LIGHT_GREEN;
+        // Grid color / accent color
+        style.visuals.widgets.noninteractive.bg_stroke.color = ACCENT;
 
         cc.egui_ctx.set_style(style);
 
