@@ -288,13 +288,13 @@ impl Node {
     pub fn get_transactions(
         &self,
         number: usize,
-    ) -> Result<(Vec<AuthorizedTransaction>, u64), Error> {
+    ) -> Result<(Vec<Authorized<FilledTransaction>>, u64), Error> {
         let mut txn = self.env.write_txn()?;
         let transactions = self.mempool.take(&txn, number)?;
         let mut fee: u64 = 0;
         let mut returned_transactions = vec![];
         let mut spent_utxos = HashSet::new();
-        for transaction in &transactions {
+        for transaction in transactions {
             let inputs: HashSet<_> =
                 transaction.transaction.inputs.iter().copied().collect();
             if !spent_utxos.is_disjoint(&inputs) {
@@ -303,28 +303,28 @@ impl Node {
                     .delete(&mut txn, &transaction.transaction.txid())?;
                 continue;
             }
-            if self.validate_transaction(&txn, transaction).is_err() {
+            if self.validate_transaction(&txn, &transaction).is_err() {
                 self.mempool
                     .delete(&mut txn, &transaction.transaction.txid())?;
                 continue;
             }
-            let filled_transaction = self
-                .state
-                .fill_transaction(&txn, &transaction.transaction)?;
+            let filled_transaction =
+                self.state.fill_authorized_transaction(&txn, transaction)?;
             let value_in: u64 = filled_transaction
+                .transaction
                 .spent_utxos
                 .iter()
                 .map(GetValue::get_value)
                 .sum();
             let value_out: u64 = filled_transaction
                 .transaction
-                .outputs
+                .outputs()
                 .iter()
                 .map(GetValue::get_value)
                 .sum();
             fee += value_in - value_out;
-            returned_transactions.push(transaction.clone());
-            spent_utxos.extend(transaction.transaction.inputs.clone());
+            spent_utxos.extend(filled_transaction.transaction.inputs());
+            returned_transactions.push(filled_transaction);
         }
         txn.commit()?;
         Ok((returned_transactions, fee))
@@ -359,8 +359,8 @@ impl Node {
             let height = self.archive.get_height(&txn)?;
             if tracing::enabled!(tracing::Level::DEBUG) {
                 let block_hash = header.hash();
-                let merkle_root = body.compute_merkle_root();
-                self.state.connect_body(&mut txn, body, height)?;
+                let merkle_root =
+                    self.state.connect_body(&mut txn, body, height)?;
                 tracing::debug!(%height, %merkle_root, %block_hash,
                     "connected body")
             } else {

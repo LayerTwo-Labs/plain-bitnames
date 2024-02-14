@@ -1,6 +1,7 @@
 use std::{cmp::Ordering, collections::HashMap};
 
 use bech32::{FromBase32, ToBase32};
+use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 
 use bip300301::bitcoin;
@@ -16,7 +17,7 @@ mod transaction;
 pub use address::*;
 pub use hashes::{BlockHash, Hash, MerkleRoot, Txid};
 pub use transaction::{
-    AuthorizedTransaction, BatchIcannRegistrationData, BitNameData,
+    Authorized, AuthorizedTransaction, BatchIcannRegistrationData, BitNameData,
     BitNameDataUpdates, Content as OutputContent,
     FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
     InPoint, OutPoint, Output, SpentOutput, Transaction, TxData, Update,
@@ -109,14 +110,51 @@ pub trait Verify {
     fn verify_body(body: &Body) -> Result<(), Self::Error>;
 }
 
-/// Wrapper around x25519 pubkeys
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
-pub struct EncryptionPubKey(pub x25519_dalek::PublicKey);
+fn borsh_serialize_x25519_pubkey<W>(
+    pk: &x25519_dalek::PublicKey,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    borsh::BorshSerialize::serialize(pk.as_bytes(), writer)
+}
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Wrapper around x25519 pubkeys
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct EncryptionPubKey(
+    #[borsh(serialize_with = "borsh_serialize_x25519_pubkey")]
+    pub  x25519_dalek::PublicKey,
+);
+
+fn borsh_serialize_bitcoin_block_hash<W>(
+    block_hash: &bitcoin::BlockHash,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    let bytes: &[u8; 32] = block_hash.as_ref();
+    borsh::BorshSerialize::serialize(bytes, writer)
+}
+
+#[derive(BorshSerialize, Clone, Debug, Serialize, Deserialize)]
 pub struct Header {
     pub merkle_root: MerkleRoot,
     pub prev_side_hash: BlockHash,
+    #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
     pub prev_main_hash: bitcoin::BlockHash,
 }
 
@@ -239,6 +277,25 @@ impl Header {
     }
 }
 
+// Marker type for merging branch hashes with branch fee totals
+struct MergeFeeTotal;
+
+impl merkle_cbt::merkle_tree::Merge for MergeFeeTotal {
+    type Item = (Hash, u64);
+
+    fn merge(
+        (lhash, lfees): &Self::Item,
+        (rhash, rfees): &Self::Item,
+    ) -> Self::Item {
+        let fees = lfees + rfees;
+        let hash = hashes::hash(&(lhash, rhash, fees));
+        (hash, fees)
+    }
+}
+
+// Complete binary merkle tree with annotated fee totals for each branch
+type CbmtWithFeeTotal = merkle_cbt::CBMT<(Hash, u64), MergeFeeTotal>;
+
 impl Body {
     pub fn new(
         authorized_transactions: Vec<AuthorizedTransaction>,
@@ -263,9 +320,20 @@ impl Body {
         }
     }
 
-    pub fn compute_merkle_root(&self) -> MerkleRoot {
+    pub fn compute_merkle_root(
+        coinbase: &[Output],
+        txs: &[FilledTransaction],
+    ) -> Option<MerkleRoot> {
+        let (txs_root, _total_fees): (Hash, u64) = {
+            let leaves = txs
+                .iter()
+                .map(|tx| Some((hashes::hash(&tx.transaction), tx.fee()?)))
+                .collect::<Option<Vec<_>>>()?;
+            CbmtWithFeeTotal::build_merkle_root(leaves.as_slice())
+        };
         // FIXME: Compute actual merkle root instead of just a hash.
-        hashes::hash(&(&self.coinbase, &self.transactions)).into()
+        let root = hashes::hash(&(coinbase, txs_root)).into();
+        Some(root)
     }
 
     pub fn get_inputs(&self) -> Vec<OutPoint> {
@@ -276,23 +344,26 @@ impl Body {
             .collect()
     }
 
-    pub fn get_outputs(&self) -> HashMap<OutPoint, Output> {
+    pub fn get_outputs(
+        coinbase: &[Output],
+        txs: &[FilledTransaction],
+    ) -> Option<HashMap<OutPoint, Output>> {
         let mut outputs = HashMap::new();
-        let merkle_root = self.compute_merkle_root();
-        for (vout, output) in self.coinbase.iter().enumerate() {
+        let merkle_root = Self::compute_merkle_root(coinbase, txs)?;
+        for (vout, output) in coinbase.iter().enumerate() {
             let vout = vout as u32;
             let outpoint = OutPoint::Coinbase { merkle_root, vout };
             outputs.insert(outpoint, output.clone());
         }
-        for transaction in &self.transactions {
+        for transaction in txs {
             let txid = transaction.txid();
-            for (vout, output) in transaction.outputs.iter().enumerate() {
+            for (vout, output) in transaction.outputs().iter().enumerate() {
                 let vout = vout as u32;
                 let outpoint = OutPoint::Regular { txid, vout };
                 outputs.insert(outpoint, output.clone());
             }
         }
-        outputs
+        Some(outputs)
     }
 
     pub fn get_coinbase_value(&self) -> u64 {

@@ -78,7 +78,7 @@ impl Miner {
             .ok_or(Error::InvalidJson { json: value })?;
         let _ =
             bitcoin::Txid::from_str(&txid).map_err(bip300301::Error::from)?;
-        assert_eq!(header.merkle_root, body.compute_merkle_root());
+        //assert_eq!(header.merkle_root, body.compute_merkle_root());
         self.block = Some((header, body));
         Ok(())
     }

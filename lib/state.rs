@@ -74,6 +74,8 @@ pub enum Error {
     Heed(#[from] heed::Error),
     #[error("invalid ICANN name: {plain_name}")]
     IcannNameInvalid { plain_name: String },
+    #[error("failed to compute merkle root")]
+    MerkleRoot,
     #[error("missing BitName {name_hash:?}")]
     MissingBitName { name_hash: BitName },
     #[error(
@@ -410,6 +412,19 @@ impl State {
         Ok(FilledTransaction {
             spent_utxos,
             transaction: transaction.clone(),
+        })
+    }
+
+    pub fn fill_authorized_transaction(
+        &self,
+        txn: &RoTxn,
+        transaction: AuthorizedTransaction,
+    ) -> Result<Authorized<FilledTransaction>, Error> {
+        let filled_tx = self.fill_transaction(txn, &transaction.transaction)?;
+        let authorizations = transaction.authorizations;
+        Ok(Authorized {
+            transaction: filled_tx,
+            authorizations,
         })
     }
 
@@ -922,37 +937,8 @@ impl State {
         txn: &mut RwTxn,
         body: &Body,
         height: u32,
-    ) -> Result<(), Error> {
-        let merkle_root = body.compute_merkle_root();
-        for (vout, output) in body.coinbase.iter().enumerate() {
-            let outpoint = OutPoint::Coinbase {
-                merkle_root,
-                vout: vout as u32,
-            };
-            let filled_content = match output.content.clone() {
-                OutputContent::Value(value) => {
-                    FilledOutputContent::Bitcoin(value)
-                }
-                OutputContent::Withdrawal {
-                    value,
-                    main_fee,
-                    main_address,
-                } => FilledOutputContent::BitcoinWithdrawal {
-                    value,
-                    main_fee,
-                    main_address,
-                },
-                OutputContent::BitName | OutputContent::BitNameReservation => {
-                    return Err(Error::BadCoinbaseOutputContent);
-                }
-            };
-            let filled_output = FilledOutput {
-                address: output.address,
-                content: filled_content,
-                memo: output.memo.clone(),
-            };
-            self.utxos.put(txn, &outpoint, &filled_output)?;
-        }
+    ) -> Result<MerkleRoot, Error> {
+        let mut filled_txs: Vec<FilledTransaction> = Vec::new();
         for transaction in &body.transactions {
             let filled_tx = self.fill_transaction(txn, transaction)?;
             let txid = filled_tx.txid();
@@ -1015,7 +1001,42 @@ impl State {
                     )?;
                 }
             }
+            filled_txs.push(filled_tx);
         }
-        Ok(())
+        let merkle_root = Body::compute_merkle_root(
+            body.coinbase.as_slice(),
+            filled_txs.as_slice(),
+        )
+        .ok_or(Error::MerkleRoot)?;
+        for (vout, output) in body.coinbase.iter().enumerate() {
+            let outpoint = OutPoint::Coinbase {
+                merkle_root,
+                vout: vout as u32,
+            };
+            let filled_content = match output.content.clone() {
+                OutputContent::Value(value) => {
+                    FilledOutputContent::Bitcoin(value)
+                }
+                OutputContent::Withdrawal {
+                    value,
+                    main_fee,
+                    main_address,
+                } => FilledOutputContent::BitcoinWithdrawal {
+                    value,
+                    main_fee,
+                    main_address,
+                },
+                OutputContent::BitName | OutputContent::BitNameReservation => {
+                    return Err(Error::BadCoinbaseOutputContent);
+                }
+            };
+            let filled_output = FilledOutput {
+                address: output.address,
+                content: filled_content,
+                memo: output.memo.clone(),
+            };
+            self.utxos.put(txn, &outpoint, &filled_output)?;
+        }
+        Ok(merkle_root)
     }
 }

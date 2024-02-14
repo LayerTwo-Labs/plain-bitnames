@@ -1,7 +1,9 @@
+use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeAs, DisplayFromStr};
 
-#[derive(Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(BorshSerialize, Clone, Copy, Eq, Hash, PartialEq)]
+#[repr(transparent)]
 pub struct Address(pub [u8; 20]);
 
 impl Address {
@@ -63,9 +65,9 @@ impl Serialize for Address {
         S: serde::Serializer,
     {
         if serializer.is_human_readable() {
-            self.to_base58().serialize(serializer)
+            Serialize::serialize(&self.to_base58(), serializer)
         } else {
-            self.0.serialize(serializer)
+            Serialize::serialize(&self.0, serializer)
         }
     }
 }

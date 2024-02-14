@@ -13,7 +13,7 @@ use plain_bitnames::{
     miner::{self, Miner},
     node::{self, Node, THIS_SIDECHAIN},
     types::{
-        self, hashes::BitName, FilledOutput, GetValue, InPoint, OutPoint,
+        self, hashes::BitName, Body, FilledOutput, GetValue, InPoint, OutPoint,
         Transaction,
     },
     wallet::{self, Wallet},
@@ -255,7 +255,19 @@ impl App {
                 types::OutputContent::Value(tx_fees),
             )],
         };
-        let body = types::Body::new(txs, coinbase);
+        let merkle_root = {
+            let txs = txs
+                .iter()
+                .map(|authorized_tx| authorized_tx.transaction.clone())
+                .collect::<Vec<_>>();
+            Body::compute_merkle_root(&coinbase, &txs).ok_or(Error::Other(
+                anyhow::anyhow!("Failed to compute merkle root"),
+            ))
+        }?;
+        let body = {
+            let txs = txs.into_iter().map(|tx| tx.into()).collect();
+            Body::new(txs, coinbase)
+        };
         let prev_side_hash = self.node.get_best_hash()?;
         let prev_main_hash = self
             .miner
@@ -265,7 +277,7 @@ impl App {
             .get_mainchain_tip()
             .await?;
         let header = types::Header {
-            merkle_root: body.compute_merkle_root(),
+            merkle_root,
             prev_side_hash,
             prev_main_hash,
         };

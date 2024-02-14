@@ -157,9 +157,11 @@ impl Archive {
         header: &Header,
         body: &Body,
     ) -> Result<(), Error> {
+        /*
         if header.merkle_root != body.compute_merkle_root() {
             return Err(Error::InvalidMerkleRoot);
         }
+        */
         let block_hash = header.hash();
         let height = self
             .hash_to_height

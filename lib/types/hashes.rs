@@ -1,5 +1,6 @@
 use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
+use borsh::BorshSerialize;
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
 
@@ -7,7 +8,19 @@ pub type Hash = [u8; blake3::OUT_LEN];
 
 use super::serde_hexstr_human_readable;
 
-#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+)]
+#[repr(transparent)]
+#[serde(transparent)]
 pub struct BlockHash(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
 
 impl From<Hash> for BlockHash {
@@ -55,7 +68,19 @@ impl std::fmt::Debug for BlockHash {
     }
 }
 
-#[derive(Default, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Default,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+)]
+#[repr(transparent)]
+#[serde(transparent)]
 pub struct MerkleRoot(#[serde(with = "serde_hexstr_human_readable")] Hash);
 
 impl From<Hash> for MerkleRoot {
@@ -83,17 +108,20 @@ impl std::fmt::Debug for MerkleRoot {
 }
 
 #[derive(
+    BorshSerialize,
     Clone,
     Copy,
     Default,
+    Deserialize,
     Eq,
     Hash,
     Ord,
     PartialEq,
     PartialOrd,
     Serialize,
-    Deserialize,
 )]
+#[repr(transparent)]
+#[serde(transparent)]
 pub struct Txid(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
 
 impl Txid {
@@ -134,6 +162,7 @@ impl std::fmt::Debug for Txid {
 
 /// Identifier for a BitName
 #[derive(
+    BorshSerialize,
     Clone,
     Copy,
     Debug,
@@ -146,16 +175,14 @@ impl std::fmt::Debug for Txid {
     Serialize,
 )]
 #[repr(transparent)]
+#[serde(transparent)]
 pub struct BitName(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
 
-pub fn hash<T: serde::Serialize>(data: &T) -> Hash {
-    let data_serialized = bincode::serialize(data)
-        .expect("failed to serialize a type to compute a hash");
+pub fn hash<T>(data: &T) -> Hash
+where
+    T: BorshSerialize,
+{
+    let data_serialized = borsh::to_vec(data)
+        .expect("failed to serialize with borsh to compute a hash");
     blake3::hash(&data_serialized).into()
-}
-
-pub fn update<T: serde::Serialize>(hasher: &mut blake3::Hasher, data: &T) {
-    let data_serialized = bincode::serialize(data)
-        .expect("failed to serialize a type to compute a hash");
-    let _hasher = hasher.update(&data_serialized);
 }

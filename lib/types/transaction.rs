@@ -3,6 +3,8 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
+use borsh::BorshSerialize;
+use ed25519_dalek::ed25519::signature::Signature as _;
 use educe::Educe;
 use serde::{Deserialize, Serialize};
 
@@ -16,14 +18,45 @@ use super::{
 };
 use crate::authorization::{Authorization, PublicKey, Signature};
 
-#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+fn borsh_serialize_bitcoin_outpoint<W>(
+    block_hash: &bitcoin::OutPoint,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    let bitcoin::OutPoint { txid, vout } = block_hash;
+    let txid_bytes: &[u8; 32] = txid.as_ref();
+    borsh::BorshSerialize::serialize(&(txid_bytes, vout), writer)
+}
+
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+)]
 pub enum OutPoint {
     // Created by transactions.
-    Regular { txid: Txid, vout: u32 },
+    Regular {
+        txid: Txid,
+        vout: u32,
+    },
     // Created by block bodies.
-    Coinbase { merkle_root: MerkleRoot, vout: u32 },
+    Coinbase {
+        merkle_root: MerkleRoot,
+        vout: u32,
+    },
     // Created by mainchain deposits.
-    Deposit(bitcoin::OutPoint),
+    Deposit(
+        #[borsh(serialize_with = "borsh_serialize_bitcoin_outpoint")]
+        bitcoin::OutPoint,
+    ),
 }
 
 /// Reference to a tx input.
@@ -41,7 +74,24 @@ pub enum InPoint {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+fn borsh_serialize_bitcoin_address<V, W>(
+    bitcoin_address: &bitcoin::Address<V>,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    V: bitcoin::address::NetworkValidation,
+    W: borsh::io::Write,
+{
+    let spk = bitcoin_address
+        .as_unchecked()
+        .assume_checked_ref()
+        .script_pubkey();
+    borsh::BorshSerialize::serialize(spk.as_bytes(), writer)
+}
+
+#[derive(
+    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+)]
 pub enum Content {
     BitName,
     BitNameReservation,
@@ -49,11 +99,14 @@ pub enum Content {
     Withdrawal {
         value: u64,
         main_fee: u64,
+        #[borsh(serialize_with = "borsh_serialize_bitcoin_address")]
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+)]
 pub struct Output {
     #[serde(with = "serde_display_fromstr_human_readable")]
     pub address: Address,
@@ -74,8 +127,26 @@ where
     pk.map(|pk| pk.to_bytes()).hash(state)
 }
 
+fn borsh_serialize_option_pubkey<W>(
+    pk: &Option<PublicKey>,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    borsh::BorshSerialize::serialize(&pk.map(|pk| pk.to_bytes()), writer)
+}
+
 #[derive(
-    Clone, Debug, Default, Educe, Eq, PartialEq, Serialize, Deserialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Default,
+    Deserialize,
+    Educe,
+    Eq,
+    PartialEq,
+    Serialize,
 )]
 #[educe(Hash)]
 pub struct BitNameData {
@@ -88,6 +159,7 @@ pub struct BitNameData {
     /// optional pubkey used for encryption
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// optional pubkey used for signing messages
+    #[borsh(serialize_with = "borsh_serialize_option_pubkey")]
     #[educe(Hash(method = "hash_option_public_key"))]
     pub signing_pubkey: Option<PublicKey>,
     /// optional minimum paymail fee, in sats
@@ -95,15 +167,30 @@ pub struct BitNameData {
 }
 
 /// delete, retain, or set a value
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
 pub enum Update<T> {
     Delete,
     Retain,
     Set(T),
 }
 
+fn borsh_serialize_update_pubkey<W>(
+    update: &Update<PublicKey>,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    let update = match update {
+        Update::Delete => Update::Delete,
+        Update::Retain => Update::Retain,
+        Update::Set(value) => Update::Set(value.as_bytes()),
+    };
+    borsh::BorshSerialize::serialize(&update, writer)
+}
+
 /// updates to the data associated with a BitName
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
 pub struct BitNameDataUpdates {
     /// commitment to arbitrary data
     pub commitment: Update<Hash>,
@@ -114,22 +201,34 @@ pub struct BitNameDataUpdates {
     /// optional pubkey used for encryption
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// optional pubkey used for signing messages
+    #[borsh(serialize_with = "borsh_serialize_update_pubkey")]
     pub signing_pubkey: Update<PublicKey>,
     /// optional minimum paymail fee, in sats
     pub paymail_fee: Update<u64>,
 }
 
+fn borsh_serialize_signature<W>(
+    sig: &Signature,
+    writer: &mut W,
+) -> borsh::io::Result<()>
+where
+    W: borsh::io::Write,
+{
+    borsh::BorshSerialize::serialize(&sig.as_bytes(), writer)
+}
+
 /// batch icann registration tx payload
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
 pub struct BatchIcannRegistrationData {
-    /// plaintext names of the bitnames to be registered as ICANN domains
+    /// Plaintext names of the bitnames to be registered as ICANN domains
     pub plain_names: Vec<String>,
-    /// signature over the batch icann registration tx
+    /// Signature over the batch icann registration tx
+    #[borsh(serialize_with = "borsh_serialize_signature")]
     pub signature: Signature,
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
 pub enum TransactionData {
     BitNameReservation {
         /// commitment to the BitName that will be registered
@@ -151,7 +250,7 @@ pub enum TransactionData {
 
 pub type TxData = TransactionData;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(BorshSerialize, Clone, Debug, Default, Deserialize, Serialize)]
 pub struct Transaction {
     pub inputs: TxInputs,
     pub outputs: TxOutputs,
@@ -192,17 +291,28 @@ pub struct SpentOutput {
     pub inpoint: InPoint,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FilledTransaction {
     pub transaction: Transaction,
     pub spent_utxos: Vec<FilledOutput>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthorizedTransaction {
-    pub transaction: Transaction,
-    /// Authorization is called witness in Bitcoin.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Authorized<T> {
+    pub transaction: T,
+    /// Authorizations are called witnesses in Bitcoin.
     pub authorizations: Vec<Authorization>,
+}
+
+pub type AuthorizedTransaction = Authorized<Transaction>;
+
+impl From<Authorized<FilledTransaction>> for AuthorizedTransaction {
+    fn from(tx: Authorized<FilledTransaction>) -> Self {
+        Self {
+            transaction: tx.transaction.transaction,
+            authorizations: tx.authorizations,
+        }
+    }
 }
 
 impl std::fmt::Display for OutPoint {
