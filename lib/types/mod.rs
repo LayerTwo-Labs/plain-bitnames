@@ -277,24 +277,63 @@ impl Header {
     }
 }
 
-// Marker type for merging branch hashes with branch fee totals
-struct MergeFeeTotal;
+// Internal node of a CBMT
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct CbmtNode {
+    // Commitment to child nodes or leaf value
+    commitment: Hash,
+    // Sum of fees for child nodes or leaf value
+    fees: u64,
+    // Sum of canonical tx sizes for child nodes or leaf value
+    canonical_size: u64,
+    // CBT index, see https://github.com/nervosnetwork/merkle-tree/blob/5d1898263e7167560fdaa62f09e8d52991a1c712/README.md#tree-struct
+    // This is required so that `CbmtNode` can be `Ord` correctly
+    index: usize,
+}
 
-impl merkle_cbt::merkle_tree::Merge for MergeFeeTotal {
-    type Item = (Hash, u64);
-
-    fn merge(
-        (lhash, lfees): &Self::Item,
-        (rhash, rfees): &Self::Item,
-    ) -> Self::Item {
-        let fees = lfees + rfees;
-        let hash = hashes::hash(&(lhash, rhash, fees));
-        (hash, fees)
+impl PartialOrd for CbmtNode {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
-// Complete binary merkle tree with annotated fee totals for each branch
-type CbmtWithFeeTotal = merkle_cbt::CBMT<(Hash, u64), MergeFeeTotal>;
+impl Ord for CbmtNode {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.index.cmp(&other.index)
+    }
+}
+
+// Marker type for merging branch commitments with
+// * branch fee totals
+// * branch canonical size totals
+struct MergeFeeSizeTotal;
+
+impl merkle_cbt::merkle_tree::Merge for MergeFeeSizeTotal {
+    type Item = CbmtNode;
+
+    fn merge(lnode: &Self::Item, rnode: &Self::Item) -> Self::Item {
+        let fees = lnode.fees + rnode.fees;
+        let canonical_size = lnode.canonical_size + rnode.canonical_size;
+        // see https://github.com/nervosnetwork/merkle-tree/blob/5d1898263e7167560fdaa62f09e8d52991a1c712/README.md#tree-struct
+        assert_eq!(lnode.index + 1, rnode.index);
+        let index = (lnode.index - 1) / 2;
+        let commitment = hashes::hash(&(
+            lnode.commitment,
+            rnode.commitment,
+            fees,
+            canonical_size,
+        ));
+        Self::Item {
+            commitment,
+            fees,
+            canonical_size,
+            index,
+        }
+    }
+}
+
+// Complete binary merkle tree with annotated fee and canonical size totals
+type CbmtWithFeeTotal = merkle_cbt::CBMT<CbmtNode, MergeFeeSizeTotal>;
 
 impl Body {
     pub fn new(
@@ -324,14 +363,28 @@ impl Body {
         coinbase: &[Output],
         txs: &[FilledTransaction],
     ) -> Option<MerkleRoot> {
-        let (txs_root, _total_fees): (Hash, u64) = {
+        let CbmtNode {
+            commitment: txs_root,
+            ..
+        } = {
+            let n_txs = txs.len();
             let leaves = txs
                 .iter()
-                .map(|tx| Some((hashes::hash(&tx.transaction), tx.fee()?)))
+                .enumerate()
+                .map(|(idx, tx)| {
+                    Some(CbmtNode {
+                        commitment: hashes::hash(&tx.transaction),
+                        fees: tx.fee()?,
+                        canonical_size: tx.transaction.canonical_size(),
+                        // see https://github.com/nervosnetwork/merkle-tree/blob/5d1898263e7167560fdaa62f09e8d52991a1c712/README.md#tree-struct
+                        index: (idx + n_txs) - 1,
+                    })
+                })
                 .collect::<Option<Vec<_>>>()?;
             CbmtWithFeeTotal::build_merkle_root(leaves.as_slice())
         };
         // FIXME: Compute actual merkle root instead of just a hash.
+        // TODO: Should this include `total_fees`?
         let root = hashes::hash(&(coinbase, txs_root)).into();
         Some(root)
     }
