@@ -3,8 +3,11 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-use heed::types::*;
-use heed::{Database, RoTxn, RwTxn};
+use hashes::MerkleRoot;
+use heed::{
+    types::{OwnedType, SerdeBincode},
+    Database, RoTxn, RwTxn,
+};
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 
@@ -14,10 +17,17 @@ use bip300301::{
     TwoWayPegData, WithdrawalBundleStatus,
 };
 
-use crate::types::{self, *};
 use crate::{
-    authorization::{Authorization, PublicKey},
-    types::hashes::BitName,
+    authorization::{Authorization, VerifyingKey},
+    types::{
+        self, constants,
+        hashes::{self, BitName},
+        Address, AggregatedWithdrawal, Authorized, AuthorizedTransaction,
+        BatchIcannRegistrationData, BitNameDataUpdates, Body, EncryptionPubKey,
+        FilledOutput, FilledOutputContent, FilledTransaction, GetAddress as _,
+        GetValue as _, Hash, InPoint, OutPoint, OutputContent, SpentOutput,
+        Transaction, TxData, Txid, Update, Verify as _, WithdrawalBundle,
+    },
 };
 
 /** Data of type `T` paired with
@@ -51,7 +61,7 @@ pub struct BitNameData {
     /// optional pubkey used for encryption
     encryption_pubkey: RollBack<Option<EncryptionPubKey>>,
     /// optional pubkey used for signing messages
-    signing_pubkey: RollBack<Option<PublicKey>>,
+    signing_pubkey: RollBack<Option<VerifyingKey>>,
     /// optional minimum paymail fee, in sats
     paymail_fee: RollBack<Option<u64>>,
 }
@@ -686,7 +696,7 @@ impl State {
                 &tx.transaction.outputs,
                 &batch_icann_data.plain_names,
             ));
-            constants::BATCH_ICANN_PUBKEY
+            constants::BATCH_ICANN_VERIFYING_KEY
                 .verify_strict(&msg_hash, &batch_icann_data.signature)?;
         }
         Ok(())

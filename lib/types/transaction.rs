@@ -4,7 +4,6 @@ use std::{
 };
 
 use borsh::BorshSerialize;
-use ed25519_dalek::ed25519::signature::Signature as _;
 use educe::Educe;
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +15,7 @@ use super::{
     serde_display_fromstr_human_readable, serde_hexstr_human_readable,
     EncryptionPubKey, GetValue,
 };
-use crate::authorization::{Authorization, PublicKey, Signature};
+use crate::authorization::{Authorization, Signature, VerifyingKey};
 
 fn borsh_serialize_bitcoin_outpoint<W>(
     block_hash: &bitcoin::OutPoint,
@@ -119,7 +118,7 @@ pub type TxInputs = Vec<OutPoint>;
 
 pub type TxOutputs = Vec<Output>;
 
-fn hash_option_public_key<H>(pk: &Option<PublicKey>, state: &mut H)
+fn hash_option_verifying_key<H>(pk: &Option<VerifyingKey>, state: &mut H)
 where
     H: Hasher,
 {
@@ -127,8 +126,8 @@ where
     pk.map(|pk| pk.to_bytes()).hash(state)
 }
 
-fn borsh_serialize_option_pubkey<W>(
-    pk: &Option<PublicKey>,
+fn borsh_serialize_option_verifying_key<W>(
+    pk: &Option<VerifyingKey>,
     writer: &mut W,
 ) -> borsh::io::Result<()>
 where
@@ -159,9 +158,9 @@ pub struct BitNameData {
     /// optional pubkey used for encryption
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// optional pubkey used for signing messages
-    #[borsh(serialize_with = "borsh_serialize_option_pubkey")]
-    #[educe(Hash(method = "hash_option_public_key"))]
-    pub signing_pubkey: Option<PublicKey>,
+    #[borsh(serialize_with = "borsh_serialize_option_verifying_key")]
+    #[educe(Hash(method = "hash_option_verifying_key"))]
+    pub signing_pubkey: Option<VerifyingKey>,
     /// optional minimum paymail fee, in sats
     pub paymail_fee: Option<u64>,
 }
@@ -175,7 +174,7 @@ pub enum Update<T> {
 }
 
 fn borsh_serialize_update_pubkey<W>(
-    update: &Update<PublicKey>,
+    update: &Update<VerifyingKey>,
     writer: &mut W,
 ) -> borsh::io::Result<()>
 where
@@ -202,7 +201,7 @@ pub struct BitNameDataUpdates {
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// optional pubkey used for signing messages
     #[borsh(serialize_with = "borsh_serialize_update_pubkey")]
-    pub signing_pubkey: Update<PublicKey>,
+    pub signing_pubkey: Update<VerifyingKey>,
     /// optional minimum paymail fee, in sats
     pub paymail_fee: Update<u64>,
 }
@@ -214,7 +213,7 @@ fn borsh_serialize_signature<W>(
 where
     W: borsh::io::Write,
 {
-    borsh::BorshSerialize::serialize(&sig.as_bytes(), writer)
+    borsh::BorshSerialize::serialize(&sig.to_bytes(), writer)
 }
 
 /// batch icann registration tx payload
