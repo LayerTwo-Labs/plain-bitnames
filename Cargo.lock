@@ -3278,9 +3278,10 @@ checksum = "2900ede94e305130c13ddd391e0ab7cbaeb783945ae07a279c268cb05109c6cb"
 
 [[package]]
 name = "plain_bitnames"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "addr",
+ "anyhow",
  "async_zmq",
  "bech32 0.9.1",
  "bincode",
@@ -3308,6 +3309,7 @@ dependencies = [
  "serde_with",
  "sha256",
  "thiserror",
+ "tiny-bip39",
  "tokio",
  "tracing",
  "x25519-dalek",
@@ -3315,7 +3317,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "anyhow",
  "async_zmq",
