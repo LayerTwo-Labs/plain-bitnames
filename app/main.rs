@@ -30,6 +30,7 @@ fn main() -> anyhow::Result<()> {
     let config = cli.get_config()?;
     let () = set_tracing_subscriber(config.log_level);
     let app = app::App::new(&config)?;
+
     // spawn rpc server
     app.runtime.spawn({
         let app = app.clone();

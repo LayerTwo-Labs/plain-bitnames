@@ -3,13 +3,14 @@ use eframe::egui;
 use libes::key::conversion::PublicKeyFrom;
 use plain_bitnames::types::EncryptionPubKey;
 
-use super::util::{Ecies, InnerResponseExt, UiExt};
+use super::util::{borsh_deserialize_hex, Ecies, InnerResponseExt, UiExt};
 use crate::app::App;
 
 #[derive(Debug)]
 pub struct EncryptMessage {
-    receiver_pubkey_string: String,
-    // none if not yet set, otherwise result of parsing receiver pubkey
+    // pubkey or BitName
+    receiver_input: String,
+    // none if not yet set, otherwise result of parsing/resolving receiver pubkey
     receiver_pubkey: Option<anyhow::Result<EncryptionPubKey>>,
     plaintext: String,
     // none if not yet computed, otherwise result of attempting to encrypt
@@ -19,7 +20,7 @@ pub struct EncryptMessage {
 impl EncryptMessage {
     pub fn new() -> Self {
         Self {
-            receiver_pubkey_string: String::new(),
+            receiver_input: String::new(),
             receiver_pubkey: None,
             plaintext: String::new(),
             ciphertext: None,
@@ -27,27 +28,45 @@ impl EncryptMessage {
     }
 
     fn show_error(ui: &mut egui::Ui, error: &anyhow::Error) {
+        ui.monospace_selectable_singleline(false, "Error: ");
         ui.horizontal_wrapped(|ui| {
-            ui.monospace("Error: ");
-            ui.code(format!("{error}"));
+            ui.monospace_selectable_multiline(format!("{error:#}"));
         });
     }
 
-    pub fn show(&mut self, _app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
         ui.heading("Encrypt Message");
-        let receiver_pubkey_response = ui
+        let receiver_input_response = ui
             .horizontal(|ui| {
-                ui.monospace("Receiver's Encryption Pubkey (Bech32m): ")
-                    | ui.add(egui::TextEdit::singleline(
-                        &mut self.receiver_pubkey_string,
-                    ))
+                ui.monospace(
+                    "Receiver's BitName or Encryption Pubkey (Bech32m): ",
+                ) | ui.add(egui::TextEdit::singleline(&mut self.receiver_input))
             })
             .join();
-        if receiver_pubkey_response.changed() {
-            self.receiver_pubkey = Some(
-                EncryptionPubKey::bech32m_decode(&self.receiver_pubkey_string)
-                    .map_err(anyhow::Error::new),
-            );
+        if receiver_input_response.changed() {
+            let receiver_pubkey: anyhow::Result<EncryptionPubKey> = {
+                if let Ok(bitname) = borsh_deserialize_hex(&self.receiver_input)
+                {
+                    app.node
+                        .get_current_bitname_data(&bitname)
+                        .map_err(anyhow::Error::from)
+                        .and_then(|bitname_data| {
+                            bitname_data.encryption_pubkey.ok_or(
+                                anyhow::anyhow!(
+                                "No encryption pubkey exists for this BitName"
+                        ),
+                            )
+                        })
+                } else {
+                    EncryptionPubKey::bech32m_decode(&self.receiver_input)
+                        .map_err(|_| {
+                            anyhow::anyhow!(
+                                "Failed to parse BitName or Encryption Pubkey"
+                            )
+                        })
+                }
+            };
+            self.receiver_pubkey = Some(receiver_pubkey);
         }
         let plaintext_response = ui
             .horizontal_wrapped(|ui| {
@@ -67,7 +86,7 @@ impl EncryptMessage {
             Some(Ok(receiver_pubkey)) => receiver_pubkey,
         };
         // regenerate ciphertext if possible
-        if receiver_pubkey_response.changed() || plaintext_response.changed() {
+        if receiver_input_response.changed() || plaintext_response.changed() {
             let receiver_pubkey =
                 libes::key::X25519::pk_from(receiver_pubkey.0);
             self.ciphertext = Some(

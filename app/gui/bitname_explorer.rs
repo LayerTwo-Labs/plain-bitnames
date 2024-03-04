@@ -42,37 +42,45 @@ pub fn show_bitname_data(
     let paymail_fee = paymail_fee
         .map_or("Not set".to_owned(), |paymail_fee| paymail_fee.to_string());
     ui.horizontal(|ui| {
-        ui.monospace_selectable_singleline(format!("Commitment: {commitment}"))
+        ui.monospace_selectable_singleline(
+            true,
+            format!("Commitment: {commitment}"),
+        )
     })
     .join()
         | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!(
-                "IPv4 Address: {ipv4_addr}"
-            ))
+            ui.monospace_selectable_singleline(
+                false,
+                format!("IPv4 Address: {ipv4_addr}"),
+            )
         })
         .join()
         | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!(
-                "IPv6 Address: {ipv6_addr}"
-            ))
+            ui.monospace_selectable_singleline(
+                false,
+                format!("IPv6 Address: {ipv6_addr}"),
+            )
         })
         .join()
         | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!(
-                "Encryption Pubkey: {encryption_pubkey}"
-            ))
+            ui.monospace_selectable_singleline(
+                true,
+                format!("Encryption Pubkey: {encryption_pubkey}"),
+            )
         })
         .join()
         | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!(
-                "Signing Pubkey: {signing_pubkey}"
-            ))
+            ui.monospace_selectable_singleline(
+                true,
+                format!("Signing Pubkey: {signing_pubkey}"),
+            )
         })
         .join()
         | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(format!(
-                "Paymail fee: {paymail_fee}"
-            ))
+            ui.monospace_selectable_singleline(
+                false,
+                format!("Paymail fee: {paymail_fee}"),
+            )
         })
         .join()
 }

@@ -56,15 +56,18 @@ impl MyBitnames {
                             let txid = hex::encode(txid.0);
                             let commitment = hex::encode(commitment);
                             ui.vertical(|ui| {
-                                ui.monospace_selectable_singleline(format!(
-                                    "plaintext name: {plaintext_name}"
-                                ));
-                                ui.monospace_selectable_singleline(format!(
-                                    "txid: {txid}"
-                                ));
-                                ui.monospace_selectable_singleline(format!(
-                                    "commitment: {commitment}"
-                                ));
+                                ui.monospace_selectable_singleline(
+                                    true,
+                                    format!("plaintext name: {plaintext_name}"),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    true,
+                                    format!("txid: {txid}"),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    true,
+                                    format!("commitment: {commitment}"),
+                                );
                             });
                             ui.end_row()
                         }
@@ -74,12 +77,14 @@ impl MyBitnames {
                             let txid = hex::encode(txid.0);
                             let commitment = hex::encode(commitment);
                             ui.vertical(|ui| {
-                                ui.monospace_selectable_singleline(format!(
-                                    "txid: {txid}"
-                                ));
-                                ui.monospace_selectable_singleline(format!(
-                                    "commitment: {commitment}"
-                                ));
+                                ui.monospace_selectable_singleline(
+                                    true,
+                                    format!("txid: {txid}"),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    true,
+                                    format!("commitment: {commitment}"),
+                                );
                             });
                             ui.end_row()
                         }
@@ -122,21 +127,25 @@ impl MyBitnames {
                     .show(ui, |ui| {
                         for (bitname, plaintext_name) in known_name_bitnames {
                             ui.vertical(|ui| {
-                                ui.monospace_selectable_singleline(format!(
-                                    "plaintext name: {plaintext_name}"
-                                ));
-                                ui.monospace_selectable_singleline(format!(
-                                    "bitname: {}",
-                                    hex::encode(bitname.0)
-                                ));
+                                ui.monospace_selectable_singleline(
+                                    true,
+                                    format!("plaintext name: {plaintext_name}"),
+                                );
+                                ui.monospace_selectable_singleline(
+                                    true,
+                                    format!(
+                                        "bitname: {}",
+                                        hex::encode(bitname.0)
+                                    ),
+                                );
                             });
                             ui.end_row()
                         }
                         for bitname in unknown_name_bitnames {
-                            ui.monospace_selectable_singleline(format!(
-                                "bitname: {}",
-                                hex::encode(bitname.0)
-                            ));
+                            ui.monospace_selectable_singleline(
+                                true,
+                                format!("bitname: {}", hex::encode(bitname.0)),
+                            );
                             ui.end_row()
                         }
                     });

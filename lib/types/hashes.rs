@@ -1,6 +1,6 @@
 use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
 
@@ -162,6 +162,7 @@ impl std::fmt::Debug for Txid {
 
 /// Identifier for a BitName
 #[derive(
+    BorshDeserialize,
     BorshSerialize,
     Clone,
     Copy,
@@ -177,6 +178,12 @@ impl std::fmt::Debug for Txid {
 #[repr(transparent)]
 #[serde(transparent)]
 pub struct BitName(#[serde(with = "serde_hexstr_human_readable")] pub Hash);
+
+impl std::fmt::Display for BitName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
 
 pub fn hash<T>(data: &T) -> Hash
 where

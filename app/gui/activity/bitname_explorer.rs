@@ -22,10 +22,13 @@ impl BitNameExplorer {
                 .map(|(bitname_id, bitname_data)| {
                     {
                         ui.horizontal(|ui| {
-                            ui.monospace_selectable_singleline(format!(
-                                "BitName ID: {}",
-                                hex::encode(bitname_id.0)
-                            )) | crate::gui::bitname_explorer::show_bitname_data(
+                            ui.monospace_selectable_singleline(
+                                true,
+                                format!(
+                                    "BitName ID: {}",
+                                    hex::encode(bitname_id.0)
+                                ),
+                            ) | crate::gui::bitname_explorer::show_bitname_data(
                                 ui,
                                 &bitname_data,
                             )

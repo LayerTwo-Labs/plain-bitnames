@@ -1,5 +1,6 @@
 use std::borrow::Borrow;
 
+use borsh::BorshDeserialize;
 use eframe::egui::{self, InnerResponse, Response, Ui};
 use libes::{auth::HmacSha256, enc::Aes256Gcm, key::X25519};
 
@@ -13,7 +14,11 @@ pub trait InnerResponseExt {
 
 /// extension trait for egui::Ui
 pub trait UiExt {
-    fn monospace_selectable_singleline<Text>(&mut self, text: Text) -> Response
+    fn monospace_selectable_singleline<Text>(
+        &mut self,
+        clip_text: bool,
+        text: Text,
+    ) -> Response
     where
         Text: Borrow<str>;
 
@@ -38,7 +43,11 @@ impl InnerResponseExt for InnerResponse<Option<Response>> {
 }
 
 impl UiExt for Ui {
-    fn monospace_selectable_singleline<Text>(&mut self, text: Text) -> Response
+    fn monospace_selectable_singleline<Text>(
+        &mut self,
+        clip_text: bool,
+        text: Text,
+    ) -> Response
     where
         Text: Borrow<str>,
     {
@@ -46,6 +55,7 @@ impl UiExt for Ui {
         let mut text: &str = text.borrow();
         TextEdit::singleline(&mut text)
             .font(TextStyle::Monospace)
+            .clip_text(clip_text)
             .ui(self)
     }
 
@@ -58,5 +68,16 @@ impl UiExt for Ui {
         TextEdit::multiline(&mut text)
             .font(TextStyle::Monospace)
             .ui(self)
+    }
+}
+
+pub fn borsh_deserialize_hex<T>(hex: impl AsRef<[u8]>) -> anyhow::Result<T>
+where
+    T: BorshDeserialize,
+{
+    match hex::decode(hex) {
+        Ok(bytes) => borsh::BorshDeserialize::try_from_slice(&bytes)
+            .map_err(anyhow::Error::new),
+        Err(err) => Err(anyhow::Error::new(err)),
     }
 }

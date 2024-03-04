@@ -72,9 +72,9 @@ pub enum Error {
     AuthorizationError,
     #[error("bad coinbase output content")]
     BadCoinbaseOutputContent,
-    #[error("bitname {name_hash:?} already registered")]
+    #[error("bitname {name_hash} already registered")]
     BitNameAlreadyRegistered { name_hash: BitName },
-    #[error("bitname {name_hash:?} already registered as an ICANN name")]
+    #[error("bitname {name_hash} already registered as an ICANN name")]
     BitNameAlreadyIcann { name_hash: BitName },
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
@@ -86,16 +86,16 @@ pub enum Error {
     IcannNameInvalid { plain_name: String },
     #[error("failed to compute merkle root")]
     MerkleRoot,
-    #[error("missing BitName {name_hash:?}")]
+    #[error("missing BitName {name_hash}")]
     MissingBitName { name_hash: BitName },
     #[error(
-        "Missing BitName data for {name_hash:?} at block height {block_height}"
+        "Missing BitName data for {name_hash} at block height {block_height}"
     )]
     MissingBitNameData {
         name_hash: BitName,
         block_height: u32,
     },
-    #[error("missing BitName input {name_hash:?}")]
+    #[error("missing BitName input {name_hash}")]
     MissingBitNameInput { name_hash: BitName },
     #[error("missing BitName reservation {txid}")]
     MissingReservation { txid: Txid },
