@@ -635,7 +635,7 @@ dependencies = [
 [[package]]
 name = "bip300301"
 version = "0.1.1"
-source = "git+https://github.com/Ash-L2L/bip300301.git?rev=1bd864165a8cd1beaa1c7816b845d766ae563a3f#1bd864165a8cd1beaa1c7816b845d766ae563a3f"
+source = "git+https://github.com/Ash-L2L/bip300301.git?rev=c6e410e702f3d22f5801f21ffdf39edece3985df#c6e410e702f3d22f5801f21ffdf39edece3985df"
 dependencies = [
  "base64 0.21.7",
  "bitcoin",
@@ -3587,7 +3587,7 @@ checksum = "d231b230927b5e4ad203db57bbcbee2802f6bce620b1e4a9024a07d94e2907ec"
 
 [[package]]
 name = "plain_bitnames"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "addr",
  "anyhow",
@@ -3626,7 +3626,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app"
-version = "0.5.8"
+version = "0.5.9"
 dependencies = [
  "anyhow",
  "async_zmq",
@@ -3649,6 +3649,7 @@ dependencies = [
  "parking_lot",
  "plain_bitnames",
  "serde",
+ "strum",
  "tempfile",
  "test-log",
  "thiserror",
@@ -4156,6 +4157,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustversion"
+version = "1.0.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ffc183a10b4478d04cbbbfc96d0873219d962dd5accaff2ffbd4ceb7df837f4"
+
+[[package]]
 name = "ryu"
 version = "1.0.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4590,6 +4597,28 @@ name = "strsim"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5ee073c9e4cd00e28217186dbe12796d692868f432bf2e97ee73bed0c56dfa01"
+
+[[package]]
+name = "strum"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "290d54ea6f91c969195bdbcd7442c8c2a2ba87da8bf60a7ee86a235d4bc1e125"
+dependencies = [
+ "strum_macros",
+]
+
+[[package]]
+name = "strum_macros"
+version = "0.25.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23dc1fa9ac9c169a78ba62f0b841814b7abae11bdd047b9c58f893439e309ea0"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "rustversion",
+ "syn 2.0.52",
+]
 
 [[package]]
 name = "subtle"

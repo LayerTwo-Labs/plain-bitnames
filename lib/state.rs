@@ -1049,4 +1049,37 @@ impl State {
         }
         Ok(merkle_root)
     }
+
+    /// Get total sidechain wealth in Bitcoin
+    pub fn sidechain_wealth(
+        &self,
+        rotxn: &RoTxn,
+    ) -> Result<BitcoinAmount, Error> {
+        let mut total_deposit_utxo_value: u64 = 0;
+        self.utxos.iter(rotxn)?.try_for_each(|utxo| {
+            let (outpoint, output) = utxo?;
+            if let OutPoint::Deposit(_) = outpoint {
+                total_deposit_utxo_value += output.get_value();
+            }
+            Ok::<_, Error>(())
+        })?;
+        let mut total_deposit_stxo_value: u64 = 0;
+        let mut total_withdrawal_stxo_value: u64 = 0;
+        self.stxos.iter(rotxn)?.try_for_each(|stxo| {
+            let (outpoint, spent_output) = stxo?;
+            if let OutPoint::Deposit(_) = outpoint {
+                total_deposit_stxo_value += spent_output.output.get_value();
+            }
+            if let InPoint::Withdrawal { .. } = spent_output.inpoint {
+                total_withdrawal_stxo_value += spent_output.output.get_value();
+            }
+            Ok::<_, Error>(())
+        })?;
+
+        let total_wealth_sats: u64 = (total_deposit_utxo_value
+            + total_deposit_stxo_value)
+            - total_withdrawal_stxo_value;
+        let total_wealth = BitcoinAmount::from_sat(total_wealth_sats);
+        Ok(total_wealth)
+    }
 }

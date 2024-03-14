@@ -1,6 +1,3 @@
-#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-use async_zmq::SinkExt;
-use heed::RoTxn;
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -8,6 +5,11 @@ use std::{
     path::Path,
     sync::Arc,
 };
+
+#[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+use async_zmq::SinkExt;
+use bip300301::bitcoin;
+use heed::RoTxn;
 use tokio::sync::RwLock;
 #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
 use tokio::{sync::mpsc, task::JoinHandle};
@@ -15,7 +17,12 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::{
     authorization::Authorization,
     net::{PeerState, Request, Response},
-    types::{hashes::BitName, *},
+    types::{
+        hashes::BitName, Address, Authorized, AuthorizedTransaction,
+        BitNameData, Block, BlockHash, Body, FilledOutput, FilledTransaction,
+        GetAddress, GetValue, Header, OutPoint, SpentOutput, Txid, Verify,
+        WithdrawalBundle,
+    },
 };
 
 pub const THIS_SIDECHAIN: u8 = 2;
@@ -127,6 +134,23 @@ impl Node {
             #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
             zmq_pub_handler,
         })
+    }
+
+    pub fn drivechain(&self) -> &bip300301::Drivechain {
+        &self.drivechain
+    }
+
+    pub async fn get_best_parentchain_hash(
+        &self,
+    ) -> Result<bitcoin::BlockHash, Error> {
+        use bip300301::MainClient;
+        let res = self
+            .drivechain
+            .client
+            .getbestblockhash()
+            .await
+            .map_err(bip300301::Error::Jsonrpsee)?;
+        Ok(res)
     }
 
     pub fn get_height(&self) -> Result<u32, Error> {
@@ -283,6 +307,12 @@ impl Node {
         let txn = self.env.read_txn()?;
         let transactions = self.mempool.take_all(&txn)?;
         Ok(transactions)
+    }
+
+    /// Get total sidechain wealth in Bitcoin
+    pub fn get_sidechain_wealth(&self) -> Result<bitcoin::Amount, Error> {
+        let txn = self.env.read_txn()?;
+        Ok(self.state.sidechain_wealth(&txn)?)
     }
 
     pub fn get_transactions(

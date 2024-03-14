@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use bip300301::bitcoin;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use plain_bitnames::types::{
     hashes::BitName, Address, BitNameData, Block, BlockHash, FilledOutput,
@@ -50,6 +51,9 @@ pub trait Rpc {
 
     #[method(name = "set_seed_from_mnemonic")]
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()>;
+
+    #[method(name = "sidechain_wealth")]
+    async fn sidechain_wealth(&self) -> RpcResult<bitcoin::Amount>;
 
     #[method(name = "transfer")]
     async fn transfer(
