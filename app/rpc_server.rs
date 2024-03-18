@@ -43,16 +43,20 @@ fn convert_wallet_err(err: wallet::Error) -> ErrorObject<'static> {
 
 #[async_trait]
 impl RpcServer for RpcServerImpl {
-    async fn stop(&self) {
-        std::process::exit(0);
-    }
-
     async fn balance(&self) -> RpcResult<u64> {
         self.app.wallet.get_balance().map_err(convert_wallet_err)
     }
 
     async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>> {
         self.app.node.bitnames().map_err(convert_node_err)
+    }
+
+    async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
+        self.app
+            .node
+            .connect_peer(addr)
+            .await
+            .map_err(convert_node_err)
     }
 
     async fn format_deposit_address(
@@ -66,8 +70,21 @@ impl RpcServer for RpcServerImpl {
         Ok(deposit_address)
     }
 
-    async fn getblockcount(&self) -> RpcResult<u32> {
-        self.app.node.get_height().map_err(convert_node_err)
+    async fn generate_mnemonic(&self) -> RpcResult<String> {
+        let mnemonic = bip39::Mnemonic::new(
+            bip39::MnemonicType::Words12,
+            bip39::Language::English,
+        );
+        Ok(mnemonic.to_string())
+    }
+
+    async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block> {
+        let block = self
+            .app
+            .node
+            .get_block(block_hash)
+            .expect("This error should have been handled properly.");
+        Ok(block)
     }
 
     async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {
@@ -81,13 +98,19 @@ impl RpcServer for RpcServerImpl {
         Ok(block_hash)
     }
 
-    async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block> {
-        let block = self
-            .app
-            .node
-            .get_block(block_hash)
-            .expect("This error should have been handled properly.");
-        Ok(block)
+    async fn get_new_address(&self) -> RpcResult<Address> {
+        self.app
+            .wallet
+            .get_new_address()
+            .map_err(convert_wallet_err)
+    }
+
+    async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>> {
+        self.app.get_paymail(None).map_err(convert_app_err)
+    }
+
+    async fn getblockcount(&self) -> RpcResult<u32> {
+        self.app.node.get_height().map_err(convert_node_err)
     }
 
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {
@@ -106,19 +129,21 @@ impl RpcServer for RpcServerImpl {
         Ok(utxos)
     }
 
-    async fn get_new_address(&self) -> RpcResult<Address> {
+    async fn reserve_bitname(&self, plain_name: String) -> RpcResult<()> {
+        let mut tx = Transaction::default();
+        let () = match self.app.wallet.reserve_bitname(&mut tx, &plain_name) {
+            Ok(()) => (),
+            Err(err) => return Err(convert_wallet_err(err)),
+        };
+        let authorized_tx = match self.app.wallet.authorize(tx) {
+            Ok(tx) => tx,
+            Err(err) => return Err(convert_wallet_err(err)),
+        };
         self.app
-            .wallet
-            .get_new_address()
-            .map_err(convert_wallet_err)
-    }
-
-    async fn generate_mnemonic(&self) -> RpcResult<String> {
-        let mnemonic = bip39::Mnemonic::new(
-            bip39::MnemonicType::Words12,
-            bip39::Language::English,
-        );
-        Ok(mnemonic.to_string())
+            .node
+            .submit_transaction(&authorized_tx)
+            .await
+            .map_err(convert_node_err)
     }
 
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()> {
@@ -133,6 +158,10 @@ impl RpcServer for RpcServerImpl {
             .node
             .get_sidechain_wealth()
             .map_err(convert_node_err)
+    }
+
+    async fn stop(&self) {
+        std::process::exit(0);
     }
 
     async fn transfer(
@@ -157,27 +186,6 @@ impl RpcServer for RpcServerImpl {
             .map_err(convert_wallet_err)?;
         let authorized_tx =
             self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)
-    }
-
-    async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>> {
-        self.app.get_paymail(None).map_err(convert_app_err)
-    }
-
-    async fn reserve_bitname(&self, plain_name: String) -> RpcResult<()> {
-        let mut tx = Transaction::default();
-        let () = match self.app.wallet.reserve_bitname(&mut tx, &plain_name) {
-            Ok(()) => (),
-            Err(err) => return Err(convert_wallet_err(err)),
-        };
-        let authorized_tx = match self.app.wallet.authorize(tx) {
-            Ok(tx) => tx,
-            Err(err) => return Err(convert_wallet_err(err)),
-        };
         self.app
             .node
             .submit_transaction(&authorized_tx)
