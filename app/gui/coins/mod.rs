@@ -6,7 +6,7 @@ use crate::app::App;
 mod my_bitnames;
 mod transfer_receive;
 mod tx_builder;
-mod tx_creator;
+pub(super) mod tx_creator;
 mod utxo_creator;
 mod utxo_selector;
 

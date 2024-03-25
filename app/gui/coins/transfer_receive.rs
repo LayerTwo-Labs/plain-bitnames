@@ -17,7 +17,7 @@ fn create_transfer(
     amount: bitcoin::Amount,
     fee: bitcoin::Amount,
 ) -> anyhow::Result<()> {
-    let tx = app.wallet.create_regular_transaction(
+    let tx = app.wallet.create_transfer(
         dest,
         amount.to_sat(),
         fee.to_sat(),

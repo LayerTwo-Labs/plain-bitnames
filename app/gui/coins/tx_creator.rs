@@ -207,7 +207,7 @@ impl TxCreator {
         }
     }
 
-    fn show_bitname_options(
+    pub(in crate::gui) fn show_bitname_options(
         ui: &mut egui::Ui,
         bitname_data: &mut TrySetBitNameData,
     ) -> Response {

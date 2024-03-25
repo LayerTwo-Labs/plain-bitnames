@@ -185,6 +185,14 @@ impl std::fmt::Display for BitName {
     }
 }
 
+impl FromHex for BitName {
+    type Error = <Hash as FromHex>::Error;
+
+    fn from_hex<T: AsRef<[u8]>>(hex: T) -> Result<Self, Self::Error> {
+        Hash::from_hex(hex).map(Self)
+    }
+}
+
 pub fn hash<T>(data: &T) -> Hash
 where
     T: BorshSerialize,

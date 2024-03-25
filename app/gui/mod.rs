@@ -4,9 +4,8 @@ use strum::{EnumIter, IntoEnumIterator};
 use crate::{app::App, logs::LogsCapture};
 
 mod activity;
-mod bitname_explorer;
+mod bitnames;
 mod coins;
-mod deposit;
 mod encrypt_message;
 mod logs;
 mod miner;
@@ -16,9 +15,8 @@ mod seed;
 mod util;
 
 use activity::Activity;
-use bitname_explorer::BitnameExplorer;
+use bitnames::BitNames;
 use coins::Coins;
-use deposit::Deposit;
 use encrypt_message::EncryptMessage;
 use logs::Logs;
 use miner::Miner;
@@ -29,9 +27,8 @@ use seed::SetSeed;
 pub struct EguiApp {
     activity: Activity,
     app: App,
-    bitname_explorer: BitnameExplorer,
+    bitnames: BitNames,
     coins: Coins,
-    deposit: Deposit,
     encrypt_message: EncryptMessage,
     logs: Logs,
     miner: Miner,
@@ -48,8 +45,8 @@ enum Tab {
     ParentChain,
     #[strum(to_string = "Coins")]
     Coins,
-    #[strum(to_string = "Lookup")]
-    BitnameExplorer,
+    #[strum(to_string = "BitNames")]
+    BitNames,
     #[strum(to_string = "My Paymail")]
     Paymail,
     #[strum(to_string = "Messaging")]
@@ -92,9 +89,8 @@ impl EguiApp {
         Self {
             activity,
             app,
-            bitname_explorer: BitnameExplorer::default(),
+            bitnames: BitNames::default(),
             coins,
-            deposit: Deposit::default(),
             encrypt_message: EncryptMessage::new(),
             logs: Logs::new(logs_capture),
             miner: Miner::default(),
@@ -122,8 +118,6 @@ impl EguiApp {
             // it up if you have multiple widgets to expand, even with different ratios.
             let this_target_width = this_init_max_width - last_others_width;
 
-            self.deposit.show(&mut self.app, ui);
-            ui.separator();
             ui.add_space(this_target_width);
             ui.separator();
             self.miner.show(&self.app, ui);
@@ -163,8 +157,8 @@ impl eframe::App for EguiApp {
                 Tab::Coins => {
                     let () = self.coins.show(&mut self.app, ui).unwrap();
                 }
-                Tab::BitnameExplorer => {
-                    self.bitname_explorer.show(&mut self.app, ui);
+                Tab::BitNames => {
+                    self.bitnames.show(&mut self.app, ui);
                 }
                 Tab::Paymail => self.paymail.show(&mut self.app, ui).unwrap(),
                 Tab::EncryptMessage => {

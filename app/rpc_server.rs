@@ -182,15 +182,9 @@ impl RpcServer for RpcServerImpl {
         let tx = self
             .app
             .wallet
-            .create_regular_transaction(dest, value, fee, memo)
+            .create_transfer(dest, value, fee, memo)
             .map_err(convert_wallet_err)?;
-        let authorized_tx =
-            self.app.wallet.authorize(tx).map_err(convert_wallet_err)?;
-        self.app
-            .node
-            .submit_transaction(&authorized_tx)
-            .await
-            .map_err(convert_node_err)
+        self.app.sign_and_send(tx).map_err(convert_app_err)
     }
 
     async fn withdraw(

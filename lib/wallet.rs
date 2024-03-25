@@ -182,6 +182,21 @@ impl Wallet {
         Ok(self.seed.get(&txn, &0)?.is_some())
     }
 
+    /// Create a transaction with a fee only.
+    pub fn create_regular_transaction(
+        &self,
+        fee: u64,
+    ) -> Result<Transaction, Error> {
+        let (total, coins) = self.select_coins(fee)?;
+        let change = total - fee;
+        let inputs = coins.into_keys().collect();
+        let outputs = vec![Output::new(
+            self.get_new_address()?,
+            OutputContent::Value(change),
+        )];
+        Ok(Transaction::new(inputs, outputs))
+    }
+
     pub fn create_withdrawal(
         &self,
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
@@ -206,7 +221,7 @@ impl Wallet {
         Ok(Transaction::new(inputs, outputs))
     }
 
-    pub fn create_regular_transaction(
+    pub fn create_transfer(
         &self,
         address: Address,
         value: u64,
@@ -385,10 +400,14 @@ impl Wallet {
         let mut selected = HashMap::new();
         let mut total: u64 = 0;
         for (outpoint, output) in &utxos {
-            if output.content.is_withdrawal() {
+            if output.content.is_withdrawal()
+                || output.is_bitname()
+                || output.is_reservation()
+                || output.get_value() == 0
+            {
                 continue;
             }
-            if total > value {
+            if total >= value {
                 break;
             }
             total += output.get_value();
