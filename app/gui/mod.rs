@@ -41,8 +41,11 @@ pub struct EguiApp {
     tab: Tab,
 }
 
-#[derive(EnumIter, Eq, PartialEq, strum::Display)]
+#[derive(Default, EnumIter, Eq, PartialEq, strum::Display)]
 enum Tab {
+    #[default]
+    #[strum(to_string = "Parent Chain")]
+    ParentChain,
     #[strum(to_string = "Coins")]
     Coins,
     #[strum(to_string = "Lookup")]
@@ -53,8 +56,6 @@ enum Tab {
     EncryptMessage,
     #[strum(to_string = "Activity")]
     Activity,
-    #[strum(to_string = "Parent Chain")]
-    ParentChain,
     #[strum(to_string = "Logs")]
     Logs,
 }
@@ -86,12 +87,13 @@ impl EguiApp {
         cc.egui_ctx.set_style(style);
 
         let activity = Activity::new(&app);
+        let coins = Coins::new(&app);
         let parent_chain = ParentChain::new(&app);
         Self {
             activity,
             app,
             bitname_explorer: BitnameExplorer::default(),
-            coins: Coins::default(),
+            coins,
             deposit: Deposit::default(),
             encrypt_message: EncryptMessage::new(),
             logs: Logs::new(logs_capture),
@@ -99,7 +101,7 @@ impl EguiApp {
             parent_chain,
             paymail: Paymail::default(),
             set_seed: SetSeed::default(),
-            tab: Tab::Coins,
+            tab: Tab::default(),
         }
     }
 
@@ -155,6 +157,9 @@ impl eframe::App for EguiApp {
             egui::TopBottomPanel::bottom("util")
                 .show(ctx, |ui| self.bottom_panel_content(ui));
             egui::CentralPanel::default().show(ctx, |ui| match self.tab {
+                Tab::ParentChain => {
+                    self.parent_chain.show(&mut self.app, ui);
+                }
                 Tab::Coins => {
                     let () = self.coins.show(&mut self.app, ui).unwrap();
                 }
@@ -167,9 +172,6 @@ impl eframe::App for EguiApp {
                 }
                 Tab::Activity => {
                     self.activity.show(&mut self.app, ui);
-                }
-                Tab::ParentChain => {
-                    self.parent_chain.show(&mut self.app, ui);
                 }
                 Tab::Logs => {
                     self.logs.show(ui);

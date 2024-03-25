@@ -11,7 +11,7 @@ use plain_bitnames::{
     node,
     types::{
         hashes::BitName, Address, BitNameData, Block, BlockHash, FilledOutput,
-        OutPoint, Transaction,
+        OutPoint, Transaction, Txid,
     },
     wallet,
 };
@@ -191,6 +191,28 @@ impl RpcServer for RpcServerImpl {
             .submit_transaction(&authorized_tx)
             .await
             .map_err(convert_node_err)
+    }
+
+    async fn withdraw(
+        &self,
+        mainchain_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+        amount_sats: u64,
+        fee_sats: u64,
+        mainchain_fee_sats: u64,
+    ) -> RpcResult<Txid> {
+        let tx = self
+            .app
+            .wallet
+            .create_withdrawal(
+                mainchain_address,
+                amount_sats,
+                mainchain_fee_sats,
+                fee_sats,
+            )
+            .map_err(convert_wallet_err)?;
+        let txid = tx.txid();
+        self.app.sign_and_send(tx).map_err(convert_app_err)?;
+        Ok(txid)
     }
 }
 
