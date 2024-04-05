@@ -1,14 +1,16 @@
 [workspace]
 resolver = "2"
 members = [
-    "lib",
     "app",
+    "cli",
+    "lib",
+    "rpc-api",
 ]
 
 [workspace.package]
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 edition = "2021"
-version = "0.5.13"
+version = "0.6.0"
 
 [workspace.dependencies.bip300301]
 git = "https://github.com/Ash-L2L/bip300301.git"

@@ -1,13 +1,15 @@
+use std::net::SocketAddr;
+
 use eframe::egui::{self, Color32};
 use strum::{EnumIter, IntoEnumIterator};
 
-use crate::{app::App, logs::LogsCapture};
+use crate::{app::App, line_buffer::LineBuffer};
 
 mod activity;
 mod bitnames;
 mod coins;
+mod console_logs;
 mod encrypt_message;
-mod logs;
 mod miner;
 mod parent_chain;
 mod paymail;
@@ -17,8 +19,8 @@ mod util;
 use activity::Activity;
 use bitnames::BitNames;
 use coins::Coins;
+use console_logs::ConsoleLogs;
 use encrypt_message::EncryptMessage;
-use logs::Logs;
 use miner::Miner;
 use parent_chain::ParentChain;
 use paymail::Paymail;
@@ -29,8 +31,8 @@ pub struct EguiApp {
     app: App,
     bitnames: BitNames,
     coins: Coins,
+    console_logs: ConsoleLogs,
     encrypt_message: EncryptMessage,
-    logs: Logs,
     miner: Miner,
     parent_chain: ParentChain,
     paymail: Paymail,
@@ -53,15 +55,16 @@ enum Tab {
     EncryptMessage,
     #[strum(to_string = "Activity")]
     Activity,
-    #[strum(to_string = "Logs")]
-    Logs,
+    #[strum(to_string = "Console / Logs")]
+    ConsoleLogs,
 }
 
 impl EguiApp {
     pub fn new(
         app: App,
         cc: &eframe::CreationContext<'_>,
-        logs_capture: LogsCapture,
+        logs_capture: LineBuffer,
+        rpc_addr: SocketAddr,
     ) -> Self {
         // Customize egui here with cc.egui_ctx.set_fonts and cc.egui_ctx.set_visuals.
         // Restore app state using cc.storage (requires the "persistence" feature).
@@ -85,14 +88,15 @@ impl EguiApp {
 
         let activity = Activity::new(&app);
         let coins = Coins::new(&app);
+        let console_logs = ConsoleLogs::new(logs_capture, rpc_addr);
         let parent_chain = ParentChain::new(&app);
         Self {
             activity,
             app,
             bitnames: BitNames::default(),
             coins,
+            console_logs,
             encrypt_message: EncryptMessage::new(),
-            logs: Logs::new(logs_capture),
             miner: Miner::default(),
             parent_chain,
             paymail: Paymail::default(),
@@ -167,8 +171,8 @@ impl eframe::App for EguiApp {
                 Tab::Activity => {
                     self.activity.show(&mut self.app, ui);
                 }
-                Tab::Logs => {
-                    self.logs.show(ui);
+                Tab::ConsoleLogs => {
+                    self.console_logs.show(&self.app, ui);
                 }
             });
         } else {

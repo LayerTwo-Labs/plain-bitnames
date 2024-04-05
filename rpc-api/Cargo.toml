@@ -1,0 +1,14 @@
+[package]
+name = "plain_bitnames_app_rpc_api"
+authors.workspace = true
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+bip300301.workspace = true
+jsonrpsee = { version = "0.20.0", features = ["macros"] }
+plain_bitnames = { path = "../lib" }
+
+[lib]
+name = "plain_bitnames_app_rpc_api"
+path = "lib.rs"

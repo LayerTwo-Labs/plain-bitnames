@@ -37,33 +37,40 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: 'Set environment variables: version number and output filename'
+      - name: 'Set environment variables: version number and output filenames'
         run: |
           BITNAMES_APP_VERSION=$(cargo metadata --format-version 1 | \
             jq -er '.packages | map(select(.name == "plain_bitnames_app") | .version) | .[0]')
-          OUTPUT_FILENAME="bitnames-${BITNAMES_APP_VERSION}-x86_64-unknown-linux-gnu"
+          BITNAMES_APP_FILENAME="bitnames-${BITNAMES_APP_VERSION}-x86_64-unknown-linux-gnu"
+          BITNAMES_CLI_FILENAME="bitnames-cli-${BITNAMES_APP_VERSION}-x86_64-unknown-linux-gnu"
           echo "BITNAMES_APP_VERSION=$BITNAMES_APP_VERSION" >> "$GITHUB_ENV"
-          echo "OUTPUT_FILENAME=$OUTPUT_FILENAME" >> "$GITHUB_ENV"
+          echo "BITNAMES_APP_FILENAME=$BITNAMES_APP_FILENAME" >> "$GITHUB_ENV"
+          echo "BITNAMES_CLI_FILENAME=$BITNAMES_CLI_FILENAME" >> "$GITHUB_ENV"
 
-      - name: 'Set filename for release binary'
+      - name: 'Set filenames for release binaries'
         run: |
           pushd "target/release"
-          ln -fs "plain_bitnames_app" "${OUTPUT_FILENAME}"
+          ln -fs "plain_bitnames_app" "${BITNAMES_APP_FILENAME}"
+          ln -fs "plain_bitnames_app_cli" "${BITNAMES_CLI_FILENAME}"
           popd
 
       - name: 'Upload Artifacts (bitnames)'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.OUTPUT_FILENAME }}
-          path: target/release/${{ env.OUTPUT_FILENAME }}
+          name: ${{ env.BITNAMES_APP_FILENAME }}
           if-no-files-found: error
+          path: |
+            target/release/${{ env.BITNAMES_APP_FILENAME }}
+            target/release/${{ env.BITNAMES_CLI_FILENAME }}
 
       - name: Release
         uses: softprops/action-gh-release@v2.0.2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: target/release/${{ env.OUTPUT_FILENAME }}
           fail_on_unmatched_files: true
+          files: |
+            target/release/${{ env.BITNAMES_APP_FILENAME }}
+            target/release/${{ env.BITNAMES_CLI_FILENAME }}
   
   build-macos:
     name: Build (macos-x86_64)
@@ -86,33 +93,40 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: 'Set environment variables: version number and output filename'
+      - name: 'Set environment variables: version number and output filenames'
         run: |
           BITNAMES_APP_VERSION=$(cargo metadata --format-version 1 | \
             jq -er '.packages | map(select(.name == "plain_bitnames_app") | .version) | .[0]')
-          OUTPUT_FILENAME="bitnames-${BITNAMES_APP_VERSION}-x86_64-apple-darwin"
+          BITNAMES_APP_FILENAME="bitnames-${BITNAMES_APP_VERSION}-x86_64-apple-darwin"
+          BITNAMES_CLI_FILENAME="bitnames-cli-${BITNAMES_APP_VERSION}-x86_64-apple-darwin"
           echo "BITNAMES_APP_VERSION=$BITNAMES_APP_VERSION" >> "$GITHUB_ENV"
-          echo "OUTPUT_FILENAME=$OUTPUT_FILENAME" >> "$GITHUB_ENV"
+          echo "BITNAMES_APP_FILENAME=$BITNAMES_APP_FILENAME" >> "$GITHUB_ENV"
+          echo "BITNAMES_CLI_FILENAME=$BITNAMES_CLI_FILENAME" >> "$GITHUB_ENV"
 
-      - name: 'set filename for release binary'
+      - name: 'set filenames for release binaries'
         run: |
           pushd "target/release"
-          ln -fs "plain_bitnames_app" "${OUTPUT_FILENAME}"
+          ln -fs "plain_bitnames_app" "${BITNAMES_APP_FILENAME}"
+          ln -fs "plain_bitnames_app_cli" "${BITNAMES_CLI_FILENAME}"
           popd
 
       - name: 'Upload Artifacts (bitnames)'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.OUTPUT_FILENAME }}
-          path: target/release/${{ env.OUTPUT_FILENAME }}
+          name: ${{ env.BITNAMES_APP_FILENAME }}
           if-no-files-found: error
+          path: |
+            target/release/${{ env.BITNAMES_APP_FILENAME }}
+            target/release/${{ env.BITNAMES_CLI_FILENAME }}
 
       - name: Release
         uses: softprops/action-gh-release@v2.0.2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: target/release/${{ env.OUTPUT_FILENAME }}
           fail_on_unmatched_files: true
+          files: |
+            target/release/${{ env.BITNAMES_APP_FILENAME }}
+            target/release/${{ env.BITNAMES_CLI_FILENAME }}
 
   build-windows:
     name: Build (x86_64-pc-windows-gnu)
@@ -142,33 +156,40 @@ jobs:
         env:
           RUSTFLAGS: "-C linker=/usr/bin/x86_64-w64-mingw32-gcc"
 
-      - name: 'Set environment variables: version number and output filename'
+      - name: 'Set environment variables: version number and output filenames'
         run: |
           BITNAMES_APP_VERSION=$(cargo metadata --format-version 1 | \
             jq -er '.packages | map(select(.name == "plain_bitnames_app") | .version) | .[0]')
-          OUTPUT_FILENAME="bitnames-${BITNAMES_APP_VERSION}-x86_64-pc-windows-gnu.exe"
+          BITNAMES_APP_FILENAME="bitnames-${BITNAMES_APP_VERSION}-x86_64-pc-windows-gnu.exe"
+          BITNAMES_CLI_FILENAME="bitnames-cli-${BITNAMES_APP_VERSION}-x86_64-pc-windows-gnu.exe"
           echo "BITNAMES_APP_VERSION=$BITNAMES_APP_VERSION" >> "$GITHUB_ENV"
-          echo "OUTPUT_FILENAME=$OUTPUT_FILENAME" >> "$GITHUB_ENV"
+          echo "BITNAMES_APP_FILENAME=$BITNAMES_APP_FILENAME" >> "$GITHUB_ENV"
+          echo "BITNAMES_CLI_FILENAME=$BITNAMES_CLI_FILENAME" >> "$GITHUB_ENV"
 
-      - name: 'set filename for release binary'
+      - name: 'set filenames for release binaries'
         run: |
           pushd "target/x86_64-pc-windows-gnu/release"
-          ln -fs "plain_bitnames_app.exe" "${OUTPUT_FILENAME}"
+          ln -fs "plain_bitnames_app.exe" "${BITNAMES_APP_FILENAME}"
+          ln -fs "plain_bitnames_app_cli.exe" "${BITNAMES_CLI_FILENAME}"
           popd
 
       - name: 'Upload Artifacts (bitnames)'
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.OUTPUT_FILENAME }}
-          path: target/x86_64-pc-windows-gnu/release/${{ env.OUTPUT_FILENAME }}
+          name: ${{ env.BITNAMES_APP_FILENAME }}
           if-no-files-found: error
+          path: |
+            target/x86_64-pc-windows-gnu/release/${{ env.BITNAMES_APP_FILENAME }}
+            target/x86_64-pc-windows-gnu/release/${{ env.BITNAMES_CLI_FILENAME }}
 
       - name: Release
         uses: softprops/action-gh-release@v2.0.2
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: target/x86_64-pc-windows-gnu/release/${{ env.OUTPUT_FILENAME }}
           fail_on_unmatched_files: true
+          files: |
+            target/x86_64-pc-windows-gnu/release/${{ env.BITNAMES_APP_FILENAME }}
+            target/x86_64-pc-windows-gnu/release/${{ env.BITNAMES_CLI_FILENAME }}
   
   upload-releases-to-releases-drivechain-info:
     name: Upload releases to releases.drivechain.info
@@ -183,12 +204,22 @@ jobs:
       
       - name: Create zip files for releases.drivechain.info
         run: |
-          mv bitnames-*-x86_64-apple-darwin bitnames-latest-x86_64-apple-darwin
-          zip L2-S2-BitNames-latest-x86_64-apple-darwin.zip bitnames-latest-x86_64-apple-darwin
-          mv bitnames-*-x86_64-pc-windows-gnu.exe bitnames-latest-x86_64-pc-windows-gnu.exe
-          zip L2-S2-BitNames-latest-x86_64-pc-windows-gnu.zip bitnames-latest-x86_64-pc-windows-gnu.exe
-          mv bitnames-*-x86_64-unknown-linux-gnu bitnames-latest-x86_64-unknown-linux-gnu
-          zip L2-S2-BitNames-latest-x86_64-unknown-linux-gnu.zip bitnames-latest-x86_64-unknown-linux-gnu
+          shopt -s extglob
+          mv bitnames-+([0-9]).+([0-9]).+([0-9])-x86_64-apple-darwin bitnames-latest-x86_64-apple-darwin
+          mv bitnames-cli-+([0-9]).+([0-9]).+([0-9])-x86_64-apple-darwin bitnames-cli-latest-x86_64-apple-darwin
+          zip L2-S2-BitNames-latest-x86_64-apple-darwin.zip \
+            bitnames-latest-x86_64-apple-darwin \
+            bitnames-cli-latest-x86_64-apple-darwin
+          mv bitnames-+([0-9]).+([0-9]).+([0-9])-x86_64-pc-windows-gnu.exe bitnames-latest-x86_64-pc-windows-gnu.exe
+          mv bitnames-cli-+([0-9]).+([0-9]).+([0-9])-x86_64-pc-windows-gnu.exe bitnames-cli-latest-x86_64-pc-windows-gnu.exe
+          zip L2-S2-BitNames-latest-x86_64-pc-windows-gnu.zip \
+            bitnames-latest-x86_64-pc-windows-gnu.exe \
+            bitnames-cli-latest-x86_64-pc-windows-gnu.exe
+          mv bitnames-+([0-9]).+([0-9]).+([0-9])-x86_64-unknown-linux-gnu bitnames-latest-x86_64-unknown-linux-gnu
+          mv bitnames-cli-+([0-9]).+([0-9]).+([0-9])-x86_64-unknown-linux-gnu bitnames-cli-latest-x86_64-unknown-linux-gnu
+          zip L2-S2-BitNames-latest-x86_64-unknown-linux-gnu.zip \
+            bitnames-latest-x86_64-unknown-linux-gnu \
+            bitnames-cli-latest-x86_64-unknown-linux-gnu
 
       - name: Upload release assets to releases.drivechain.info
         uses: cross-the-world/ssh-scp-ssh-pipelines@latest

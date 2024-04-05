@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -65,6 +67,13 @@ impl std::fmt::Display for BlockHash {
 impl std::fmt::Debug for BlockHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl FromStr for BlockHash {
+    type Err = <Self as FromHex>::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::from_hex(s)
     }
 }
 
@@ -157,6 +166,13 @@ impl std::fmt::Display for Txid {
 impl std::fmt::Debug for Txid {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl FromStr for Txid {
+    type Err = hex::FromHexError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Hash::from_hex(s).map(Self)
     }
 }
 

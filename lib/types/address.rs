@@ -2,6 +2,14 @@ use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeAs, DisplayFromStr};
 
+#[derive(Debug, thiserror::Error)]
+pub enum AddressParseError {
+    #[error("bs58 error")]
+    Bs58(#[from] bs58::decode::Error),
+    #[error("wrong address length {0} != 20")]
+    WrongLength(usize),
+}
+
 #[derive(BorshSerialize, Clone, Copy, Eq, Hash, PartialEq)]
 #[repr(transparent)]
 pub struct Address(pub [u8; 20]);
@@ -70,12 +78,4 @@ impl Serialize for Address {
             Serialize::serialize(&self.0, serializer)
         }
     }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum AddressParseError {
-    #[error("bs58 error")]
-    Bs58(#[from] bs58::decode::Error),
-    #[error("wrong address length {0} != 20")]
-    WrongLength(usize),
 }
