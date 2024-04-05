@@ -81,6 +81,10 @@ impl App {
             };
             Ok(node)
         })?;
+        let node = Arc::new(node);
+        let rt_guard = runtime.enter();
+        node.clone().run()?;
+        drop(rt_guard);
         let utxos = {
             let mut utxos = wallet.get_utxos()?;
             let transactions = node.get_all_transactions()?;
@@ -92,7 +96,7 @@ impl App {
             Arc::new(RwLock::new(utxos))
         };
         Ok(Self {
-            node: Arc::new(node),
+            node,
             wallet: Arc::new(wallet),
             miner: Arc::new(TokioRwLock::new(miner)),
             utxos,
