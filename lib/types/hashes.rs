@@ -18,7 +18,9 @@ use super::serde_hexstr_human_readable;
     Deserialize,
     Eq,
     Hash,
+    Ord,
     PartialEq,
+    PartialOrd,
     Serialize,
 )]
 #[repr(transparent)]
@@ -85,7 +87,9 @@ impl FromStr for BlockHash {
     Deserialize,
     Eq,
     Hash,
+    Ord,
     PartialEq,
+    PartialOrd,
     Serialize,
 )]
 #[repr(transparent)]

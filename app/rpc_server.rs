@@ -52,11 +52,7 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
-        self.app
-            .node
-            .connect_peer(addr)
-            .await
-            .map_err(convert_node_err)
+        self.app.node.connect_peer(addr).map_err(convert_node_err)
     }
 
     async fn format_deposit_address(
@@ -87,17 +83,6 @@ impl RpcServer for RpcServerImpl {
         Ok(block)
     }
 
-    async fn get_block_hash(&self, height: u32) -> RpcResult<BlockHash> {
-        let block_hash = self
-            .app
-            .node
-            .get_header(height)
-            .map_err(convert_node_err)?
-            .ok_or_else(|| custom_err("block not found"))?
-            .hash();
-        Ok(block_hash)
-    }
-
     async fn get_new_address(&self) -> RpcResult<Address> {
         self.app
             .wallet
@@ -110,12 +95,15 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn getblockcount(&self) -> RpcResult<u32> {
-        self.app.node.get_height().map_err(convert_node_err)
+        self.app.node.get_tip_height().map_err(convert_node_err)
     }
 
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {
         let fee = fee.map(bip300301::bitcoin::Amount::from_sat);
-        self.app.mine(fee).await.map_err(convert_app_err)
+        self.app.local_pool.spawn_pinned({
+                let app = self.app.clone();
+                move || async move { app.mine(fee).await.map_err(convert_app_err) }
+            }).await.unwrap()
     }
 
     async fn my_utxos(&self) -> RpcResult<Vec<FilledOutput>> {

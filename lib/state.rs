@@ -1,13 +1,9 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-use hashes::MerkleRoot;
-use heed::{
-    types::{OwnedType, SerdeBincode},
-    Database, RoTxn, RwTxn,
-};
+use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
 use nonempty::{nonempty, NonEmpty};
 use serde::{Deserialize, Serialize};
 
@@ -23,10 +19,11 @@ use crate::{
         self, constants,
         hashes::{self, BitName},
         Address, AggregatedWithdrawal, Authorized, AuthorizedTransaction,
-        BatchIcannRegistrationData, BitNameDataUpdates, Body, EncryptionPubKey,
-        FilledOutput, FilledOutputContent, FilledTransaction, GetAddress as _,
-        GetValue as _, Hash, InPoint, OutPoint, OutputContent, SpentOutput,
-        Transaction, TxData, Txid, Update, Verify as _, WithdrawalBundle,
+        BatchIcannRegistrationData, BitNameDataUpdates, BlockHash, Body,
+        EncryptionPubKey, FilledOutput, FilledOutputContent, FilledTransaction,
+        GetAddress as _, GetValue as _, Hash, Header, InPoint, MerkleRoot,
+        OutPoint, OutputContent, SpentOutput, Transaction, TxData, Txid,
+        Update, Verify as _, WithdrawalBundle,
     },
 };
 
@@ -45,103 +42,6 @@ struct TxidStamped<T> {
 #[repr(transparent)]
 #[serde(transparent)]
 struct RollBack<T>(NonEmpty<TxidStamped<T>>);
-
-/// Representation of BitName data that supports rollbacks.
-/// The most recent datum is the element at the back of the vector.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct BitNameData {
-    /// commitment to arbitrary data
-    commitment: RollBack<Option<Hash>>,
-    /// set if the plain bitname is known to be an ICANN domain
-    is_icann: bool,
-    /// optional ipv4 addr
-    ipv4_addr: RollBack<Option<Ipv4Addr>>,
-    /// optional ipv6 addr
-    ipv6_addr: RollBack<Option<Ipv6Addr>>,
-    /// optional pubkey used for encryption
-    encryption_pubkey: RollBack<Option<EncryptionPubKey>>,
-    /// optional pubkey used for signing messages
-    signing_pubkey: RollBack<Option<VerifyingKey>>,
-    /// optional minimum paymail fee, in sats
-    paymail_fee: RollBack<Option<u64>>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("failed to verify authorization")]
-    AuthorizationError,
-    #[error("bad coinbase output content")]
-    BadCoinbaseOutputContent,
-    #[error("bitname {name_hash} already registered")]
-    BitNameAlreadyRegistered { name_hash: BitName },
-    #[error("bitname {name_hash} already registered as an ICANN name")]
-    BitNameAlreadyIcann { name_hash: BitName },
-    #[error("bundle too heavy {weight} > {max_weight}")]
-    BundleTooHeavy { weight: u64, max_weight: u64 },
-    #[error("failed to fill tx output contents: invalid transaction")]
-    FillTxOutputContentsFailed,
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
-    #[error("invalid ICANN name: {plain_name}")]
-    IcannNameInvalid { plain_name: String },
-    #[error("failed to compute merkle root")]
-    MerkleRoot,
-    #[error("missing BitName {name_hash}")]
-    MissingBitName { name_hash: BitName },
-    #[error(
-        "Missing BitName data for {name_hash} at block height {block_height}"
-    )]
-    MissingBitNameData {
-        name_hash: BitName,
-        block_height: u32,
-    },
-    #[error("missing BitName input {name_hash}")]
-    MissingBitNameInput { name_hash: BitName },
-    #[error("missing BitName reservation {txid}")]
-    MissingReservation { txid: Txid },
-    #[error("no BitNames to update")]
-    NoBitNamesToUpdate,
-    #[error("total fees less than coinbase value")]
-    NotEnoughFees,
-    #[error("value in is less than value out")]
-    NotEnoughValueIn,
-    #[error("utxo {outpoint} doesn't exist")]
-    NoUtxo { outpoint: OutPoint },
-    #[error(transparent)]
-    SignatureError(#[from] ed25519_dalek::SignatureError),
-    #[error("Too few BitName outputs")]
-    TooFewBitNameOutputs,
-    #[error("unbalanced BitNames: {n_bitname_inputs} BitName inputs, {n_bitname_outputs} BitName outputs")]
-    UnbalancedBitNames {
-        n_bitname_inputs: usize,
-        n_bitname_outputs: usize,
-    },
-    #[error("unbalanced reservations: {n_reservation_inputs} reservation inputs, {n_reservation_outputs} reservation outputs")]
-    UnbalancedReservations {
-        n_reservation_inputs: usize,
-        n_reservation_outputs: usize,
-    },
-    #[error("utxo double spent")]
-    UtxoDoubleSpent,
-    #[error("wrong public key for address")]
-    WrongPubKeyForAddress,
-}
-
-#[derive(Clone)]
-pub struct State {
-    /// associates tx hashes with bitname reservation commitments
-    pub bitname_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
-    /// associates bitname IDs (name hashes) with bitname data
-    pub bitnames: Database<SerdeBincode<BitName>, SerdeBincode<BitNameData>>,
-    pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
-    pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
-    pub pending_withdrawal_bundle:
-        Database<OwnedType<u32>, SerdeBincode<WithdrawalBundle>>,
-    pub last_withdrawal_bundle_failure_height:
-        Database<OwnedType<u32>, OwnedType<u32>>,
-    pub last_deposit_block:
-        Database<OwnedType<u32>, SerdeBincode<bitcoin::BlockHash>>,
-}
 
 impl<T> RollBack<T> {
     fn new(value: T, txid: Txid, height: u32) -> Self {
@@ -163,6 +63,11 @@ impl<T> RollBack<T> {
         self.0.push(txid_stamped)
     }
 
+    /// pop the most recent value
+    fn pop(&mut self) -> Option<TxidStamped<T>> {
+        self.0.pop()
+    }
+
     /** Returns the value as it was, at the specified block height.
      *  If a value was updated several times in the block, returns the
      *  last value seen in the block. */
@@ -177,6 +82,26 @@ impl<T> RollBack<T> {
     fn latest(&self) -> &TxidStamped<T> {
         self.0.last()
     }
+}
+
+/// Representation of BitName data that supports rollbacks.
+/// The most recent datum is the element at the back of the vector.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BitNameData {
+    /// commitment to arbitrary data
+    commitment: RollBack<Option<Hash>>,
+    /// set if the plain bitname is known to be an ICANN domain
+    is_icann: bool,
+    /// optional ipv4 addr
+    ipv4_addr: RollBack<Option<Ipv4Addr>>,
+    /// optional ipv6 addr
+    ipv6_addr: RollBack<Option<Ipv6Addr>>,
+    /// optional pubkey used for encryption
+    encryption_pubkey: RollBack<Option<EncryptionPubKey>>,
+    /// optional pubkey used for signing messages
+    signing_pubkey: RollBack<Option<VerifyingKey>>,
+    /// optional minimum paymail fee, in sats
+    paymail_fee: RollBack<Option<u64>>,
 }
 
 impl BitNameData {
@@ -251,6 +176,71 @@ impl BitNameData {
         apply_field_update(paymail_fee, updates.paymail_fee, txid, height);
     }
 
+    // revert bitname data updates
+    fn revert_updates(
+        &mut self,
+        updates: BitNameDataUpdates,
+        txid: Txid,
+        height: u32,
+    ) {
+        // apply an update to a single data field
+        fn revert_field_update<T>(
+            data_field: &mut RollBack<Option<T>>,
+            update: Update<T>,
+            txid: Txid,
+            height: u32,
+        ) where
+            T: std::fmt::Debug + Eq,
+        {
+            match update {
+                Update::Delete => {
+                    let popped = data_field.pop();
+                    assert!(popped.is_some());
+                    let popped = popped.unwrap();
+                    assert!(popped.data.is_none());
+                    assert_eq!(popped.txid, txid);
+                    assert_eq!(popped.height, height)
+                }
+                Update::Retain => (),
+                Update::Set(value) => {
+                    let popped = data_field.pop();
+                    assert!(popped.is_some());
+                    let popped = popped.unwrap();
+                    assert!(popped.data.is_some());
+                    assert_eq!(popped.data.unwrap(), value);
+                    assert_eq!(popped.txid, txid);
+                    assert_eq!(popped.height, height)
+                }
+            }
+        }
+
+        let Self {
+            ref mut commitment,
+            is_icann: _,
+            ref mut ipv4_addr,
+            ref mut ipv6_addr,
+            ref mut encryption_pubkey,
+            ref mut signing_pubkey,
+            ref mut paymail_fee,
+        } = self;
+        revert_field_update(paymail_fee, updates.paymail_fee, txid, height);
+        revert_field_update(
+            signing_pubkey,
+            updates.signing_pubkey,
+            txid,
+            height,
+        );
+        revert_field_update(
+            encryption_pubkey,
+            updates.encryption_pubkey,
+            txid,
+            height,
+        );
+        revert_field_update(ipv6_addr, updates.ipv6_addr, txid, height);
+        revert_field_update(ipv4_addr, updates.ipv4_addr, txid, height);
+        revert_field_update(commitment, updates.commitment, txid, height);
+    }
+
     /** Returns the Bitname data as it was, at the specified block height.
      *  If a value was updated several times in the block, returns the
      *  last value seen in the block.
@@ -283,11 +273,151 @@ impl BitNameData {
     }
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum InvalidHeaderError {
+    #[error("expected block hash {expected}, but computed {computed}")]
+    BlockHash {
+        expected: BlockHash,
+        computed: BlockHash,
+    },
+    #[error("expected previous sidechain block hash {expected}, but received {received}")]
+    PrevSideHash {
+        expected: BlockHash,
+        received: BlockHash,
+    },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("failed to verify authorization")]
+    AuthorizationError,
+    #[error("bad coinbase output content")]
+    BadCoinbaseOutputContent,
+    #[error("bitname {name_hash} already registered")]
+    BitNameAlreadyRegistered { name_hash: BitName },
+    #[error("bitname {name_hash} already registered as an ICANN name")]
+    BitNameAlreadyIcann { name_hash: BitName },
+    #[error("bundle too heavy {weight} > {max_weight}")]
+    BundleTooHeavy { weight: u64, max_weight: u64 },
+    #[error("failed to fill tx output contents: invalid transaction")]
+    FillTxOutputContentsFailed,
+    #[error("heed error")]
+    Heed(#[from] heed::Error),
+    #[error("invalid ICANN name: {plain_name}")]
+    IcannNameInvalid { plain_name: String },
+    #[error("invalid body: expected merkle root {expected}, but computed {computed}")]
+    InvalidBody {
+        expected: MerkleRoot,
+        computed: MerkleRoot,
+    },
+    #[error("invalid header: {0}")]
+    InvalidHeader(InvalidHeaderError),
+    #[error("failed to compute merkle root")]
+    MerkleRoot,
+    #[error("missing BitName {name_hash}")]
+    MissingBitName { name_hash: BitName },
+    #[error(
+        "Missing BitName data for {name_hash} at block height {block_height}"
+    )]
+    MissingBitNameData {
+        name_hash: BitName,
+        block_height: u32,
+    },
+    #[error("missing BitName input {name_hash}")]
+    MissingBitNameInput { name_hash: BitName },
+    #[error("missing BitName reservation {txid}")]
+    MissingReservation { txid: Txid },
+    #[error("no BitNames to update")]
+    NoBitNamesToUpdate,
+    #[error("deposit block doesn't exist")]
+    NoDepositBlock,
+    #[error("total fees less than coinbase value")]
+    NotEnoughFees,
+    #[error("value in is less than value out")]
+    NotEnoughValueIn,
+    #[error("stxo {outpoint} doesn't exist")]
+    NoStxo { outpoint: OutPoint },
+    #[error("no tip")]
+    NoTip,
+    #[error("utxo {outpoint} doesn't exist")]
+    NoUtxo { outpoint: OutPoint },
+    #[error(transparent)]
+    SignatureError(#[from] ed25519_dalek::SignatureError),
+    #[error("Too few BitName outputs")]
+    TooFewBitNameOutputs,
+    #[error("unbalanced BitNames: {n_bitname_inputs} BitName inputs, {n_bitname_outputs} BitName outputs")]
+    UnbalancedBitNames {
+        n_bitname_inputs: usize,
+        n_bitname_outputs: usize,
+    },
+    #[error("unbalanced reservations: {n_reservation_inputs} reservation inputs, {n_reservation_outputs} reservation outputs")]
+    UnbalancedReservations {
+        n_reservation_inputs: usize,
+        n_reservation_outputs: usize,
+    },
+    #[error("utxo double spent")]
+    UtxoDoubleSpent,
+    #[error("wrong public key for address")]
+    WrongPubKeyForAddress,
+}
+
+/// Unit key. LMDB can't use zero-sized keys, so this encodes to a single byte
+#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
+pub struct UnitKey;
+
+impl<'de> Deserialize<'de> for UnitKey {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // Deserialize any byte (ignoring it) and return UnitKey
+        let _ = u8::deserialize(deserializer)?;
+        Ok(UnitKey)
+    }
+}
+
+impl Serialize for UnitKey {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Always serialize to the same arbitrary byte
+        serializer.serialize_u8(0x69)
+    }
+}
+
+#[derive(Clone)]
+pub struct State {
+    /// Current tip
+    tip: Database<SerdeBincode<UnitKey>, SerdeBincode<BlockHash>>,
+    /// Current height
+    height: Database<SerdeBincode<UnitKey>, SerdeBincode<u32>>,
+    /// associates tx hashes with bitname reservation commitments
+    pub bitname_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
+    /// associates bitname IDs (name hashes) with bitname data
+    pub bitnames: Database<SerdeBincode<BitName>, SerdeBincode<BitNameData>>,
+    pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
+    pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
+    /// Pending withdrawal bundle and block height
+    pub pending_withdrawal_bundle:
+        Database<SerdeBincode<UnitKey>, SerdeBincode<(WithdrawalBundle, u32)>>,
+    /// Mapping from block height to withdrawal bundle and status
+    pub withdrawal_bundles: Database<
+        SerdeBincode<u32>,
+        SerdeBincode<(WithdrawalBundle, WithdrawalBundleStatus)>,
+    >,
+    /// deposit blocks and the height at which they were applied, keyed sequentially
+    pub deposit_blocks:
+        Database<SerdeBincode<u32>, SerdeBincode<(bitcoin::BlockHash, u32)>>,
+}
+
 impl State {
-    pub const NUM_DBS: u32 = 7;
+    pub const NUM_DBS: u32 = 9;
     pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
+        let tip = env.create_database(Some("tip"))?;
+        let height = env.create_database(Some("height"))?;
         let bitname_reservations =
             env.create_database(Some("bitname_reservations"))?;
         let bitnames = env.create_database(Some("bitnames"))?;
@@ -295,19 +425,30 @@ impl State {
         let stxos = env.create_database(Some("stxos"))?;
         let pending_withdrawal_bundle =
             env.create_database(Some("pending_withdrawal_bundle"))?;
-        let last_withdrawal_bundle_failure_height =
-            env.create_database(Some("last_withdrawal_bundle_failure_height"))?;
-        let last_deposit_block =
-            env.create_database(Some("last_deposit_block"))?;
+        let withdrawal_bundles =
+            env.create_database(Some("withdrawal_bundles"))?;
+        let deposit_blocks = env.create_database(Some("deposit_blocks"))?;
         Ok(Self {
+            tip,
+            height,
             bitname_reservations,
             bitnames,
             utxos,
             stxos,
             pending_withdrawal_bundle,
-            last_withdrawal_bundle_failure_height,
-            last_deposit_block,
+            withdrawal_bundles,
+            deposit_blocks,
         })
+    }
+
+    pub fn get_tip(&self, rotxn: &RoTxn) -> Result<BlockHash, Error> {
+        let tip = self.tip.get(rotxn, &UnitKey)?.unwrap_or_default();
+        Ok(tip)
+    }
+
+    pub fn get_height(&self, rotxn: &RoTxn) -> Result<u32, Error> {
+        let height = self.height.get(rotxn, &UnitKey)?.unwrap_or_default();
+        Ok(height)
     }
 
     /// Return the Bitname data. Returns an error if it does not exist.
@@ -406,22 +547,66 @@ impl State {
         Ok(utxos)
     }
 
-    pub fn fill_transaction(
+    /// Get the latest failed withdrawal bundle, and the height at which it failed
+    fn get_latest_failed_withdrawal_bundle(
         &self,
-        txn: &RoTxn,
+        rotxn: &RoTxn,
+    ) -> Result<Option<(u32, WithdrawalBundle)>, Error> {
+        for item in self.withdrawal_bundles.rev_iter(rotxn)? {
+            if let (height, (bundle, WithdrawalBundleStatus::Failed)) = item? {
+                let res = Some((height, bundle));
+                return Ok(res);
+            }
+        }
+        Ok(None)
+    }
+
+    fn fill_transaction(
+        &self,
+        rotxn: &RoTxn,
         transaction: &Transaction,
     ) -> Result<FilledTransaction, Error> {
         let mut spent_utxos = vec![];
         for input in &transaction.inputs {
             let utxo = self
                 .utxos
-                .get(txn, input)?
+                .get(rotxn, input)?
                 .ok_or(Error::NoUtxo { outpoint: *input })?;
             spent_utxos.push(utxo);
         }
         Ok(FilledTransaction {
             spent_utxos,
             transaction: transaction.clone(),
+        })
+    }
+
+    /// Fill a transaction that has already been applied
+    fn fill_transaction_from_stxos(
+        &self,
+        rotxn: &RoTxn,
+        tx: Transaction,
+    ) -> Result<FilledTransaction, Error> {
+        let txid = tx.txid();
+        let mut spent_utxos = vec![];
+        // fill inputs last-to-first
+        for (vin, input) in tx.inputs.iter().enumerate().rev() {
+            let stxo = self
+                .stxos
+                .get(rotxn, input)?
+                .ok_or(Error::NoStxo { outpoint: *input })?;
+            assert_eq!(
+                stxo.inpoint,
+                InPoint::Regular {
+                    txid,
+                    vin: vin as u32
+                }
+            );
+            spent_utxos.push(stxo.output);
+        }
+        spent_utxos.reverse();
+        Ok(FilledTransaction {
+            spent_utxos,
+            transaction: tx,
         })
     }
 
@@ -491,7 +676,7 @@ impl State {
             address_to_aggregated_withdrawal.into_values().collect();
         aggregated_withdrawals.sort_by_key(|a| std::cmp::Reverse(a.clone()));
         let mut fee = 0;
-        let mut spend_utxos = HashMap::<OutPoint, FilledOutput>::new();
+        let mut spend_utxos = BTreeMap::<OutPoint, FilledOutput>::new();
         let mut bundle_outputs = vec![];
         for aggregated in &aggregated_withdrawals {
             if bundle_outputs.len() > MAX_BUNDLE_OUTPUTS {
@@ -582,11 +767,12 @@ impl State {
         }))
     }
 
+    /// Get pending withdrawal bundle and block height
     pub fn get_pending_withdrawal_bundle(
         &self,
         txn: &RoTxn,
-    ) -> Result<Option<WithdrawalBundle>, Error> {
-        Ok(self.pending_withdrawal_bundle.get(txn, &0)?)
+    ) -> Result<Option<(WithdrawalBundle, u32)>, Error> {
+        Ok(self.pending_withdrawal_bundle.get(txn, &UnitKey)?)
     }
 
     /// Check that
@@ -714,36 +900,81 @@ impl State {
         tx.fee().ok_or(Error::NotEnoughValueIn)
     }
 
-    pub fn validate_body(
+    pub fn validate_transaction(
         &self,
         rotxn: &RoTxn,
-        body: &Body,
+        transaction: &AuthorizedTransaction,
     ) -> Result<u64, Error> {
+        let filled_transaction =
+            self.fill_transaction(rotxn, &transaction.transaction)?;
+        for (authorization, spent_utxo) in transaction
+            .authorizations
+            .iter()
+            .zip(filled_transaction.spent_utxos.iter())
+        {
+            if authorization.get_address() != spent_utxo.address {
+                return Err(Error::WrongPubKeyForAddress);
+            }
+        }
+        if Authorization::verify_transaction(transaction).is_err() {
+            return Err(Error::AuthorizationError);
+        }
+        let fee =
+            self.validate_filled_transaction(rotxn, &filled_transaction)?;
+        Ok(fee)
+    }
+
+    /// Validate a block, returning the merkle root and fees
+    pub fn validate_block(
+        &self,
+        rotxn: &RoTxn,
+        header: &Header,
+        body: &Body,
+    ) -> Result<(u64, MerkleRoot), Error> {
+        let tip_hash = self.get_tip(rotxn)?;
+        if header.prev_side_hash != tip_hash {
+            let err = InvalidHeaderError::PrevSideHash {
+                expected: tip_hash,
+                received: header.prev_side_hash,
+            };
+            return Err(Error::InvalidHeader(err));
+        };
         let mut coinbase_value: u64 = 0;
         for output in &body.coinbase {
             coinbase_value += output.get_value();
         }
         let mut total_fees: u64 = 0;
         let mut spent_utxos = HashSet::new();
-        let filled_transactions: Vec<_> = body
+        let filled_txs: Vec<_> = body
             .transactions
             .iter()
             .map(|t| self.fill_transaction(rotxn, t))
             .collect::<Result<_, _>>()?;
-        for filled_transaction in &filled_transactions {
-            for input in &filled_transaction.transaction.inputs {
+        for filled_tx in &filled_txs {
+            for input in &filled_tx.transaction.inputs {
                 if spent_utxos.contains(input) {
                     return Err(Error::UtxoDoubleSpent);
                 }
                 spent_utxos.insert(*input);
             }
-            total_fees +=
-                self.validate_filled_transaction(rotxn, filled_transaction)?;
+            total_fees += self.validate_filled_transaction(rotxn, filled_tx)?;
         }
         if coinbase_value > total_fees {
             return Err(Error::NotEnoughFees);
         }
-        let spent_utxos = filled_transactions
+        let merkle_root = Body::compute_merkle_root(
+            body.coinbase.as_slice(),
+            filled_txs.as_slice(),
+        )
+        .ok_or(Error::MerkleRoot)?;
+        if merkle_root != header.merkle_root {
+            let err = Error::InvalidBody {
+                expected: header.merkle_root,
+                computed: merkle_root,
+            };
+            return Err(err);
+        }
+        let spent_utxos = filled_txs
             .iter()
             .flat_map(|t| t.spent_utxos_requiring_auth().into_iter());
         for (authorization, spent_utxo) in
@@ -756,82 +987,188 @@ impl State {
         if Authorization::verify_body(body).is_err() {
             return Err(Error::AuthorizationError);
         }
-        Ok(total_fees)
+        Ok((total_fees, merkle_root))
     }
 
     pub fn get_last_deposit_block_hash(
         &self,
-        txn: &RoTxn,
+        rotxn: &RoTxn,
     ) -> Result<Option<bitcoin::BlockHash>, Error> {
-        Ok(self.last_deposit_block.get(txn, &0)?)
+        let block_hash = self
+            .deposit_blocks
+            .last(rotxn)?
+            .map(|(_, (block_hash, _))| block_hash);
+        Ok(block_hash)
     }
 
     pub fn connect_two_way_peg_data(
         &self,
-        txn: &mut RwTxn,
+        rwtxn: &mut RwTxn,
         two_way_peg_data: &TwoWayPegData,
-        block_height: u32,
     ) -> Result<(), Error> {
+        let block_height = self.get_height(rwtxn)?;
         // Handle deposits.
         if let Some(deposit_block_hash) = two_way_peg_data.deposit_block_hash {
-            self.last_deposit_block.put(txn, &0, &deposit_block_hash)?;
+            let deposit_block_seq_idx = self
+                .deposit_blocks
+                .last(rwtxn)?
+                .map_or(0, |(seq_idx, _)| seq_idx + 1);
+            self.deposit_blocks.put(
+                rwtxn,
+                &deposit_block_seq_idx,
+                &(deposit_block_hash, block_height - 1),
+            )?;
         }
-        for (outpoint, deposit) in &two_way_peg_data.deposits {
-            if let Ok(address) = deposit.address.parse() {
-                let outpoint = OutPoint::Deposit(*outpoint);
+        for deposit in &two_way_peg_data.deposits {
+            if let Ok(address) = deposit.output.address.parse() {
+                let outpoint = OutPoint::Deposit(deposit.outpoint);
                 let output = FilledOutput::new(
                     address,
-                    FilledOutputContent::Bitcoin(deposit.value),
+                    FilledOutputContent::Bitcoin(deposit.output.value),
                 );
-                self.utxos.put(txn, &outpoint, &output)?;
+                self.utxos.put(rwtxn, &outpoint, &output)?;
             }
         }
 
         // Handle withdrawals.
         let last_withdrawal_bundle_failure_height = self
-            .last_withdrawal_bundle_failure_height
-            .get(txn, &0)?
-            .unwrap_or(0);
-        if (block_height + 1) - last_withdrawal_bundle_failure_height
+            .get_latest_failed_withdrawal_bundle(rwtxn)?
+            .map(|(height, _bundle)| height)
+            .unwrap_or_default();
+        if block_height - last_withdrawal_bundle_failure_height
             > Self::WITHDRAWAL_BUNDLE_FAILURE_GAP
-            && self.pending_withdrawal_bundle.get(txn, &0)?.is_none()
+            && self
+                .pending_withdrawal_bundle
+                .get(rwtxn, &UnitKey)?
+                .is_none()
         {
             if let Some(bundle) =
-                self.collect_withdrawal_bundle(txn, block_height + 1)?
+                self.collect_withdrawal_bundle(rwtxn, block_height)?
             {
                 for (outpoint, spend_output) in &bundle.spend_utxos {
-                    self.utxos.delete(txn, outpoint)?;
+                    self.utxos.delete(rwtxn, outpoint)?;
                     let txid = bundle.transaction.txid();
                     let spent_output = SpentOutput {
                         output: spend_output.clone(),
                         inpoint: InPoint::Withdrawal { txid },
                     };
-                    self.stxos.put(txn, outpoint, &spent_output)?;
+                    self.stxos.put(rwtxn, outpoint, &spent_output)?;
                 }
-                self.pending_withdrawal_bundle.put(txn, &0, &bundle)?;
+                self.pending_withdrawal_bundle.put(
+                    rwtxn,
+                    &UnitKey,
+                    &(bundle, block_height),
+                )?;
             }
         }
         for (txid, status) in &two_way_peg_data.bundle_statuses {
-            if let Some(bundle) = self.pending_withdrawal_bundle.get(txn, &0)? {
+            if let Some((bundle, bundle_block_height)) =
+                self.pending_withdrawal_bundle.get(rwtxn, &UnitKey)?
+            {
                 if bundle.transaction.txid() != *txid {
                     continue;
                 }
-                match status {
-                    WithdrawalBundleStatus::Failed => {
-                        self.last_withdrawal_bundle_failure_height.put(
-                            txn,
-                            &0,
-                            &(block_height + 1),
-                        )?;
-                        self.pending_withdrawal_bundle.delete(txn, &0)?;
-                        for (outpoint, spend_output) in &bundle.spend_utxos {
-                            self.stxos.delete(txn, outpoint)?;
-                            self.utxos.put(txn, outpoint, spend_output)?;
-                        }
+                assert_eq!(bundle_block_height, block_height);
+                self.withdrawal_bundles.put(
+                    rwtxn,
+                    &block_height,
+                    &(bundle.clone(), *status),
+                )?;
+                self.pending_withdrawal_bundle.delete(rwtxn, &UnitKey)?;
+                if let WithdrawalBundleStatus::Failed = status {
+                    for (outpoint, output) in &bundle.spend_utxos {
+                        self.stxos.delete(rwtxn, outpoint)?;
+                        self.utxos.put(rwtxn, outpoint, output)?;
                     }
-                    WithdrawalBundleStatus::Confirmed => {
-                        self.pending_withdrawal_bundle.delete(txn, &0)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn disconnect_two_way_peg_data(
+        &self,
+        rwtxn: &mut RwTxn,
+        two_way_peg_data: &TwoWayPegData,
+    ) -> Result<(), Error> {
+        let block_height = self.get_height(rwtxn)?;
+        // Restore pending withdrawal bundle
+        for (txid, status) in two_way_peg_data.bundle_statuses.iter().rev() {
+            if let Some((
+                latest_bundle_height,
+                (latest_bundle, latest_bundle_status),
+            )) = self.withdrawal_bundles.last(rwtxn)?
+            {
+                if latest_bundle.transaction.txid() != *txid {
+                    continue;
+                }
+                assert_eq!(*status, latest_bundle_status);
+                assert_eq!(latest_bundle_height, block_height);
+                self.withdrawal_bundles
+                    .delete(rwtxn, &latest_bundle_height)?;
+                self.pending_withdrawal_bundle.put(
+                    rwtxn,
+                    &UnitKey,
+                    &(latest_bundle.clone(), latest_bundle_height),
+                )?;
+                if *status == WithdrawalBundleStatus::Failed {
+                    for (outpoint, output) in
+                        latest_bundle.spend_utxos.into_iter().rev()
+                    {
+                        let spent_output = SpentOutput {
+                            output: output.clone(),
+                            inpoint: InPoint::Withdrawal { txid: *txid },
+                        };
+                        self.stxos.put(rwtxn, &outpoint, &spent_output)?;
+                        if self.utxos.delete(rwtxn, &outpoint)? {
+                            return Err(Error::NoUtxo { outpoint });
+                        };
                     }
+                }
+            }
+        }
+        // Handle withdrawals.
+        let last_withdrawal_bundle_failure_height = self
+            .get_latest_failed_withdrawal_bundle(rwtxn)?
+            .map(|(height, _bundle)| height)
+            .unwrap_or_default();
+        if block_height - last_withdrawal_bundle_failure_height
+            > Self::WITHDRAWAL_BUNDLE_FAILURE_GAP
+            && let Some((bundle, bundle_height)) =
+                self.pending_withdrawal_bundle.get(rwtxn, &UnitKey)?
+            && bundle_height == block_height
+        {
+            self.pending_withdrawal_bundle.delete(rwtxn, &UnitKey)?;
+            for (outpoint, output) in bundle.spend_utxos.into_iter().rev() {
+                if !self.stxos.delete(rwtxn, &outpoint)? {
+                    return Err(Error::NoStxo { outpoint });
+                };
+                self.utxos.put(rwtxn, &outpoint, &output)?;
+            }
+        }
+        // Handle deposits.
+        if let Some(deposit_block_hash) = two_way_peg_data.deposit_block_hash {
+            let (
+                last_deposit_block_seq_idx,
+                (last_deposit_block_hash, last_deposit_block_height),
+            ) = self
+                .deposit_blocks
+                .last(rwtxn)?
+                .ok_or(Error::NoDepositBlock)?;
+            assert_eq!(deposit_block_hash, last_deposit_block_hash);
+            assert_eq!(block_height - 1, last_deposit_block_height);
+            if !self
+                .deposit_blocks
+                .delete(rwtxn, &last_deposit_block_seq_idx)?
+            {
+                return Err(Error::NoDepositBlock);
+            };
+        }
+        for deposit in two_way_peg_data.deposits.iter().rev() {
+            if let Ok(_address) = deposit.output.address.parse::<Address>() {
+                let outpoint = OutPoint::Deposit(deposit.outpoint);
+                if !self.utxos.delete(rwtxn, &outpoint)? {
+                    return Err(Error::NoUtxo { outpoint });
                 }
             }
         }
@@ -876,6 +1213,38 @@ impl State {
         Ok(())
     }
 
+    fn revert_bitname_registration(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        name_hash: BitName,
+    ) -> Result<(), Error> {
+        if !self.bitnames.delete(rwtxn, &name_hash)? {
+            return Err(Error::MissingBitName { name_hash });
+        }
+        // Find the reservation to restore
+        let implied_commitment =
+            filled_tx.implied_reservation_commitment().expect(
+                "A BitName registration tx should have an implied commitment",
+            );
+        let burned_reservation_txid =
+            filled_tx.spent_reservations().find_map(|(_, filled_output)| {
+                let (txid, commitment) = filled_output.reservation_data()
+                    .expect("A spent reservation should correspond to a commitment");
+                if *commitment == implied_commitment {
+                    Some(txid)
+                } else {
+                    None
+                }
+            }).expect("A BitName registration tx should correspond to a burned reservation");
+        self.bitname_reservations.put(
+            rwtxn,
+            burned_reservation_txid,
+            &implied_commitment,
+        )?;
+        Ok(())
+    }
+
     // apply bitname updates
     fn apply_bitname_updates(
         &self,
@@ -901,6 +1270,34 @@ impl State {
                 name_hash: *updated_bitname,
             })?;
         bitname_data.apply_updates(bitname_updates, filled_tx.txid(), height);
+        self.bitnames.put(rwtxn, updated_bitname, &bitname_data)?;
+        Ok(())
+    }
+
+    fn revert_bitname_updates(
+        &self,
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        bitname_updates: BitNameDataUpdates,
+        height: u32,
+    ) -> Result<(), Error> {
+        // the updated bitname is the BitName that corresponds to the last
+        // bitname output, or equivalently, the BitName corresponding to the
+        // last bitname input
+        let updated_bitname = filled_tx
+            .spent_bitnames()
+            .next_back()
+            .ok_or(Error::NoBitNamesToUpdate)?
+            .1
+            .bitname()
+            .expect("should only contain BitName outputs");
+        let mut bitname_data = self
+            .bitnames
+            .get(rwtxn, updated_bitname)?
+            .ok_or(Error::MissingBitName {
+                name_hash: *updated_bitname,
+            })?;
+        bitname_data.revert_updates(bitname_updates, filled_tx.txid(), height);
         self.bitnames.put(rwtxn, updated_bitname, &bitname_data)?;
         Ok(())
     }
@@ -942,85 +1339,59 @@ impl State {
         Ok(())
     }
 
-    pub fn connect_body(
+    // revert batch icann registration
+    fn revert_batch_icann(
         &self,
-        txn: &mut RwTxn,
-        body: &Body,
-        height: u32,
-    ) -> Result<MerkleRoot, Error> {
-        let mut filled_txs: Vec<FilledTransaction> = Vec::new();
-        for transaction in &body.transactions {
-            let filled_tx = self.fill_transaction(txn, transaction)?;
-            let txid = filled_tx.txid();
-            for (vin, input) in filled_tx.inputs().iter().enumerate() {
-                let spent_output = self
-                    .utxos
-                    .get(txn, input)?
-                    .ok_or(Error::NoUtxo { outpoint: *input })?;
-                let spent_output = SpentOutput {
-                    output: spent_output,
-                    inpoint: InPoint::Regular {
-                        txid,
-                        vin: vin as u32,
-                    },
-                };
-                self.utxos.delete(txn, input)?;
-                self.stxos.put(txn, input, &spent_output)?;
+        rwtxn: &mut RwTxn,
+        filled_tx: &FilledTransaction,
+        batch_icann_data: &BatchIcannRegistrationData,
+    ) -> Result<(), Error> {
+        let name_hashes = batch_icann_data.plain_names.iter().map(|name| {
+            let hash = blake3::hash(name.as_bytes());
+            BitName(Hash::from(hash))
+        });
+        let mut spent_bitnames = filled_tx.spent_bitnames();
+        for name_hash in name_hashes.into_iter().rev() {
+            // search for the bitname to be registered as an ICANN domain
+            // exists in the inputs
+            let found_bitname = spent_bitnames.any(|(_, outpoint)| {
+                let bitname = outpoint.bitname()
+                    .expect("spent bitname input should correspond to a known name hash");
+                *bitname == name_hash
+            });
+            if found_bitname {
+                let mut bitname_data = self
+                    .bitnames
+                    .get(rwtxn, &name_hash)?
+                    .ok_or(Error::MissingBitName { name_hash })?;
+                assert!(!bitname_data.is_icann);
+                bitname_data.is_icann = false;
+                self.bitnames.put(rwtxn, &name_hash, &bitname_data)?;
+            } else {
+                return Err(Error::MissingBitNameInput { name_hash });
             }
-            let filled_outputs = filled_tx
-                .filled_outputs()
-                .ok_or(Error::FillTxOutputContentsFailed)?;
-            for (vout, filled_output) in filled_outputs.iter().enumerate() {
-                let outpoint = OutPoint::Regular {
-                    txid,
-                    vout: vout as u32,
-                };
-                self.utxos.put(txn, &outpoint, filled_output)?;
-            }
-            match &transaction.data {
-                None => (),
-                Some(TxData::BitNameReservation { commitment }) => {
-                    self.bitname_reservations.put(txn, &txid, commitment)?;
-                }
-                Some(TxData::BitNameRegistration {
-                    name_hash,
-                    revealed_nonce: _,
-                    bitname_data,
-                }) => {
-                    let () = self.apply_bitname_registration(
-                        txn,
-                        &filled_tx,
-                        *name_hash,
-                        bitname_data,
-                        height,
-                    )?;
-                }
-                Some(TxData::BitNameUpdate(bitname_updates)) => {
-                    let () = self.apply_bitname_updates(
-                        txn,
-                        &filled_tx,
-                        (**bitname_updates).clone(),
-                        height,
-                    )?;
-                }
-                Some(TxData::BatchIcann(batch_icann_data)) => {
-                    let () = self.apply_batch_icann(
-                        txn,
-                        &filled_tx,
-                        batch_icann_data,
-                    )?;
-                }
-            }
-            filled_txs.push(filled_tx);
         }
-        let merkle_root = Body::compute_merkle_root(
-            body.coinbase.as_slice(),
-            filled_txs.as_slice(),
-        )
-        .ok_or(Error::MerkleRoot)?;
+        Ok(())
+    }
+
+    pub fn connect_block(
+        &self,
+        rwtxn: &mut RwTxn,
+        header: &Header,
+        body: &Body,
+    ) -> Result<MerkleRoot, Error> {
+        let height = self.get_height(rwtxn)?;
+        let tip_hash = self.get_tip(rwtxn)?;
+        if tip_hash != header.prev_side_hash {
+            let err = InvalidHeaderError::PrevSideHash {
+                expected: tip_hash,
+                received: header.prev_side_hash,
+            };
+            return Err(Error::InvalidHeader(err));
+        }
         for (vout, output) in body.coinbase.iter().enumerate() {
             let outpoint = OutPoint::Coinbase {
-                merkle_root,
+                merkle_root: header.merkle_root,
                 vout: vout as u32,
             };
             let filled_content = match output.content.clone() {
@@ -1045,9 +1416,204 @@ impl State {
                 content: filled_content,
                 memo: output.memo.clone(),
             };
-            self.utxos.put(txn, &outpoint, &filled_output)?;
+            self.utxos.put(rwtxn, &outpoint, &filled_output)?;
         }
+        let mut filled_txs: Vec<FilledTransaction> = Vec::new();
+        for transaction in &body.transactions {
+            let filled_tx = self.fill_transaction(rwtxn, transaction)?;
+            let txid = filled_tx.txid();
+            for (vin, input) in filled_tx.inputs().iter().enumerate() {
+                let spent_output = self
+                    .utxos
+                    .get(rwtxn, input)?
+                    .ok_or(Error::NoUtxo { outpoint: *input })?;
+                let spent_output = SpentOutput {
+                    output: spent_output,
+                    inpoint: InPoint::Regular {
+                        txid,
+                        vin: vin as u32,
+                    },
+                };
+                self.utxos.delete(rwtxn, input)?;
+                self.stxos.put(rwtxn, input, &spent_output)?;
+            }
+            let filled_outputs = filled_tx
+                .filled_outputs()
+                .ok_or(Error::FillTxOutputContentsFailed)?;
+            for (vout, filled_output) in filled_outputs.iter().enumerate() {
+                let outpoint = OutPoint::Regular {
+                    txid,
+                    vout: vout as u32,
+                };
+                self.utxos.put(rwtxn, &outpoint, filled_output)?;
+            }
+            match &transaction.data {
+                None => (),
+                Some(TxData::BitNameReservation { commitment }) => {
+                    self.bitname_reservations.put(rwtxn, &txid, commitment)?;
+                }
+                Some(TxData::BitNameRegistration {
+                    name_hash,
+                    revealed_nonce: _,
+                    bitname_data,
+                }) => {
+                    let () = self.apply_bitname_registration(
+                        rwtxn,
+                        &filled_tx,
+                        *name_hash,
+                        bitname_data,
+                        height,
+                    )?;
+                }
+                Some(TxData::BitNameUpdate(bitname_updates)) => {
+                    let () = self.apply_bitname_updates(
+                        rwtxn,
+                        &filled_tx,
+                        (**bitname_updates).clone(),
+                        height,
+                    )?;
+                }
+                Some(TxData::BatchIcann(batch_icann_data)) => {
+                    let () = self.apply_batch_icann(
+                        rwtxn,
+                        &filled_tx,
+                        batch_icann_data,
+                    )?;
+                }
+            }
+            filled_txs.push(filled_tx);
+        }
+        let merkle_root = Body::compute_merkle_root(
+            body.coinbase.as_slice(),
+            filled_txs.as_slice(),
+        )
+        .ok_or(Error::MerkleRoot)?;
+        if merkle_root != header.merkle_root {
+            let err = Error::InvalidBody {
+                expected: header.merkle_root,
+                computed: merkle_root,
+            };
+            return Err(err);
+        }
+        let block_hash = header.hash();
+        self.tip.put(rwtxn, &UnitKey, &block_hash)?;
+        self.height.put(rwtxn, &UnitKey, &(height + 1))?;
         Ok(merkle_root)
+    }
+
+    pub fn disconnect_tip(
+        &self,
+        rwtxn: &mut RwTxn,
+        header: &Header,
+        body: &Body,
+    ) -> Result<(), Error> {
+        let tip_hash = self.get_tip(rwtxn)?;
+        if tip_hash != header.hash() {
+            let err = InvalidHeaderError::BlockHash {
+                expected: tip_hash,
+                computed: header.hash(),
+            };
+            return Err(Error::InvalidHeader(err));
+        }
+        let height = self.get_height(rwtxn)?;
+        // revert txs, last-to-first
+        let mut filled_txs: Vec<FilledTransaction> = Vec::new();
+        body.transactions.iter().rev().try_for_each(|tx| {
+            let txid = tx.txid();
+            let filled_tx =
+                self.fill_transaction_from_stxos(rwtxn, tx.clone())?;
+            // revert transaction effects
+            match &tx.data {
+                None => (),
+                Some(TxData::BitNameReservation { commitment }) => {
+                    self.bitname_reservations.put(rwtxn, &txid, commitment)?;
+                    if !self.bitname_reservations.delete(rwtxn, &txid)? {
+                        return Err(Error::MissingReservation { txid });
+                    }
+                }
+                Some(TxData::BitNameRegistration {
+                    name_hash,
+                    revealed_nonce: _,
+                    bitname_data: _,
+                }) => {
+                    let () = self.revert_bitname_registration(
+                        rwtxn, &filled_tx, *name_hash,
+                    )?;
+                }
+                Some(TxData::BitNameUpdate(bitname_updates)) => {
+                    let () = self.revert_bitname_updates(
+                        rwtxn,
+                        &filled_tx,
+                        (**bitname_updates).clone(),
+                        height - 1,
+                    )?;
+                }
+                Some(TxData::BatchIcann(batch_icann_data)) => {
+                    let () = self.revert_batch_icann(
+                        rwtxn,
+                        &filled_tx,
+                        batch_icann_data,
+                    )?;
+                }
+            }
+            filled_txs.push(filled_tx);
+            // delete UTXOs, last-to-first
+            tx.outputs.iter().enumerate().rev().try_for_each(
+                |(vout, _output)| {
+                    let outpoint = OutPoint::Regular {
+                        txid,
+                        vout: vout as u32,
+                    };
+                    if self.utxos.delete(rwtxn, &outpoint)? {
+                        Ok(())
+                    } else {
+                        Err(Error::NoUtxo { outpoint })
+                    }
+                },
+            )?;
+            // unspend STXOs, last-to-first
+            tx.inputs.iter().rev().try_for_each(|outpoint| {
+                if let Some(spent_output) = self.stxos.get(rwtxn, outpoint)? {
+                    self.stxos.delete(rwtxn, outpoint)?;
+                    self.utxos.put(rwtxn, outpoint, &spent_output.output)?;
+                    Ok(())
+                } else {
+                    Err(Error::NoStxo {
+                        outpoint: *outpoint,
+                    })
+                }
+            })
+        })?;
+        filled_txs.reverse();
+        // delete coinbase UTXOs, last-to-first
+        body.coinbase.iter().enumerate().rev().try_for_each(
+            |(vout, _output)| {
+                let outpoint = OutPoint::Coinbase {
+                    merkle_root: header.merkle_root,
+                    vout: vout as u32,
+                };
+                if self.utxos.delete(rwtxn, &outpoint)? {
+                    Ok(())
+                } else {
+                    Err(Error::NoUtxo { outpoint })
+                }
+            },
+        )?;
+        let merkle_root = Body::compute_merkle_root(
+            body.coinbase.as_slice(),
+            filled_txs.as_slice(),
+        )
+        .ok_or(Error::MerkleRoot)?;
+        if merkle_root != header.merkle_root {
+            let err = Error::InvalidBody {
+                expected: header.merkle_root,
+                computed: merkle_root,
+            };
+            return Err(err);
+        }
+        self.tip.put(rwtxn, &UnitKey, &header.prev_side_hash)?;
+        self.height.put(rwtxn, &UnitKey, &(height - 1))?;
+        Ok(())
     }
 
     /// Get total sidechain wealth in Bitcoin

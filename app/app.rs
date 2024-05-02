@@ -5,8 +5,6 @@ use std::{
 };
 
 use parking_lot::RwLock;
-use tokio::sync::RwLock as TokioRwLock;
-
 use plain_bitnames::{
     bip300301::{bitcoin, MainClient},
     format_deposit_address,
@@ -18,17 +16,10 @@ use plain_bitnames::{
     },
     wallet::{self, Wallet},
 };
+use tokio::sync::RwLock as TokioRwLock;
+use tokio_util::task::LocalPoolHandle;
 
 use crate::cli::Config;
-
-#[derive(Clone)]
-pub struct App {
-    pub node: Arc<Node>,
-    pub wallet: Arc<Wallet>,
-    pub miner: Arc<TokioRwLock<Miner>>,
-    pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
-    pub runtime: Arc<tokio::runtime::Runtime>,
-}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -46,6 +37,16 @@ pub enum Error {
     Other(#[from] anyhow::Error),
     #[error("wallet error")]
     Wallet(#[from] wallet::Error),
+}
+
+#[derive(Clone)]
+pub struct App {
+    pub node: Arc<Node>,
+    pub wallet: Arc<Wallet>,
+    pub miner: Arc<TokioRwLock<Miner>>,
+    pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
+    pub runtime: Arc<tokio::runtime::Runtime>,
+    pub local_pool: LocalPoolHandle,
 }
 
 impl App {
@@ -66,24 +67,18 @@ impl App {
             &config.main_user,
             &config.main_password,
         )?;
-        let node = runtime.block_on(async {
-            let node = match Node::new(
-                config.net_addr,
-                &config.datadir,
-                config.main_addr,
-                &config.main_password,
-                &config.main_user,
-                #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-                config.zmq_addr,
-            ) {
-                Ok(node) => node,
-                Err(err) => return Err(err),
-            };
-            Ok(node)
-        })?;
-        let node = Arc::new(node);
         let rt_guard = runtime.enter();
-        node.clone().run()?;
+        let local_pool = LocalPoolHandle::new(1);
+        let node = Node::new(
+            config.net_addr,
+            &config.datadir,
+            config.main_addr,
+            &config.main_password,
+            &config.main_user,
+            local_pool.clone(),
+            #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+            config.zmq_addr,
+        )?;
         drop(rt_guard);
         let utxos = {
             let mut utxos = wallet.get_utxos()?;
@@ -96,18 +91,18 @@ impl App {
             Arc::new(RwLock::new(utxos))
         };
         Ok(Self {
-            node,
+            node: Arc::new(node),
             wallet: Arc::new(wallet),
             miner: Arc::new(TokioRwLock::new(miner)),
             utxos,
             runtime: Arc::new(runtime),
+            local_pool,
         })
     }
 
     pub fn sign_and_send(&self, tx: Transaction) -> Result<(), Error> {
         let authorized_transaction = self.wallet.authorize(tx)?;
-        self.runtime
-            .block_on(self.node.submit_transaction(&authorized_transaction))?;
+        self.node.submit_transaction(authorized_transaction)?;
         self.update_utxos()?;
         Ok(())
     }
@@ -157,6 +152,7 @@ impl App {
                 inbox_whitelist.contains(bitname)
             })
         };
+        let tip = self.node.get_tip()?;
         let outpoints_to_block_heights: HashMap<_, _> = utxos
             .iter()
             .map(|(&outpoint, _)| outpoint)
@@ -166,8 +162,16 @@ impl App {
                 _ => None,
             })
             .map(|(outpoint, txid)| {
-                let height = self.node.get_tx_height(txid)?;
-                Ok((outpoint, height))
+                let inclusions = self.node.get_tx_inclusions(txid)?;
+                let Some(block_hash) =
+                    inclusions.into_iter().try_find(|block_hash| {
+                        self.node.is_descendant(*block_hash, tip)
+                    })?
+                else {
+                    return Ok((outpoint, None));
+                };
+                let height = self.node.get_height(block_hash)?;
+                Ok((outpoint, Some(height)))
             })
             .collect::<Result<_, node::Error>>()?;
         let inpoints_to_block_heights: HashMap<_, _> =
@@ -179,8 +183,14 @@ impl App {
                         "Impossible: bitname inpoint can only refer to regular tx"
                     )
                 };
-                let height = self.node.get_tx_height(txid)?;
-                Ok((spent_output.inpoint, height))
+                let inclusions = self.node.get_tx_inclusions(txid)?;
+                let Some(block_hash) = inclusions.into_iter().try_find(|block_hash| {
+                    self.node.is_descendant(*block_hash, tip)
+                })? else {
+                    return Ok((spent_output.inpoint, None));
+                };
+                let height = self.node.get_height(block_hash)?;
+                Ok((spent_output.inpoint, Some(height)))
             }).collect::<Result<_, node::Error>>()?;
         /* associate to each address, a set of pairs of bitname data and
         ownership period for the bitname. */
@@ -192,7 +202,9 @@ impl App {
                 continue;
             };
             let bitname_data = self.node.get_current_bitname_data(bitname)?;
-            let height = outpoints_to_block_heights[&outpoint];
+            let Some(height) = outpoints_to_block_heights[&outpoint] else {
+                continue;
+            };
             let owned = Range {
                 start: height,
                 end: u32::MAX,
@@ -207,14 +219,17 @@ impl App {
             let Some(bitname) = output.output.bitname() else {
                 continue;
             };
-            let acquired_height = outpoints_to_block_heights[&outpoint];
+            let Some(acquired_height) = outpoints_to_block_heights[&outpoint]
+            else {
+                continue;
+            };
             let spent_height = inpoints_to_block_heights[&output.inpoint];
             let bitname_data = self
                 .node
                 .get_bitname_data_at_block_height(bitname, acquired_height)?;
             let owned = Range {
                 start: acquired_height,
-                end: spent_height,
+                end: spent_height.unwrap_or(u32::MAX),
             };
             addrs_to_bitnames_ownership
                 .entry(output.output.address)
@@ -231,7 +246,9 @@ impl App {
             else {
                 return false;
             };
-            let height = outpoints_to_block_heights[outpoint];
+            let Some(height) = outpoints_to_block_heights[outpoint] else {
+                return false;
+            };
             let min_fee = bitname_data_ownership
                 .iter()
                 .filter_map(|(bitname_data, ownership)| {
@@ -278,7 +295,7 @@ impl App {
             let txs = txs.into_iter().map(|tx| tx.into()).collect();
             Body::new(txs, coinbase)
         };
-        let prev_side_hash = self.node.get_best_hash()?;
+        let prev_side_hash = self.node.get_tip()?;
         let prev_main_hash = self
             .miner
             .read()

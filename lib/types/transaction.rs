@@ -37,7 +37,9 @@ where
     Deserialize,
     Eq,
     Hash,
+    Ord,
     PartialEq,
+    PartialOrd,
     Serialize,
 )]
 pub enum OutPoint {
