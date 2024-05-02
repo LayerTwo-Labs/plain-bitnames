@@ -164,7 +164,7 @@ impl App {
             .map(|(outpoint, txid)| {
                 let inclusions = self.node.get_tx_inclusions(txid)?;
                 let Some(block_hash) =
-                    inclusions.into_iter().try_find(|block_hash| {
+                    inclusions.into_keys().try_find(|block_hash| {
                         self.node.is_descendant(*block_hash, tip)
                     })?
                 else {
@@ -184,7 +184,7 @@ impl App {
                     )
                 };
                 let inclusions = self.node.get_tx_inclusions(txid)?;
-                let Some(block_hash) = inclusions.into_iter().try_find(|block_hash| {
+                let Some(block_hash) = inclusions.into_keys().try_find(|block_hash| {
                     self.node.is_descendant(*block_hash, tip)
                 })? else {
                     return Ok((spent_output.inpoint, None));

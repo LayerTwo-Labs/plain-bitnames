@@ -1,4 +1,5 @@
 #![feature(let_chains)]
+#![feature(try_find)]
 
 pub mod archive;
 pub mod authorization;

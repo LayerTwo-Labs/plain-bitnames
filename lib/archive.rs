@@ -1,4 +1,4 @@
-use std::{cmp::Ordering, collections::BTreeSet};
+use std::{cmp::Ordering, collections::BTreeMap};
 
 use bip300301::{
     bitcoin::{self, block::Header as BitcoinHeader, hashes::Hash},
@@ -56,9 +56,9 @@ pub struct Archive {
     /// All ancestors of any block should always be present
     total_work:
         Database<SerdeBincode<bitcoin::BlockHash>, SerdeBincode<bitcoin::Work>>,
-    /// Blocks in which a tx has been included
+    /// Blocks in which a tx has been included, and index within the block
     txid_to_inclusions:
-        Database<SerdeBincode<Txid>, SerdeBincode<BTreeSet<BlockHash>>>,
+        Database<SerdeBincode<Txid>, SerdeBincode<BTreeMap<BlockHash, u32>>>,
 }
 
 impl Archive {
@@ -255,12 +255,12 @@ impl Archive {
             .ok_or(Error::NoMainHeader(block_hash))
     }
 
-    /// Get blocks in which a tx was included.
+    /// Get blocks in which a tx was included, and tx index within each block
     pub fn get_tx_inclusions(
         &self,
         rotxn: &RoTxn,
         txid: Txid,
-    ) -> Result<BTreeSet<BlockHash>, Error> {
+    ) -> Result<BTreeMap<BlockHash, u32>, Error> {
         let inclusions = self
             .txid_to_inclusions
             .get(rotxn, &txid)?
@@ -289,13 +289,16 @@ impl Archive {
     ) -> Result<(), Error> {
         let _header = self.get_header(rwtxn, block_hash)?;
         self.bodies.put(rwtxn, &block_hash, body)?;
-        body.transactions.iter().try_for_each(|tx| {
-            let txid = tx.txid();
-            let mut inclusions = self.get_tx_inclusions(rwtxn, txid)?;
-            inclusions.insert(block_hash);
-            self.txid_to_inclusions.put(rwtxn, &txid, &inclusions)?;
-            Ok(())
-        })
+        body.transactions
+            .iter()
+            .enumerate()
+            .try_for_each(|(txin, tx)| {
+                let txid = tx.txid();
+                let mut inclusions = self.get_tx_inclusions(rwtxn, txid)?;
+                inclusions.insert(block_hash, txin as u32);
+                self.txid_to_inclusions.put(rwtxn, &txid, &inclusions)?;
+                Ok(())
+            })
     }
 
     /// Store deposit info for a block

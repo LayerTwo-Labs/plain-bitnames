@@ -6,8 +6,16 @@ use bip300301::bitcoin;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use plain_bitnames::types::{
     hashes::BitName, Address, BitNameData, Block, BlockHash, FilledOutput,
-    OutPoint, Txid,
+    OutPoint, Transaction, TxIn, Txid,
 };
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TxInfo {
+    pub confirmations: Option<u32>,
+    pub fee_sats: u64,
+    pub txin: Option<TxIn>,
+}
 
 #[rpc(client, server)]
 pub trait Rpc {
@@ -45,6 +53,20 @@ pub trait Rpc {
     /// Get all paymail
     #[method(name = "get_paymail")]
     async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>>;
+
+    /// Get transaction by txid
+    #[method(name = "get_transaction")]
+    async fn get_transaction(
+        &self,
+        txid: Txid,
+    ) -> RpcResult<Option<Transaction>>;
+
+    /// Get information about a transaction in the current chain
+    #[method(name = "get_transaction_info")]
+    async fn get_transaction_info(
+        &self,
+        txid: Txid,
+    ) -> RpcResult<Option<TxInfo>>;
 
     /// Get the current block count
     #[method(name = "getblockcount")]

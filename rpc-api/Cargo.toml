@@ -8,6 +8,7 @@ version.workspace = true
 bip300301.workspace = true
 jsonrpsee = { version = "0.20.0", features = ["macros"] }
 plain_bitnames = { path = "../lib" }
+serde = { version = "1.0.179", features = ["derive"] }
 
 [lib]
 name = "plain_bitnames_app_rpc_api"
