@@ -416,18 +416,21 @@ impl State {
     pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
-        let tip = env.create_database(Some("tip"))?;
-        let height = env.create_database(Some("height"))?;
+        let mut rwtxn = env.write_txn()?;
+        let tip = env.create_database(&mut rwtxn, Some("tip"))?;
+        let height = env.create_database(&mut rwtxn, Some("height"))?;
         let bitname_reservations =
-            env.create_database(Some("bitname_reservations"))?;
-        let bitnames = env.create_database(Some("bitnames"))?;
-        let utxos = env.create_database(Some("utxos"))?;
-        let stxos = env.create_database(Some("stxos"))?;
+            env.create_database(&mut rwtxn, Some("bitname_reservations"))?;
+        let bitnames = env.create_database(&mut rwtxn, Some("bitnames"))?;
+        let utxos = env.create_database(&mut rwtxn, Some("utxos"))?;
+        let stxos = env.create_database(&mut rwtxn, Some("stxos"))?;
         let pending_withdrawal_bundle =
-            env.create_database(Some("pending_withdrawal_bundle"))?;
+            env.create_database(&mut rwtxn, Some("pending_withdrawal_bundle"))?;
         let withdrawal_bundles =
-            env.create_database(Some("withdrawal_bundles"))?;
-        let deposit_blocks = env.create_database(Some("deposit_blocks"))?;
+            env.create_database(&mut rwtxn, Some("withdrawal_bundles"))?;
+        let deposit_blocks =
+            env.create_database(&mut rwtxn, Some("deposit_blocks"))?;
+        rwtxn.commit()?;
         Ok(Self {
             tip,
             height,
@@ -1525,8 +1528,7 @@ impl State {
             // revert transaction effects
             match &tx.data {
                 None => (),
-                Some(TxData::BitNameReservation { commitment }) => {
-                    self.bitname_reservations.put(rwtxn, &txid, commitment)?;
+                Some(TxData::BitNameReservation { .. }) => {
                     if !self.bitname_reservations.delete(rwtxn, &txid)? {
                         return Err(Error::MissingReservation { txid });
                     }
