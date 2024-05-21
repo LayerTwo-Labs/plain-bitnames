@@ -153,7 +153,9 @@ where
     borsh::BorshSerialize::serialize(bytes, writer)
 }
 
-#[derive(BorshSerialize, Clone, Debug, Serialize, Deserialize)]
+#[derive(
+    BorshSerialize, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize,
+)]
 pub struct Header {
     pub merkle_root: MerkleRoot,
     pub prev_side_hash: BlockHash,
