@@ -780,12 +780,14 @@ impl State {
 
     /// Check that
     /// * If the tx is a BitName reservation, then the number of bitname
-    /// reservations in the outputs is exactly one more than the number of
-    /// bitname reservations in the inputs. If the tx is a BitName
-    /// registration, then the number of bitname reservations in the outputs
-    /// is exactly one less than the number of bitname reservations in the
-    /// inputs. Otherwise, the number of bitname reservations in the outputs
-    /// is exactly equal to the number of bitname reservations in the inputs.
+    ///   reservations in the outputs is exactly one more than the number of
+    ///   bitname reservations in the inputs.
+    /// * If the tx is a BitName
+    ///   registration, then the number of bitname reservations in the outputs
+    ///   is exactly one less than the number of bitname reservations in the
+    ///   inputs.
+    /// * Otherwise, the number of bitname reservations in the outputs
+    ///   is exactly equal to the number of bitname reservations in the inputs.
     pub fn validate_reservations(
         &self,
         tx: &FilledTransaction,
@@ -811,15 +813,16 @@ impl State {
 
     /// Check that
     /// * If the tx is a BitName registration, then the number of bitnames
-    /// in the outputs is exactly one more than the number of bitnames in the
-    /// inputs. Otherwise, the number of bitnames in the outputs is equal to
-    /// the number of bitnames in the inputs.
+    ///   in the outputs is exactly one more than the number of bitnames in the
+    ///   inputs.
+    /// * Otherwise, the number of bitnames in the outputs is equal to
+    ///   the number of bitnames in the inputs.
     /// * If the tx is a BitName registration, then the newly registered
-    /// BitName must be unregistered.
+    ///   BitName must be unregistered.
     /// * If the tx is a BitName update, then there must be at least one
-    /// BitName input and output
+    ///   BitName input and output
     /// * If the tx is a Batch Icann registration, then there must be at least
-    /// as many bitname outputs as there are registered names.
+    ///   as many bitname outputs as there are registered names.
     pub fn validate_bitnames(
         &self,
         rotxn: &RoTxn,
