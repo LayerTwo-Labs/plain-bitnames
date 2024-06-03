@@ -6,7 +6,7 @@ use bip300301::bitcoin;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use plain_bitnames::types::{
     hashes::BitName, Address, BitNameData, Block, BlockHash, FilledOutput,
-    OutPoint, Transaction, TxIn, Txid,
+    OutPoint, PointedOutput, Transaction, TxIn, Txid,
 };
 use serde::{Deserialize, Serialize};
 
@@ -68,9 +68,23 @@ pub trait Rpc {
         txid: Txid,
     ) -> RpcResult<Option<TxInfo>>;
 
+    /// Get wallet addresses, sorted by base58 encoding
+    #[method(name = "get_wallet_addresses")]
+    async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>>;
+
+    /// Get wallet UTXOs
+    #[method(name = "get_wallet_utxos")]
+    async fn get_wallet_utxos(
+        &self,
+    ) -> RpcResult<Vec<PointedOutput<FilledOutput>>>;
+
     /// Get the current block count
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> RpcResult<u32>;
+
+    /// List all UTXOs
+    #[method(name = "list_utxos")]
+    async fn list_utxos(&self) -> RpcResult<Vec<PointedOutput<FilledOutput>>>;
 
     /// Attempt to mine a sidechain block
     #[method(name = "mine")]
@@ -78,7 +92,7 @@ pub trait Rpc {
 
     /// List owned UTXOs
     #[method(name = "my_utxos")]
-    async fn my_utxos(&self) -> RpcResult<Vec<FilledOutput>>;
+    async fn my_utxos(&self) -> RpcResult<Vec<PointedOutput<FilledOutput>>>;
 
     /// Reserve a BitName
     #[method(name = "reserve_bitname")]

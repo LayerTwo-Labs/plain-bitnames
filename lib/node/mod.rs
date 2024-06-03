@@ -301,10 +301,10 @@ impl Node {
         bitname: &BitName,
         height: u32,
     ) -> Result<BitNameData, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         Ok(self
             .state
-            .get_bitname_data_at_block_height(&txn, bitname, height)?)
+            .get_bitname_data_at_block_height(&rotxn, bitname, height)?)
     }
 
     /// resolve current bitname data, if it exists
@@ -312,8 +312,8 @@ impl Node {
         &self,
         bitname: &BitName,
     ) -> Result<Option<BitNameData>, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.state.try_get_current_bitname_data(&txn, bitname)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.state.try_get_current_bitname_data(&rotxn, bitname)?)
     }
 
     /// Resolve current bitname data. Returns an error if it does not exist.
@@ -321,8 +321,8 @@ impl Node {
         &self,
         bitname: &BitName,
     ) -> Result<BitNameData, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.state.get_current_bitname_data(&txn, bitname)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.state.get_current_bitname_data(&rotxn, bitname)?)
     }
 
     pub fn submit_transaction(
@@ -339,14 +339,21 @@ impl Node {
         Ok(())
     }
 
+    pub fn get_all_utxos(
+        &self,
+    ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
+        let rotxn = self.env.read_txn()?;
+        self.state.get_utxos(&rotxn).map_err(Error::from)
+    }
+
     pub fn get_spent_utxos(
         &self,
         outpoints: &[OutPoint],
     ) -> Result<Vec<(OutPoint, SpentOutput)>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let mut spent = vec![];
         for outpoint in outpoints {
-            if let Some(output) = self.state.stxos.get(&txn, outpoint)? {
+            if let Some(output) = self.state.stxos.get(&rotxn, outpoint)? {
                 spent.push((*outpoint, output));
             }
         }
@@ -357,8 +364,8 @@ impl Node {
         &self,
         addresses: &HashSet<Address>,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let txn = self.env.read_txn()?;
-        let utxos = self.state.get_utxos_by_addresses(&txn, addresses)?;
+        let rotxn = self.env.read_txn()?;
+        let utxos = self.state.get_utxos_by_addresses(&rotxn, addresses)?;
         Ok(utxos)
     }
 
@@ -366,13 +373,13 @@ impl Node {
         &self,
         block_hash: BlockHash,
     ) -> Result<Option<Header>, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.archive.try_get_header(&txn, block_hash)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.archive.try_get_header(&rotxn, block_hash)?)
     }
 
     pub fn get_header(&self, block_hash: BlockHash) -> Result<Header, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.archive.get_header(&txn, block_hash)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.archive.get_header(&rotxn, block_hash)?)
     }
 
     /// Get the block hash at the specified height in the current chain,
@@ -398,13 +405,13 @@ impl Node {
         &self,
         block_hash: BlockHash,
     ) -> Result<Option<Body>, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.archive.try_get_body(&txn, block_hash)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.archive.try_get_body(&rotxn, block_hash)?)
     }
 
     pub fn get_body(&self, block_hash: BlockHash) -> Result<Body, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.archive.get_body(&txn, block_hash)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.archive.get_body(&rotxn, block_hash)?)
     }
 
     pub fn get_block(&self, block_hash: BlockHash) -> Result<Block, Error> {
@@ -415,15 +422,15 @@ impl Node {
     pub fn get_all_transactions(
         &self,
     ) -> Result<Vec<AuthorizedTransaction>, Error> {
-        let txn = self.env.read_txn()?;
-        let transactions = self.mempool.take_all(&txn)?;
+        let rotxn = self.env.read_txn()?;
+        let transactions = self.mempool.take_all(&rotxn)?;
         Ok(transactions)
     }
 
     /// Get total sidechain wealth in Bitcoin
     pub fn get_sidechain_wealth(&self) -> Result<bitcoin::Amount, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.state.sidechain_wealth(&txn)?)
+        let rotxn = self.env.read_txn()?;
+        Ok(self.state.sidechain_wealth(&rotxn)?)
     }
 
     pub fn get_transactions(
@@ -546,10 +553,10 @@ impl Node {
     pub fn get_pending_withdrawal_bundle(
         &self,
     ) -> Result<Option<WithdrawalBundle>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let bundle = self
             .state
-            .get_pending_withdrawal_bundle(&txn)?
+            .get_pending_withdrawal_bundle(&rotxn)?
             .map(|(bundle, _)| bundle);
         Ok(bundle)
     }
@@ -578,18 +585,17 @@ impl Node {
     ) -> Result<bool, Error> {
         let block_hash = header.hash();
         // Store the header, if ancestors exist
-        match self.try_get_header(header.prev_side_hash)? {
-            None => {
-                tracing::error!(
-                    "Rejecting block {block_hash} due to missing ancestor headers",
-                );
-                return Ok(false);
-            }
-            Some(_) => {
-                let mut rwtxn = self.env.write_txn()?;
-                let () = self.archive.put_header(&mut rwtxn, header)?;
-                rwtxn.commit()?;
-            }
+        if header.prev_side_hash != BlockHash::default()
+            && self.try_get_header(header.prev_side_hash)?.is_none()
+        {
+            tracing::error!(
+                "Rejecting block {block_hash} due to missing ancestor headers",
+            );
+            return Ok(false);
+        } else {
+            let mut rwtxn = self.env.write_txn()?;
+            let () = self.archive.put_header(&mut rwtxn, header)?;
+            rwtxn.commit()?;
         }
         // Request mainchain headers if they do not exist
         let _: mainchain_task::Response = self

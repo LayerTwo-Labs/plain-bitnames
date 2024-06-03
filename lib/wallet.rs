@@ -7,10 +7,12 @@ use std::{
 use bip300301::bitcoin;
 use byteorder::{BigEndian, ByteOrder};
 use ed25519_dalek_bip32::{ChildIndex, DerivationPath, ExtendedSigningKey};
+use futures::{Stream, StreamExt};
 use heed::{
     types::{Bytes, SerdeBincode, Str, U8},
-    Database, RoTxn,
+    RoTxn,
 };
+use tokio_stream::{wrappers::WatchStream, StreamMap};
 
 use crate::{
     authorization::{get_address, Authorization},
@@ -19,6 +21,7 @@ use crate::{
         FilledOutput, GetValue, Hash, InPoint, OutPoint, Output, OutputContent,
         SpentOutput, Transaction, TxData,
     },
+    util::{EnvExt, Watchable, WatchableDb},
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -55,17 +58,17 @@ pub struct Wallet {
     // Seed is always [u8; 64], but due to serde not implementing serialize
     // for [T; 64], use heed's `Bytes`
     // TODO: Don't store the seed in plaintext.
-    seed: Database<U8, Bytes>,
-    pub address_to_index:
-        Database<SerdeBincode<Address>, SerdeBincode<[u8; 4]>>,
-    pub index_to_address:
-        Database<SerdeBincode<[u8; 4]>, SerdeBincode<Address>>,
-    pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
-    pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
-    /// associates reservation commitments with plaintext bitnames
-    pub bitname_reservations: Database<SerdeBincode<[u8; 32]>, Str>,
-    /// associates bitnames with plaintext names
-    pub known_bitnames: Database<SerdeBincode<BitName>, Str>,
+    seed: WatchableDb<U8, Bytes>,
+    /// Map each address to it's index
+    address_to_index: WatchableDb<SerdeBincode<Address>, SerdeBincode<[u8; 4]>>,
+    /// Map each address index to an address
+    index_to_address: WatchableDb<SerdeBincode<[u8; 4]>, SerdeBincode<Address>>,
+    utxos: WatchableDb<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
+    stxos: WatchableDb<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
+    /// Associates reservation commitments with plaintext BitNames
+    bitname_reservations: WatchableDb<SerdeBincode<[u8; 32]>, Str>,
+    /// Associates BitNames with plaintext names
+    known_bitnames: WatchableDb<SerdeBincode<BitName>, Str>,
 }
 
 impl Wallet {
@@ -80,17 +83,17 @@ impl Wallet {
                 .open(path)?
         };
         let mut rwtxn = env.write_txn()?;
-        let seed_db = env.create_database(&mut rwtxn, Some("seed"))?;
+        let seed_db = env.create_watchable_db(&mut rwtxn, "seed")?;
         let address_to_index =
-            env.create_database(&mut rwtxn, Some("address_to_index"))?;
+            env.create_watchable_db(&mut rwtxn, "address_to_index")?;
         let index_to_address =
-            env.create_database(&mut rwtxn, Some("index_to_address"))?;
-        let utxos = env.create_database(&mut rwtxn, Some("utxos"))?;
-        let stxos = env.create_database(&mut rwtxn, Some("stxos"))?;
+            env.create_watchable_db(&mut rwtxn, "index_to_address")?;
+        let utxos = env.create_watchable_db(&mut rwtxn, "utxos")?;
+        let stxos = env.create_watchable_db(&mut rwtxn, "stxos")?;
         let bitname_reservations =
-            env.create_database(&mut rwtxn, Some("bitname_reservations"))?;
+            env.create_watchable_db(&mut rwtxn, "bitname_reservations")?;
         let known_bitnames =
-            env.create_database(&mut rwtxn, Some("known_bitnames"))?;
+            env.create_watchable_db(&mut rwtxn, "known_bitnames")?;
         rwtxn.commit()?;
         Ok(Self {
             env,
@@ -106,10 +109,10 @@ impl Wallet {
 
     fn get_signing_key(
         &self,
-        txn: &RoTxn,
+        rotxn: &RoTxn,
         index: u32,
     ) -> Result<ed25519_dalek::SigningKey, Error> {
-        let seed = self.seed.get(txn, &0)?.ok_or(Error::NoSeed)?;
+        let seed = self.seed.try_get(rotxn, &0)?.ok_or(Error::NoSeed)?;
         let xpriv = ExtendedSigningKey::from_seed(seed)?;
         let derivation_path = DerivationPath::new([
             ChildIndex::Hardened(1),
@@ -129,7 +132,7 @@ impl Wallet {
     ) -> Result<ed25519_dalek::SigningKey, Error> {
         let addr_idx = self
             .address_to_index
-            .get(rotxn, address)?
+            .try_get(rotxn, address)?
             .ok_or(Error::AddressDoesNotExist { address: *address })?;
         let signing_key =
             self.get_signing_key(rotxn, u32::from_be_bytes(addr_idx))?;
@@ -157,14 +160,14 @@ impl Wallet {
 
     /// Overwrite the seed, or set it if it does not already exist.
     pub fn overwrite_seed(&self, seed: &[u8; 64]) -> Result<(), Error> {
-        let mut txn = self.env.write_txn()?;
-        self.seed.put(&mut txn, &0, seed)?;
-        self.address_to_index.clear(&mut txn)?;
-        self.index_to_address.clear(&mut txn)?;
-        self.utxos.clear(&mut txn)?;
-        self.stxos.clear(&mut txn)?;
-        self.bitname_reservations.clear(&mut txn)?;
-        txn.commit()?;
+        let mut rwtxn = self.env.write_txn()?;
+        self.seed.put(&mut rwtxn, &0, seed)?;
+        self.address_to_index.clear(&mut rwtxn)?;
+        self.index_to_address.clear(&mut rwtxn)?;
+        self.utxos.clear(&mut rwtxn)?;
+        self.stxos.clear(&mut rwtxn)?;
+        self.bitname_reservations.clear(&mut rwtxn)?;
+        rwtxn.commit()?;
         Ok(())
     }
 
@@ -189,8 +192,8 @@ impl Wallet {
     }
 
     pub fn has_seed(&self) -> Result<bool, Error> {
-        let txn = self.env.read_txn()?;
-        Ok(self.seed.get(&txn, &0)?.is_some())
+        let rotxn = self.env.read_txn()?;
+        Ok(self.seed.try_get(&rotxn, &0)?.is_some())
     }
 
     /// Create a transaction with a fee only.
@@ -279,7 +282,7 @@ impl Wallet {
             else if let Some(last_output) = tx.outputs.last() {
                 let last_output_addr = last_output.address;
                 let rotxn = self.env.read_txn()?;
-                if self.address_to_index.get(&rotxn, &last_output_addr)?.is_some() {
+                if self.address_to_index.try_get(&rotxn, &last_output_addr)?.is_some() {
                     last_output_addr
                 } else {
                     self.get_new_address()?
@@ -334,7 +337,7 @@ impl Wallet {
             if let Some(last_output) = tx.outputs.last() {
                 let last_output_addr = last_output.address;
                 let rotxn = self.env.read_txn()?;
-                if self.address_to_index.get(&rotxn, &last_output_addr)?.is_some() {
+                if self.address_to_index.try_get(&rotxn, &last_output_addr)?.is_some() {
                     last_output_addr
                 } else {
                     self.get_new_address()?
@@ -401,9 +404,9 @@ impl Wallet {
         &self,
         value: u64,
     ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let mut utxos = vec![];
-        for item in self.utxos.iter(&txn)? {
+        for item in self.utxos.iter(&rotxn)? {
             utxos.push(item?);
         }
         utxos.sort_unstable_by_key(|(_, output)| output.get_value());
@@ -436,7 +439,7 @@ impl Wallet {
     ) -> Result<(), Error> {
         let mut txn = self.env.write_txn()?;
         for (outpoint, inpoint) in spent {
-            let output = self.utxos.get(&txn, outpoint)?;
+            let output = self.utxos.try_get(&txn, outpoint)?;
             if let Some(output) = output {
                 self.utxos.delete(&mut txn, outpoint)?;
                 let spent_output = SpentOutput {
@@ -464,8 +467,8 @@ impl Wallet {
 
     pub fn get_balance(&self) -> Result<u64, Error> {
         let mut balance: u64 = 0;
-        let txn = self.env.read_txn()?;
-        for item in self.utxos.iter(&txn)? {
+        let rotxn = self.env.read_txn()?;
+        for item in self.utxos.iter(&rotxn)? {
             let (_, utxo) = item?;
             balance += utxo.get_value();
         }
@@ -478,8 +481,8 @@ impl Wallet {
         &self,
         commitment: &Hash,
     ) -> Result<Option<String>, Error> {
-        let txn = self.env.read_txn()?;
-        let res = self.bitname_reservations.get(&txn, commitment)?;
+        let rotxn = self.env.read_txn()?;
+        let res = self.bitname_reservations.try_get(&rotxn, commitment)?;
         Ok(res.map(String::from))
     }
 
@@ -489,15 +492,15 @@ impl Wallet {
         &self,
         bitname: &BitName,
     ) -> Result<Option<String>, Error> {
-        let txn = self.env.read_txn()?;
-        let res = self.known_bitnames.get(&txn, bitname)?;
+        let rotxn = self.env.read_txn()?;
+        let res = self.known_bitnames.try_get(&rotxn, bitname)?;
         Ok(res.map(String::from))
     }
 
     pub fn get_utxos(&self) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let mut utxos = HashMap::new();
-        for item in self.utxos.iter(&txn)? {
+        for item in self.utxos.iter(&rotxn)? {
             let (outpoint, output) = item?;
             utxos.insert(outpoint, output);
         }
@@ -505,9 +508,9 @@ impl Wallet {
     }
 
     pub fn get_stxos(&self) -> Result<HashMap<OutPoint, SpentOutput>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let mut stxos = HashMap::new();
-        for item in self.stxos.iter(&txn)? {
+        for item in self.stxos.iter(&rotxn)? {
             let (outpoint, spent_output) = item?;
             stxos.insert(outpoint, spent_output);
         }
@@ -533,9 +536,9 @@ impl Wallet {
     }
 
     pub fn get_addresses(&self) -> Result<HashSet<Address>, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let mut addresses = HashSet::new();
-        for item in self.index_to_address.iter(&txn)? {
+        for item in self.index_to_address.iter(&rotxn)? {
             let (_, address) = item?;
             addresses.insert(address);
         }
@@ -546,19 +549,19 @@ impl Wallet {
         &self,
         transaction: Transaction,
     ) -> Result<AuthorizedTransaction, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let mut authorizations = vec![];
         for input in &transaction.inputs {
             let spent_utxo =
-                self.utxos.get(&txn, input)?.ok_or(Error::NoUtxo)?;
+                self.utxos.try_get(&rotxn, input)?.ok_or(Error::NoUtxo)?;
             let index = self
                 .address_to_index
-                .get(&txn, &spent_utxo.address)?
+                .try_get(&rotxn, &spent_utxo.address)?
                 .ok_or(Error::NoIndex {
-                address: spent_utxo.address,
-            })?;
+                    address: spent_utxo.address,
+                })?;
             let index = BigEndian::read_u32(&index);
-            let signing_key = self.get_signing_key(&txn, index)?;
+            let signing_key = self.get_signing_key(&rotxn, index)?;
             let signature =
                 crate::authorization::sign(&signing_key, &transaction)?;
             authorizations.push(Authorization {
@@ -573,12 +576,48 @@ impl Wallet {
     }
 
     pub fn get_num_addresses(&self) -> Result<u32, Error> {
-        let txn = self.env.read_txn()?;
+        let rotxn = self.env.read_txn()?;
         let (last_index, _) = self
             .index_to_address
-            .last(&txn)?
+            .last(&rotxn)?
             .unwrap_or(([0; 4], [0; 20].into()));
         let last_index = BigEndian::read_u32(&last_index);
         Ok(last_index)
+    }
+}
+
+impl Watchable<()> for Wallet {
+    type WatchStream = impl Stream<Item = ()>;
+
+    /// Get a signal that notifies whenever the wallet changes
+    fn watch(&self) -> Self::WatchStream {
+        let Self {
+            env: _,
+            seed,
+            address_to_index,
+            index_to_address,
+            utxos,
+            stxos,
+            bitname_reservations,
+            known_bitnames,
+        } = self;
+        let watchables = [
+            seed.watch(),
+            address_to_index.watch(),
+            index_to_address.watch(),
+            utxos.watch(),
+            stxos.watch(),
+            bitname_reservations.watch(),
+            known_bitnames.watch(),
+        ];
+        let streams = StreamMap::from_iter(
+            watchables.into_iter().map(WatchStream::new).enumerate(),
+        );
+        let streams_len = streams.len();
+        streams.ready_chunks(streams_len).map(|signals| {
+            assert_ne!(signals.len(), 0);
+            #[allow(clippy::unused_unit)]
+            ()
+        })
     }
 }

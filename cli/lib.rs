@@ -3,7 +3,10 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use bip300301::bitcoin;
 use clap::{Parser, Subcommand};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
-use plain_bitnames::types::{Address, BlockHash};
+use plain_bitnames::{
+    node::THIS_SIDECHAIN,
+    types::{Address, BlockHash},
+};
 use plain_bitnames_app_rpc_api::RpcClient;
 
 #[derive(Clone, Debug, Subcommand)]
@@ -27,6 +30,12 @@ pub enum Command {
     GetBlockcount,
     /// Get all paymail
     GetPaymail,
+    /// Get wallet addresses, sorted by base58 encoding
+    GetWalletAddresses,
+    /// Get wallet UTXOs
+    GetWalletUtxos,
+    /// List all UTXOs
+    ListUtxos,
     /// Attempt to mine a sidechain block
     Mine {
         #[arg(long)]
@@ -62,8 +71,10 @@ pub enum Command {
     },
 }
 
-const DEFAULT_RPC_ADDR: SocketAddr =
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 2020);
+const DEFAULT_RPC_ADDR: SocketAddr = SocketAddr::new(
+    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+    6000 + THIS_SIDECHAIN as u16,
+);
 
 #[derive(Clone, Debug, Parser)]
 #[command(author, version, about, long_about = None)]
@@ -112,6 +123,18 @@ impl Cli {
             Command::GetPaymail => {
                 let paymail = rpc_client.get_paymail().await?;
                 serde_json::to_string_pretty(&paymail)?
+            }
+            Command::GetWalletAddresses => {
+                let addresses = rpc_client.get_wallet_addresses().await?;
+                serde_json::to_string_pretty(&addresses)?
+            }
+            Command::GetWalletUtxos => {
+                let utxos = rpc_client.get_wallet_utxos().await?;
+                serde_json::to_string_pretty(&utxos)?
+            }
+            Command::ListUtxos => {
+                let utxos = rpc_client.list_utxos().await?;
+                serde_json::to_string_pretty(&utxos)?
             }
             Command::Mine { fee_sats } => {
                 let () = rpc_client.mine(fee_sats).await?;

@@ -911,3 +911,11 @@ impl FilledTransaction {
         }
     }
 }
+
+#[derive(
+    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+)]
+pub struct Pointed<OutputKind = Output> {
+    pub outpoint: OutPoint,
+    pub output: OutputKind,
+}

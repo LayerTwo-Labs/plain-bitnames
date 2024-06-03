@@ -23,7 +23,8 @@ pub use transaction::{
     Authorized, AuthorizedTransaction, BatchIcannRegistrationData, BitNameData,
     BitNameDataUpdates, Content as OutputContent,
     FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
-    InPoint, OutPoint, Output, SpentOutput, Transaction, TxData, Update,
+    InPoint, OutPoint, Output, Pointed as PointedOutput, SpentOutput,
+    Transaction, TxData, Update,
 };
 
 /// (de)serialize as Display/FromStr for human-readable forms like json,
