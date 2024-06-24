@@ -193,6 +193,12 @@ impl RpcServer for RpcServerImpl {
         Ok(utxos)
     }
 
+    async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi> {
+        let res =
+            <plain_bitnames_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
+        Ok(res)
+    }
+
     async fn reserve_bitname(&self, plain_name: String) -> RpcResult<Txid> {
         let mut tx = Transaction::default();
         let () = match self.app.wallet.reserve_bitname(&mut tx, &plain_name) {

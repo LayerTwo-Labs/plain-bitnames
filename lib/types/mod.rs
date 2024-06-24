@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use bip300301::bitcoin;
 use thiserror::Error;
+use utoipa::ToSchema;
 
-use crate::authorization::Authorization;
+pub use crate::authorization::Authorization;
 
 mod address;
 pub mod constants;
@@ -20,11 +21,12 @@ mod transaction;
 pub use address::*;
 pub use hashes::{BitName, BlockHash, Hash, MerkleRoot, Txid};
 pub use transaction::{
-    Authorized, AuthorizedTransaction, BatchIcannRegistrationData, BitNameData,
-    BitNameDataUpdates, Content as OutputContent,
-    FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
-    InPoint, OutPoint, Output, Pointed as PointedOutput, SpentOutput,
-    Transaction, TxData, Update,
+    open_api_schemas, Authorized, AuthorizedTransaction,
+    BatchIcannRegistrationData, BitNameData, BitNameDataUpdates,
+    Content as OutputContent, FilledContent as FilledOutputContent,
+    FilledOutput, FilledTransaction, InPoint, OutPoint, Output,
+    Pointed as PointedOutput, SpentOutput, Transaction, TransactionData,
+    TxData, Update,
 };
 
 /// (de)serialize as Display/FromStr for human-readable forms like json,
@@ -155,13 +157,27 @@ where
 }
 
 #[derive(
-    BorshSerialize, Clone, Debug, Deserialize, Eq, Hash, PartialEq, Serialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    ToSchema,
 )]
 pub struct Header {
     pub merkle_root: MerkleRoot,
     pub prev_side_hash: BlockHash,
     #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
     pub prev_main_hash: bitcoin::BlockHash,
+}
+
+impl Header {
+    pub fn hash(&self) -> BlockHash {
+        hashes::hash(self).into()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -241,7 +257,7 @@ impl merkle_cbt::merkle_tree::Merge for MergeFeeSizeTotal {
 // Complete binary merkle tree with annotated fee and canonical size totals
 type CbmtWithFeeTotal = merkle_cbt::CBMT<CbmtNode, MergeFeeSizeTotal>;
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct Body {
     pub coinbase: Vec<Output>,
     pub transactions: Vec<Transaction>,
@@ -355,7 +371,7 @@ impl Body {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct Block {
     #[serde(flatten)]
     pub header: Header,
@@ -442,12 +458,6 @@ where
     }
 }
 
-impl Header {
-    pub fn hash(&self) -> BlockHash {
-        hashes::hash(self).into()
-    }
-}
-
 impl Ord for AggregatedWithdrawal {
     fn cmp(&self, other: &Self) -> Ordering {
         if self == other {
@@ -470,7 +480,7 @@ impl PartialOrd for AggregatedWithdrawal {
 }
 
 /// Transaction index
-#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, ToSchema)]
 pub struct TxIn {
     pub block_hash: BlockHash,
     pub idx: u32,

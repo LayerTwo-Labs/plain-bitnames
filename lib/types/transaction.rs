@@ -8,6 +8,10 @@ use educe::Educe;
 use serde::{Deserialize, Serialize};
 
 use bip300301::bitcoin;
+use utoipa::{
+    openapi::{RefOr, Schema},
+    PartialSchema, ToSchema,
+};
 
 use super::{
     address::Address,
@@ -41,6 +45,7 @@ where
     PartialEq,
     PartialOrd,
     Serialize,
+    ToSchema,
 )]
 pub enum OutPoint {
     // Created by transactions.
@@ -58,6 +63,12 @@ pub enum OutPoint {
         #[borsh(serialize_with = "borsh_serialize_bitcoin_outpoint")]
         bitcoin::OutPoint,
     ),
+}
+
+impl PartialSchema for OutPoint {
+    fn schema() -> RefOr<utoipa::openapi::Schema> {
+        <Self as ToSchema>::schema().1
+    }
 }
 
 /// Reference to a tx input.
@@ -91,8 +102,16 @@ where
 }
 
 #[derive(
-    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    ToSchema,
 )]
+#[schema(as = OutputContent)]
 pub enum Content {
     BitName,
     BitNameReservation,
@@ -106,11 +125,19 @@ pub enum Content {
 }
 
 #[derive(
-    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    ToSchema,
 )]
 pub struct Output {
     #[serde(with = "serde_display_fromstr_human_readable")]
     pub address: Address,
+    #[schema(value_type = OutputContent)]
     pub content: Content,
     #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
@@ -148,6 +175,7 @@ where
     Eq,
     PartialEq,
     Serialize,
+    ToSchema,
 )]
 #[educe(Hash)]
 pub struct BitNameData {
@@ -175,6 +203,76 @@ pub enum Update<T> {
     Set(T),
 }
 
+impl<T> Update<T> {
+    /// Create a schema from a schema for `T`.
+    fn schema(schema_t: RefOr<Schema>) -> RefOr<Schema> {
+        let schema_delete = utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::SchemaType::String)
+            .enum_values(Some(["Delete"]));
+        let schema_retain = utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::SchemaType::String)
+            .enum_values(Some(["Retain"]));
+        let schema_set = utoipa::openapi::ObjectBuilder::new()
+            .property("Set", schema_t)
+            .required("Set");
+        let schema = utoipa::openapi::OneOfBuilder::new()
+            .item(schema_delete)
+            .item(schema_retain)
+            .item(schema_set)
+            .build()
+            .into();
+        RefOr::T(schema)
+    }
+}
+
+pub type UpdateHash = Update<Hash>;
+impl<'a> ToSchema<'a> for Update<Hash> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref = utoipa::openapi::Ref::from_schema_name("Hash");
+        ("UpdateHash", Self::schema(schema_ref.into()))
+    }
+}
+
+pub type UpdateIpv4Addr = Update<Ipv4Addr>;
+impl<'a> ToSchema<'a> for Update<Ipv4Addr> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref = utoipa::openapi::Ref::from_schema_name("Ipv4Addr");
+        ("UpdateIpv4Addr", Self::schema(schema_ref.into()))
+    }
+}
+
+pub type UpdateIpv6Addr = Update<Ipv6Addr>;
+impl<'a> ToSchema<'a> for Update<Ipv6Addr> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref = utoipa::openapi::Ref::from_schema_name("Ipv6Addr");
+        ("UpdateIpv6Addr", Self::schema(schema_ref.into()))
+    }
+}
+
+pub type UpdateEncryptionPubKey = Update<EncryptionPubKey>;
+impl<'a> ToSchema<'a> for Update<EncryptionPubKey> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref =
+            utoipa::openapi::Ref::from_schema_name("EncryptionPubKey");
+        ("UpdateEncryptionPubKey", Self::schema(schema_ref.into()))
+    }
+}
+
+pub type UpdateVerifyingKey = Update<VerifyingKey>;
+impl<'a> ToSchema<'a> for Update<VerifyingKey> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        let schema_ref = utoipa::openapi::Ref::from_schema_name("VerifyingKey");
+        ("UpdateVerifyingKey", Self::schema(schema_ref.into()))
+    }
+}
+
+pub type UpdateU64 = Update<u64>;
+impl<'a> ToSchema<'a> for Update<u64> {
+    fn schema() -> (&'a str, RefOr<Schema>) {
+        ("UpdateU64", Self::schema(<u64 as PartialSchema>::schema()))
+    }
+}
+
 fn borsh_serialize_update_pubkey<W>(
     update: &Update<VerifyingKey>,
     writer: &mut W,
@@ -191,20 +289,26 @@ where
 }
 
 /// updates to the data associated with a BitName
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct BitNameDataUpdates {
     /// commitment to arbitrary data
+    #[schema(value_type = UpdateHash)]
     pub commitment: Update<Hash>,
     /// optional ipv4 addr
+    #[schema(value_type = UpdateIpv4Addr)]
     pub ipv4_addr: Update<Ipv4Addr>,
     /// optional ipv6 addr
+    #[schema(value_type = UpdateIpv6Addr)]
     pub ipv6_addr: Update<Ipv6Addr>,
     /// optional pubkey used for encryption
+    #[schema(value_type = UpdateEncryptionPubKey)]
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// optional pubkey used for signing messages
     #[borsh(serialize_with = "borsh_serialize_update_pubkey")]
+    #[schema(value_type = UpdateVerifyingKey)]
     pub signing_pubkey: Update<VerifyingKey>,
     /// optional minimum paymail fee, in sats
+    #[schema(value_type = UpdateU64)]
     pub paymail_fee: Update<u64>,
 }
 
@@ -219,17 +323,18 @@ where
 }
 
 /// batch icann registration tx payload
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct BatchIcannRegistrationData {
     /// Plaintext names of the bitnames to be registered as ICANN domains
     pub plain_names: Vec<String>,
     /// Signature over the batch icann registration tx
     #[borsh(serialize_with = "borsh_serialize_signature")]
+    #[schema(schema_with = <String as utoipa::PartialSchema>::schema)]
     pub signature: Signature,
 }
 
 #[allow(clippy::enum_variant_names)]
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub enum TransactionData {
     BitNameReservation {
         /// commitment to the BitName that will be registered
@@ -251,9 +356,13 @@ pub enum TransactionData {
 
 pub type TxData = TransactionData;
 
-#[derive(BorshSerialize, Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(
+    BorshSerialize, Clone, Debug, Default, Deserialize, Serialize, ToSchema,
+)]
 pub struct Transaction {
+    #[schema(schema_with = TxInputs::schema)]
     pub inputs: TxInputs,
+    #[schema(schema_with = TxOutputs::schema)]
     pub outputs: TxOutputs,
     #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
@@ -262,7 +371,8 @@ pub struct Transaction {
 
 /// Representation of Output Content that includes asset type and/or
 /// reservation commitment
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+#[schema(as = FilledOutputContent)]
 pub enum FilledContent {
     Bitcoin(u64),
     BitcoinWithdrawal {
@@ -275,11 +385,16 @@ pub enum FilledContent {
     BitNameReservation(Txid, Hash),
 }
 
+fn filled_output_content_schema_ref() -> utoipa::openapi::Ref {
+    utoipa::openapi::Ref::new("FilledOutputContent")
+}
+
 /// Representation of output that includes asset type
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub struct FilledOutput {
     #[serde(with = "serde_display_fromstr_human_readable")]
     pub address: Address,
+    #[schema(schema_with = filled_output_content_schema_ref)]
     pub content: FilledContent,
     #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
@@ -913,9 +1028,29 @@ impl FilledTransaction {
 }
 
 #[derive(
-    BorshSerialize, Clone, Debug, Deserialize, Eq, PartialEq, Serialize,
+    BorshSerialize,
+    Clone,
+    Debug,
+    Deserialize,
+    Eq,
+    PartialEq,
+    Serialize,
+    ToSchema,
+)]
+#[aliases(
+    PointedOutput = Pointed<Output>,
+    PointedFilledOutput = Pointed<FilledOutput>
 )]
 pub struct Pointed<OutputKind = Output> {
     pub outpoint: OutPoint,
+    // Utoipa can't handle generics properly
+    #[schema(value_type = Value)]
     pub output: OutputKind,
+}
+
+pub mod open_api_schemas {
+    pub use super::{
+        PointedFilledOutput, PointedOutput, UpdateEncryptionPubKey, UpdateHash,
+        UpdateIpv4Addr, UpdateIpv6Addr, UpdateU64, UpdateVerifyingKey,
+    };
 }
