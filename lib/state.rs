@@ -3,15 +3,15 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
-use nonempty::{nonempty, NonEmpty};
-use serde::{Deserialize, Serialize};
-
 use bip300301::{
     bitcoin::Amount as BitcoinAmount,
     bitcoin::{self, transaction::Version as BitcoinTxVersion},
     TwoWayPegData, WithdrawalBundleStatus,
 };
+use futures::Stream;
+use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
+use nonempty::{nonempty, NonEmpty};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     authorization::{Authorization, VerifyingKey},
@@ -25,6 +25,7 @@ use crate::{
         OutPoint, OutputContent, SpentOutput, Transaction, TxData, Txid,
         Update, Verify as _, WithdrawalBundle,
     },
+    util::{EnvExt, UnitKey, Watchable, WatchableDb},
 };
 
 /** Data of type `T` paired with
@@ -361,35 +362,10 @@ pub enum Error {
     WrongPubKeyForAddress,
 }
 
-/// Unit key. LMDB can't use zero-sized keys, so this encodes to a single byte
-#[derive(Clone, Copy, Debug, Eq, PartialEq, PartialOrd, Ord)]
-pub struct UnitKey;
-
-impl<'de> Deserialize<'de> for UnitKey {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        // Deserialize any byte (ignoring it) and return UnitKey
-        let _ = u8::deserialize(deserializer)?;
-        Ok(UnitKey)
-    }
-}
-
-impl Serialize for UnitKey {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        // Always serialize to the same arbitrary byte
-        serializer.serialize_u8(0x69)
-    }
-}
-
 #[derive(Clone)]
 pub struct State {
     /// Current tip
-    tip: Database<SerdeBincode<UnitKey>, SerdeBincode<BlockHash>>,
+    tip: WatchableDb<SerdeBincode<UnitKey>, SerdeBincode<BlockHash>>,
     /// Current height
     height: Database<SerdeBincode<UnitKey>, SerdeBincode<u32>>,
     /// associates tx hashes with bitname reservation commitments
@@ -417,7 +393,7 @@ impl State {
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
-        let tip = env.create_database(&mut rwtxn, Some("tip"))?;
+        let tip = env.create_watchable_db(&mut rwtxn, "tip")?;
         let height = env.create_database(&mut rwtxn, Some("height"))?;
         let bitname_reservations =
             env.create_database(&mut rwtxn, Some("bitname_reservations"))?;
@@ -445,7 +421,7 @@ impl State {
     }
 
     pub fn get_tip(&self, rotxn: &RoTxn) -> Result<BlockHash, Error> {
-        let tip = self.tip.get(rotxn, &UnitKey)?.unwrap_or_default();
+        let tip = self.tip.try_get(rotxn, &UnitKey)?.unwrap_or_default();
         Ok(tip)
     }
 
@@ -1652,5 +1628,14 @@ impl State {
             - total_withdrawal_stxo_value;
         let total_wealth = BitcoinAmount::from_sat(total_wealth_sats);
         Ok(total_wealth)
+    }
+}
+
+impl Watchable<()> for State {
+    type WatchStream = impl Stream<Item = ()>;
+
+    /// Get a signal that notifies whenever the tip changes
+    fn watch(&self) -> Self::WatchStream {
+        tokio_stream::wrappers::WatchStream::new(self.tip.watch())
     }
 }
