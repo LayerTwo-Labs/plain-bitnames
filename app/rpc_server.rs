@@ -29,15 +29,19 @@ fn custom_err(err_msg: impl Into<String>) -> ErrorObject<'static> {
 
 fn convert_app_err(err: app::Error) -> ErrorObject<'static> {
     let err = anyhow::anyhow!(err);
-    tracing::error!("{err}");
+    tracing::error!("{err:#}");
     custom_err(err.to_string())
 }
 
 fn convert_node_err(err: node::Error) -> ErrorObject<'static> {
+    let err = anyhow::anyhow!(err);
+    tracing::error!("{err:#}");
     custom_err(err.to_string())
 }
 
 fn convert_wallet_err(err: wallet::Error) -> ErrorObject<'static> {
+    let err = anyhow::anyhow!(err);
+    tracing::error!("{err:#}");
     custom_err(err.to_string())
 }
 

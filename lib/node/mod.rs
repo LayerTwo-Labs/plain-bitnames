@@ -70,6 +70,9 @@ pub enum Error {
     Utreexo(String),
     #[error("Verify BMM error")]
     VerifyBmm(anyhow::Error),
+    #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
+    #[error("ZMQ error")]
+    Zmq(#[from] async_zmq::Error),
 }
 
 /// Request any missing two way peg data up to the specified block hash.
@@ -175,7 +178,7 @@ impl Node {
         };
         let state = State::new(&env)?;
         #[cfg(all(not(target_os = "windows"), feature = "zmq"))]
-        let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr));
+        let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr)?);
         let archive = Archive::new(&env)?;
         let mempool = MemPool::new(&env)?;
         let drivechain = bip300301::Drivechain::new(
