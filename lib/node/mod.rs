@@ -20,8 +20,8 @@ use crate::{
     types::{
         Address, Authorized, AuthorizedTransaction, BitName, BitNameData,
         Block, BlockHash, BmmResult, Body, FilledOutput, FilledTransaction,
-        GetValue, Header, OutPoint, SpentOutput, Tip, Transaction, TxIn, Txid,
-        WithdrawalBundle,
+        GetValue, Header, Network, OutPoint, SpentOutput, Tip, Transaction,
+        TxIn, Txid, WithdrawalBundle,
     },
     util::Watchable,
 };
@@ -152,10 +152,12 @@ pub struct Node {
 }
 
 impl Node {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         bind_addr: SocketAddr,
         datadir: &Path,
         main_addr: SocketAddr,
+        network: Network,
         password: &str,
         user: &str,
         local_pool: LocalPoolHandle,
@@ -194,7 +196,7 @@ impl Node {
                 drivechain.clone(),
             );
         let (net, peer_info_rx) =
-            Net::new(&env, archive.clone(), state.clone(), bind_addr)?;
+            Net::new(&env, archive.clone(), network, state.clone(), bind_addr)?;
 
         let net_task = NetTaskHandle::new(
             local_pool.clone(),

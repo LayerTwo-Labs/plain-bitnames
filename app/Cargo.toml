@@ -30,7 +30,7 @@ itertools = "0.11.0"
 include_path = "0.1.1"
 jsonrpsee = { version = "0.20.0", features = ["server"] }
 parking_lot = "0.12.1"
-plain_bitnames = { path = "../lib" }
+plain_bitnames = { path = "../lib", features = ["clap"] }
 plain_bitnames_app_cli = { path = "../cli" }
 plain_bitnames_app_rpc_api = { path = "../rpc-api" }
 poll-promise = { version = "0.3.0", features = ["tokio"] }

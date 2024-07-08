@@ -519,3 +519,11 @@ impl Default for Tip {
         }
     }
 }
+
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum, strum::Display))]
+pub enum Network {
+    #[default]
+    Signet,
+    Regtest,
+}
