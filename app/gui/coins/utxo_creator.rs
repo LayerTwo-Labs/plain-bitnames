@@ -1,9 +1,6 @@
-use eframe::egui;
+use eframe::egui::{self, Button};
 
-use plain_bitnames::{
-    bip300301::bitcoin,
-    types::{self, Output, OutputContent, Transaction},
-};
+use plain_bitnames::types::{self, Output, OutputContent, Transaction};
 
 use crate::{app::App, gui::util::InnerResponseExt};
 
@@ -95,7 +92,7 @@ impl UtxoCreator {
 
     pub fn show(
         &mut self,
-        app: &mut App,
+        app: Option<&App>,
         ui: &mut egui::Ui,
         tx: &mut Transaction,
     ) {
@@ -126,8 +123,12 @@ impl UtxoCreator {
         ui.horizontal(|ui| {
             ui.monospace("Address:     ");
             ui.add(egui::TextEdit::singleline(&mut self.address));
-            if ui.button("generate").clicked() {
+            if ui
+                .add_enabled(app.is_some(), Button::new("generate"))
+                .clicked()
+            {
                 self.address = app
+                    .unwrap()
                     .wallet
                     .get_new_address()
                     .map(|address| format!("{address}"))
@@ -204,8 +205,11 @@ impl UtxoCreator {
             ui.horizontal(|ui| {
                 ui.monospace("Main Address:");
                 ui.add(egui::TextEdit::singleline(&mut self.main_address));
-                if ui.button("generate").clicked() {
-                    match app.get_new_main_address() {
+                if ui
+                    .add_enabled(app.is_some(), Button::new("generate"))
+                    .clicked()
+                {
+                    match app.unwrap().get_new_main_address() {
                         Ok(main_address) => {
                             self.main_address = format!("{main_address}");
                         }
@@ -251,8 +255,8 @@ impl UtxoCreator {
                             .unwrap_or_default();
                         let utxo = Output {
                             address: address.expect("should not happen"),
-                            content: OutputContent::Value(
-                                value.expect("should not happen").to_sat(),
+                            content: OutputContent::Bitcoin(
+                                value.expect("should not happen"),
                             ),
                             memo,
                         };
@@ -290,12 +294,10 @@ impl UtxoCreator {
                         let utxo = Output {
                             address: address.expect("invalid address"),
                             content: OutputContent::Withdrawal {
-                                value: value.expect("invalid value").to_sat(),
+                                value: value.expect("invalid value"),
                                 main_address: main_address
                                     .expect("invalid main_address"),
-                                main_fee: main_fee
-                                    .expect("invalid main_fee")
-                                    .to_sat(),
+                                main_fee: main_fee.expect("invalid main_fee"),
                             },
                             memo: Vec::new(),
                         };
@@ -303,8 +305,10 @@ impl UtxoCreator {
                     }
                 }
             }
-            let num_addresses = app.wallet.get_num_addresses().unwrap();
-            ui.label(format!("{num_addresses} addresses generated"));
+            if let Some(app) = app {
+                let num_addresses = app.wallet.get_num_addresses().unwrap();
+                ui.label(format!("{num_addresses} addresses generated"));
+            }
         });
     }
 }

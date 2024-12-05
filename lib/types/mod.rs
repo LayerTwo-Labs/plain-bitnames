@@ -1,13 +1,13 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
+    sync::LazyLock,
 };
 
 use bech32::{FromBase32, ToBase32};
+use bitcoin::{amount::CheckedSum as _, hashes::Hash as _};
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
-
-use bip300301::bitcoin::{self, hashes::Hash as _};
 use thiserror::Error;
 use utoipa::ToSchema;
 
@@ -16,18 +16,29 @@ pub use crate::authorization::Authorization;
 mod address;
 pub mod constants;
 pub mod hashes;
+pub mod proto;
+pub mod schema;
 mod transaction;
 
-pub use address::*;
-pub use hashes::{BitName, BlockHash, Hash, MerkleRoot, Txid};
+pub use address::Address;
+pub use hashes::{BitName, BlockHash, Hash, M6id, MerkleRoot, Txid};
 pub use transaction::{
-    open_api_schemas, Authorized, AuthorizedTransaction,
-    BatchIcannRegistrationData, BitNameData, BitNameDataUpdates,
-    Content as OutputContent, FilledContent as FilledOutputContent,
-    FilledOutput, FilledTransaction, InPoint, OutPoint, Output,
-    Pointed as PointedOutput, SpentOutput, Transaction, TransactionData,
-    TxData, Update,
+    Authorized, AuthorizedTransaction, BatchIcannRegistrationData, BitNameData,
+    BitNameDataUpdates, Content as OutputContent,
+    FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
+    InPoint, OutPoint, Output, Pointed as PointedOutput, SpentOutput,
+    Transaction, TransactionData, TxData, Update,
 };
+
+pub const THIS_SIDECHAIN: u8 = 2;
+
+#[derive(Debug, Error)]
+#[error("Bitcoin amount overflow")]
+pub struct AmountOverflowError;
+
+#[derive(Debug, Error)]
+#[error("Bitcoin amount underflow")]
+pub struct AmountUnderflowError;
 
 /// (de)serialize as Display/FromStr for human-readable forms like json,
 /// and default serialization for non human-readable forms like bincode
@@ -99,21 +110,7 @@ pub trait GetAddress {
 }
 
 pub trait GetValue {
-    fn get_value(&self) -> u64;
-}
-
-impl GetValue for () {
-    fn get_value(&self) -> u64 {
-        0
-    }
-}
-
-pub trait Verify {
-    type Error;
-    fn verify_transaction(
-        transaction: &AuthorizedTransaction,
-    ) -> Result<(), Self::Error>;
-    fn verify_body(body: &Body) -> Result<(), Self::Error>;
+    fn get_value(&self) -> bitcoin::Amount;
 }
 
 fn borsh_serialize_x25519_pubkey<W>(
@@ -171,6 +168,7 @@ pub struct Header {
     pub merkle_root: MerkleRoot,
     pub prev_side_hash: BlockHash,
     #[borsh(serialize_with = "borsh_serialize_bitcoin_block_hash")]
+    #[schema(value_type = crate::types::schema::BitcoinBlockHash)]
     pub prev_main_hash: bitcoin::BlockHash,
 }
 
@@ -180,23 +178,126 @@ impl Header {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum WithdrawalBundleStatus {
-    Failed,
     Confirmed,
+    Failed,
+    Submitted,
 }
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct WithdrawalBundleEvent {
+    pub m6id: M6id,
+    pub status: WithdrawalBundleStatus,
+}
+
+pub static OP_DRIVECHAIN_SCRIPT: LazyLock<bitcoin::ScriptBuf> =
+    LazyLock::new(|| {
+        let mut script = bitcoin::ScriptBuf::new();
+        script.push_opcode(bitcoin::opcodes::all::OP_RETURN);
+        script.push_instruction(bitcoin::script::Instruction::PushBytes(
+            &bitcoin::script::PushBytesBuf::from([THIS_SIDECHAIN]),
+        ));
+        script.push_opcode(bitcoin::opcodes::OP_TRUE);
+        script
+    });
+
+#[derive(Debug, Error)]
+enum WithdrawalBundleErrorInner {
+    #[error("bundle too heavy: weight `{weight}` > max weight `{max_weight}`")]
+    BundleTooHeavy { weight: u64, max_weight: u64 },
+}
+
+#[derive(Debug, Error)]
+#[error("Withdrawal bundle error")]
+pub struct WithdrawalBundleError(#[from] WithdrawalBundleErrorInner);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WithdrawalBundle {
-    pub spend_utxos: BTreeMap<OutPoint, FilledOutput>,
-    pub transaction: bitcoin::Transaction,
+    spend_utxos: BTreeMap<OutPoint, FilledOutput>,
+    tx: bitcoin::Transaction,
 }
 
-#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+impl WithdrawalBundle {
+    pub fn new(
+        block_height: u32,
+        fee: bitcoin::Amount,
+        spend_utxos: BTreeMap<transaction::OutPoint, transaction::FilledOutput>,
+        bundle_outputs: Vec<bitcoin::TxOut>,
+    ) -> Result<Self, WithdrawalBundleError> {
+        let inputs_commitment_txout = {
+            // Create inputs commitment.
+            let inputs: Vec<OutPoint> = [
+                // Commit to inputs.
+                spend_utxos.keys().copied().collect(),
+                // Commit to block height.
+                vec![OutPoint::Regular {
+                    txid: [0; 32].into(),
+                    vout: block_height,
+                }],
+            ]
+            .concat();
+            let commitment = hashes::hash(&inputs);
+            let script_pubkey = bitcoin::script::Builder::new()
+                .push_opcode(bitcoin::opcodes::all::OP_RETURN)
+                .push_slice(commitment)
+                .into_script();
+            bitcoin::TxOut {
+                value: bitcoin::Amount::ZERO,
+                script_pubkey,
+            }
+        };
+        let mainchain_fee_txout = {
+            let script_pubkey = bitcoin::script::Builder::new()
+                .push_opcode(bitcoin::opcodes::all::OP_RETURN)
+                .push_slice(fee.to_sat().to_be_bytes())
+                .into_script();
+            bitcoin::TxOut {
+                value: bitcoin::Amount::ZERO,
+                script_pubkey,
+            }
+        };
+        let outputs = Vec::from_iter(
+            [mainchain_fee_txout, inputs_commitment_txout]
+                .into_iter()
+                .chain(bundle_outputs),
+        );
+        let tx = bitcoin::Transaction {
+            version: bitcoin::transaction::Version::TWO,
+            lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
+            input: Vec::new(),
+            output: outputs,
+        };
+        if tx.weight().to_wu() > bitcoin::policy::MAX_STANDARD_TX_WEIGHT as u64
+        {
+            Err(WithdrawalBundleErrorInner::BundleTooHeavy {
+                weight: tx.weight().to_wu(),
+                max_weight: bitcoin::policy::MAX_STANDARD_TX_WEIGHT as u64,
+            })?;
+        }
+        Ok(Self { spend_utxos, tx })
+    }
+
+    pub fn compute_m6id(&self) -> M6id {
+        M6id(self.tx.compute_txid())
+    }
+
+    pub fn spend_utxos(
+        &self,
+    ) -> &BTreeMap<transaction::OutPoint, transaction::FilledOutput> {
+        &self.spend_utxos
+    }
+
+    pub fn tx(&self) -> &bitcoin::Transaction {
+        &self.tx
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct TwoWayPegData {
     pub deposits: HashMap<OutPoint, Output>,
     pub deposit_block_hash: Option<bitcoin::BlockHash>,
-    pub bundle_statuses: HashMap<bitcoin::Txid, WithdrawalBundleStatus>,
+    pub bundle_statuses: HashMap<M6id, WithdrawalBundleEvent>,
 }
 
 // Internal node of a CBMT
@@ -205,7 +306,7 @@ struct CbmtNode {
     // Commitment to child nodes or leaf value
     commitment: Hash,
     // Sum of fees for child nodes or leaf value
-    fees: u64,
+    fees: bitcoin::Amount,
     // Sum of canonical tx sizes for child nodes or leaf value
     canonical_size: u64,
     // CBT index, see https://github.com/nervosnetwork/merkle-tree/blob/5d1898263e7167560fdaa62f09e8d52991a1c712/README.md#tree-struct
@@ -242,7 +343,7 @@ impl merkle_cbt::merkle_tree::Merge for MergeFeeSizeTotal {
         let commitment = hashes::hash(&(
             lnode.commitment,
             rnode.commitment,
-            fees,
+            fees.to_sat(),
             canonical_size,
         ));
         Self::Item {
@@ -257,7 +358,7 @@ impl merkle_cbt::merkle_tree::Merge for MergeFeeSizeTotal {
 // Complete binary merkle tree with annotated fee and canonical size totals
 type CbmtWithFeeTotal = merkle_cbt::CBMT<CbmtNode, MergeFeeSizeTotal>;
 
-#[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct Body {
     pub coinbase: Vec<Output>,
     pub transactions: Vec<Transaction>,
@@ -309,31 +410,37 @@ impl Body {
     pub fn compute_merkle_root(
         coinbase: &[Output],
         txs: &[FilledTransaction],
-    ) -> Option<MerkleRoot> {
+    ) -> Result<Option<MerkleRoot>, AmountOverflowError> {
         let CbmtNode {
             commitment: txs_root,
             ..
         } = {
             let n_txs = txs.len();
-            let leaves = txs
+            let Some(leaves) = txs
                 .iter()
                 .enumerate()
                 .map(|(idx, tx)| {
-                    Some(CbmtNode {
+                    let Some(fees) = tx.fee()? else {
+                        return Ok(None);
+                    };
+                    Ok(Some(CbmtNode {
                         commitment: hashes::hash(&tx.transaction),
-                        fees: tx.fee()?,
+                        fees,
                         canonical_size: tx.transaction.canonical_size(),
                         // see https://github.com/nervosnetwork/merkle-tree/blob/5d1898263e7167560fdaa62f09e8d52991a1c712/README.md#tree-struct
                         index: (idx + n_txs) - 1,
-                    })
+                    }))
                 })
-                .collect::<Option<Vec<_>>>()?;
+                .collect::<Result<Option<Vec<_>>, _>>()?
+            else {
+                return Ok(None);
+            };
             CbmtWithFeeTotal::build_merkle_root(leaves.as_slice())
         };
         // FIXME: Compute actual merkle root instead of just a hash.
         // TODO: Should this include `total_fees`?
         let root = hashes::hash(&(coinbase, txs_root)).into();
-        Some(root)
+        Ok(Some(root))
     }
 
     pub fn get_inputs(&self) -> Vec<OutPoint> {
@@ -347,9 +454,12 @@ impl Body {
     pub fn get_outputs(
         coinbase: &[Output],
         txs: &[FilledTransaction],
-    ) -> Option<HashMap<OutPoint, Output>> {
+    ) -> Result<Option<HashMap<OutPoint, Output>>, AmountOverflowError> {
         let mut outputs = HashMap::new();
-        let merkle_root = Self::compute_merkle_root(coinbase, txs)?;
+        let Some(merkle_root) = Self::compute_merkle_root(coinbase, txs)?
+        else {
+            return Ok(None);
+        };
         for (vout, output) in coinbase.iter().enumerate() {
             let vout = vout as u32;
             let outpoint = OutPoint::Coinbase { merkle_root, vout };
@@ -363,12 +473,26 @@ impl Body {
                 outputs.insert(outpoint, output.clone());
             }
         }
-        Some(outputs)
+        Ok(Some(outputs))
     }
 
-    pub fn get_coinbase_value(&self) -> u64 {
-        self.coinbase.iter().map(|output| output.get_value()).sum()
+    pub fn get_coinbase_value(
+        &self,
+    ) -> Result<bitcoin::Amount, AmountOverflowError> {
+        self.coinbase
+            .iter()
+            .map(|output| output.get_value())
+            .checked_sum()
+            .ok_or(AmountOverflowError)
     }
+}
+
+pub trait Verify {
+    type Error;
+    fn verify_transaction(
+        transaction: &AuthorizedTransaction,
+    ) -> Result<(), Self::Error>;
+    fn verify_body(body: &Body) -> Result<(), Self::Error>;
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -396,8 +520,8 @@ pub struct DisconnectData {
 pub struct AggregatedWithdrawal {
     pub spend_utxos: HashMap<OutPoint, FilledOutput>,
     pub main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-    pub value: u64,
-    pub main_fee: u64,
+    pub value: bitcoin::Amount,
+    pub main_fee: bitcoin::Amount,
 }
 
 #[derive(Debug, Error)]

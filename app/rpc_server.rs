@@ -1,6 +1,6 @@
 use std::{collections::HashMap, net::SocketAddr};
 
-use bip300301::bitcoin;
+use bitcoin::Amount;
 use jsonrpsee::{
     core::{async_trait, RpcResult},
     server::Server,
@@ -13,7 +13,7 @@ use plain_bitnames::{
         hashes::BitName, Address, BitNameData, Block, BlockHash, FilledOutput,
         OutPoint, PointedOutput, Transaction, Txid,
     },
-    wallet,
+    wallet::{self, Balance},
 };
 use plain_bitnames_app_rpc_api::{RpcServer, TxInfo};
 
@@ -47,7 +47,7 @@ fn convert_wallet_err(err: wallet::Error) -> ErrorObject<'static> {
 
 #[async_trait]
 impl RpcServer for RpcServerImpl {
-    async fn balance(&self) -> RpcResult<u64> {
+    async fn balance(&self) -> RpcResult<Balance> {
         self.app.wallet.get_balance().map_err(convert_wallet_err)
     }
 
@@ -59,14 +59,30 @@ impl RpcServer for RpcServerImpl {
         self.app.node.connect_peer(addr).map_err(convert_node_err)
     }
 
+    async fn create_deposit(
+        &self,
+        address: Address,
+        value_sats: u64,
+        fee_sats: u64,
+    ) -> RpcResult<bitcoin::Txid> {
+        let app = self.app.clone();
+        tokio::task::spawn_blocking(move || {
+            app.deposit(
+                address,
+                bitcoin::Amount::from_sat(value_sats),
+                bitcoin::Amount::from_sat(fee_sats),
+            )
+            .map_err(convert_app_err)
+        })
+        .await
+        .unwrap()
+    }
+
     async fn format_deposit_address(
         &self,
         address: Address,
     ) -> RpcResult<String> {
-        let deposit_address = plain_bitnames::format_deposit_address(
-            node::THIS_SIDECHAIN,
-            &address.to_string(),
-        );
+        let deposit_address = plain_bitnames::format_deposit_address(address);
         Ok(deposit_address)
     }
 
@@ -133,7 +149,12 @@ impl RpcServer for RpcServerImpl {
             }
             None => None,
         };
-        let fee_sats = filled_tx.transaction.fee().unwrap();
+        let fee_sats = filled_tx
+            .transaction
+            .fee()
+            .map_err(|err| custom_err(format!("{err:#}")))?
+            .unwrap()
+            .to_sat();
         let res = TxInfo {
             confirmations,
             fee_sats,
@@ -178,7 +199,7 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn mine(&self, fee: Option<u64>) -> RpcResult<()> {
-        let fee = fee.map(bip300301::bitcoin::Amount::from_sat);
+        let fee = fee.map(bitcoin::Amount::from_sat);
         self.app.local_pool.spawn_pinned({
                 let app = self.app.clone();
                 move || async move { app.mine(fee).await.map_err(convert_app_err) }
@@ -221,11 +242,13 @@ impl RpcServer for RpcServerImpl {
             .map_err(convert_wallet_err)
     }
 
-    async fn sidechain_wealth(&self) -> RpcResult<bitcoin::Amount> {
-        self.app
+    async fn sidechain_wealth_sats(&self) -> RpcResult<u64> {
+        let sidechain_wealth = self
+            .app
             .node
             .get_sidechain_wealth()
-            .map_err(convert_node_err)
+            .map_err(convert_node_err)?;
+        Ok(sidechain_wealth.to_sat())
     }
 
     async fn stop(&self) {
@@ -235,8 +258,8 @@ impl RpcServer for RpcServerImpl {
     async fn transfer(
         &self,
         dest: Address,
-        value: u64,
-        fee: u64,
+        value_sats: u64,
+        fee_sats: u64,
         memo: Option<String>,
     ) -> RpcResult<Txid> {
         let memo = match memo {
@@ -250,7 +273,12 @@ impl RpcServer for RpcServerImpl {
         let tx = self
             .app
             .wallet
-            .create_transfer(dest, value, fee, memo)
+            .create_transfer(
+                dest,
+                Amount::from_sat(value_sats),
+                Amount::from_sat(fee_sats),
+                memo,
+            )
             .map_err(convert_wallet_err)?;
         let txid = tx.txid();
         self.app.sign_and_send(tx).map_err(convert_app_err)?;
@@ -269,9 +297,9 @@ impl RpcServer for RpcServerImpl {
             .wallet
             .create_withdrawal(
                 mainchain_address,
-                amount_sats,
-                mainchain_fee_sats,
-                fee_sats,
+                Amount::from_sat(amount_sats),
+                Amount::from_sat(mainchain_fee_sats),
+                Amount::from_sat(fee_sats),
             )
             .map_err(convert_wallet_err)?;
         let txid = tx.txid();

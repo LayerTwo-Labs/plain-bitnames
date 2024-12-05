@@ -4,30 +4,50 @@ use std::{
     path::Path,
 };
 
-use bip300301::bitcoin;
+use bitcoin::Amount;
 use byteorder::{BigEndian, ByteOrder};
 use ed25519_dalek_bip32::{ChildIndex, DerivationPath, ExtendedSigningKey};
+use fallible_iterator::{FallibleIterator as _, IteratorExt as _};
 use futures::{Stream, StreamExt};
 use heed::{
     types::{Bytes, SerdeBincode, Str, U8},
     RoTxn,
 };
+use serde::{Deserialize, Serialize};
 use tokio_stream::{wrappers::WatchStream, StreamMap};
 
 use crate::{
     authorization::{get_address, Authorization},
     types::{
-        hashes::BitName, Address, AuthorizedTransaction, BitNameData,
-        FilledOutput, GetValue, Hash, InPoint, OutPoint, Output, OutputContent,
-        SpentOutput, Transaction, TxData,
+        hashes::BitName, Address, AmountOverflowError, AmountUnderflowError,
+        AuthorizedTransaction, BitNameData, FilledOutput, GetValue, Hash,
+        InPoint, OutPoint, Output, OutputContent, SpentOutput, Transaction,
+        TxData,
     },
     util::{EnvExt, Watchable, WatchableDb},
 };
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
+pub struct Balance {
+    #[serde(rename = "total_sats", with = "bitcoin::amount::serde::as_sat")]
+    #[schema(value_type = u64)]
+    pub total: Amount,
+    #[serde(
+        rename = "available_sats",
+        with = "bitcoin::amount::serde::as_sat"
+    )]
+    #[schema(value_type = u64)]
+    pub available: Amount,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("address {address} does not exist")]
     AddressDoesNotExist { address: crate::types::Address },
+    #[error(transparent)]
+    AmountOverflow(#[from] AmountOverflowError),
+    #[error(transparent)]
+    AmountUnderflow(#[from] AmountUnderflowError),
     #[error("authorization error")]
     Authorization(#[from] crate::authorization::Error),
     #[error("bip32 error")]
@@ -199,14 +219,14 @@ impl Wallet {
     /// Create a transaction with a fee only.
     pub fn create_regular_transaction(
         &self,
-        fee: u64,
+        fee: bitcoin::Amount,
     ) -> Result<Transaction, Error> {
         let (total, coins) = self.select_coins(fee)?;
         let change = total - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![Output::new(
             self.get_new_address()?,
-            OutputContent::Value(change),
+            OutputContent::Bitcoin(change),
         )];
         Ok(Transaction::new(inputs, outputs))
     }
@@ -214,11 +234,17 @@ impl Wallet {
     pub fn create_withdrawal(
         &self,
         main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-        value: u64,
-        main_fee: u64,
-        fee: u64,
+        value: bitcoin::Amount,
+        main_fee: bitcoin::Amount,
+        fee: bitcoin::Amount,
     ) -> Result<Transaction, Error> {
-        let (total, coins) = self.select_coins(value + fee + main_fee)?;
+        let (total, coins) = self.select_coins(
+            value
+                .checked_add(fee)
+                .ok_or(AmountOverflowError)?
+                .checked_add(main_fee)
+                .ok_or(AmountOverflowError)?,
+        )?;
         let change = total - value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
@@ -230,7 +256,10 @@ impl Wallet {
                     main_address,
                 },
             ),
-            Output::new(self.get_new_address()?, OutputContent::Value(change)),
+            Output::new(
+                self.get_new_address()?,
+                OutputContent::Bitcoin(change),
+            ),
         ];
         Ok(Transaction::new(inputs, outputs))
     }
@@ -238,20 +267,24 @@ impl Wallet {
     pub fn create_transfer(
         &self,
         address: Address,
-        value: u64,
-        fee: u64,
+        value: bitcoin::Amount,
+        fee: bitcoin::Amount,
         memo: Option<Vec<u8>>,
     ) -> Result<Transaction, Error> {
-        let (total, coins) = self.select_coins(value + fee)?;
+        let (total, coins) = self
+            .select_coins(value.checked_add(fee).ok_or(AmountOverflowError)?)?;
         let change = total - value - fee;
         let inputs = coins.into_keys().collect();
         let outputs = vec![
             Output {
                 address,
-                content: OutputContent::Value(value),
+                content: OutputContent::Bitcoin(value),
                 memo: memo.unwrap_or_default(),
             },
-            Output::new(self.get_new_address()?, OutputContent::Value(change)),
+            Output::new(
+                self.get_new_address()?,
+                OutputContent::Bitcoin(change),
+            ),
         ];
         Ok(Transaction::new(inputs, outputs))
     }
@@ -402,8 +435,8 @@ impl Wallet {
 
     pub fn select_coins(
         &self,
-        value: u64,
-    ) -> Result<(u64, HashMap<OutPoint, FilledOutput>), Error> {
+        value: bitcoin::Amount,
+    ) -> Result<(bitcoin::Amount, HashMap<OutPoint, FilledOutput>), Error> {
         let rotxn = self.env.read_txn()?;
         let mut utxos = vec![];
         for item in self.utxos.iter(&rotxn)? {
@@ -412,19 +445,21 @@ impl Wallet {
         utxos.sort_unstable_by_key(|(_, output)| output.get_value());
 
         let mut selected = HashMap::new();
-        let mut total: u64 = 0;
+        let mut total = bitcoin::Amount::ZERO;
         for (outpoint, output) in &utxos {
             if output.content.is_withdrawal()
                 || output.is_bitname()
                 || output.is_reservation()
-                || output.get_value() == 0
+                || output.get_value() == bitcoin::Amount::ZERO
             {
                 continue;
             }
             if total >= value {
                 break;
             }
-            total += output.get_value();
+            total = total
+                .checked_add(output.get_value())
+                .ok_or(AmountOverflowError)?;
             selected.insert(*outpoint, output.clone());
         }
         if total < value {
@@ -465,13 +500,28 @@ impl Wallet {
         Ok(())
     }
 
-    pub fn get_balance(&self) -> Result<u64, Error> {
-        let mut balance: u64 = 0;
+    pub fn get_balance(&self) -> Result<Balance, Error> {
+        let mut balance = Balance::default();
         let rotxn = self.env.read_txn()?;
-        for item in self.utxos.iter(&rotxn)? {
-            let (_, utxo) = item?;
-            balance += utxo.get_value();
-        }
+        let () = self
+            .utxos
+            .iter(&rotxn)?
+            .transpose_into_fallible()
+            .map_err(Error::from)
+            .for_each(|(_, utxo)| {
+                let value = utxo.get_value();
+                balance.total = balance
+                    .total
+                    .checked_add(value)
+                    .ok_or(AmountOverflowError)?;
+                if !utxo.content.is_withdrawal() {
+                    balance.available = balance
+                        .available
+                        .checked_add(value)
+                        .ok_or(AmountOverflowError)?;
+                }
+                Ok(())
+            })?;
         Ok(balance)
     }
 

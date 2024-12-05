@@ -1,6 +1,5 @@
 use std::str::FromStr;
 
-use bip300301::bitcoin;
 use bitcoin::hashes::Hash as _;
 use borsh::{BorshDeserialize, BorshSerialize};
 use hex::FromHex;
@@ -12,6 +11,7 @@ use super::serde_hexstr_human_readable;
 
 #[derive(
     BorshSerialize,
+    BorshDeserialize,
     Clone,
     Copy,
     Default,
@@ -81,19 +81,15 @@ impl FromStr for BlockHash {
 
 impl utoipa::PartialSchema for BlockHash {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        let obj = utoipa::openapi::Object::with_type(
-            utoipa::openapi::SchemaType::String,
-        );
+        let obj =
+            utoipa::openapi::Object::with_type(utoipa::openapi::Type::String);
         utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
     }
 }
 
-impl utoipa::ToSchema<'static> for BlockHash {
-    fn schema() -> (
-        &'static str,
-        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
-    ) {
-        ("BlockHash", <Self as utoipa::PartialSchema>::schema())
+impl utoipa::ToSchema for BlockHash {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("BlockHash")
     }
 }
 
@@ -140,19 +136,15 @@ impl std::fmt::Debug for MerkleRoot {
 
 impl utoipa::PartialSchema for MerkleRoot {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        let obj = utoipa::openapi::Object::with_type(
-            utoipa::openapi::SchemaType::String,
-        );
+        let obj =
+            utoipa::openapi::Object::with_type(utoipa::openapi::Type::String);
         utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
     }
 }
 
-impl utoipa::ToSchema<'static> for MerkleRoot {
-    fn schema() -> (
-        &'static str,
-        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
-    ) {
-        ("MerkleRoot", <Self as utoipa::PartialSchema>::schema())
+impl utoipa::ToSchema for MerkleRoot {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("MerkleRoot")
     }
 }
 
@@ -218,19 +210,15 @@ impl FromStr for Txid {
 
 impl utoipa::PartialSchema for Txid {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        let obj = utoipa::openapi::Object::with_type(
-            utoipa::openapi::SchemaType::String,
-        );
+        let obj =
+            utoipa::openapi::Object::with_type(utoipa::openapi::Type::String);
         utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
     }
 }
 
-impl utoipa::ToSchema<'static> for Txid {
-    fn schema() -> (
-        &'static str,
-        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
-    ) {
-        ("Txid", <Self as utoipa::PartialSchema>::schema())
+impl utoipa::ToSchema for Txid {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("Txid")
     }
 }
 
@@ -269,19 +257,27 @@ impl FromHex for BitName {
 
 impl utoipa::PartialSchema for BitName {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        let obj = utoipa::openapi::Object::with_type(
-            utoipa::openapi::SchemaType::String,
-        );
+        let obj =
+            utoipa::openapi::Object::with_type(utoipa::openapi::Type::String);
         utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
     }
 }
 
-impl utoipa::ToSchema<'static> for BitName {
-    fn schema() -> (
-        &'static str,
-        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
-    ) {
-        ("BitName", <Self as utoipa::PartialSchema>::schema())
+impl utoipa::ToSchema for BitName {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("BitName")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct M6id(pub bitcoin::Txid);
+
+impl std::fmt::Display for M6id {
+    #[inline(always)]
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 

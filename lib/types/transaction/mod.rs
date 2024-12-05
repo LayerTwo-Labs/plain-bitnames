@@ -3,11 +3,10 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
+use bitcoin::amount::CheckedSum;
 use borsh::BorshSerialize;
 use educe::Educe;
 use serde::{Deserialize, Serialize};
-
-use bip300301::bitcoin;
 use utoipa::{
     openapi::{RefOr, Schema},
     PartialSchema, ToSchema,
@@ -15,11 +14,14 @@ use utoipa::{
 
 use super::{
     address::Address,
-    hashes::{self, BitName, Hash, MerkleRoot, Txid},
+    hashes::{self, BitName, Hash, M6id, MerkleRoot, Txid},
     serde_display_fromstr_human_readable, serde_hexstr_human_readable,
-    EncryptionPubKey, GetValue,
+    AmountOverflowError, EncryptionPubKey, GetValue,
 };
 use crate::authorization::{Authorization, Signature, VerifyingKey};
+
+mod output_content;
+pub use output_content::{Content, Filled as FilledContent};
 
 fn borsh_serialize_bitcoin_outpoint<W>(
     block_hash: &bitcoin::OutPoint,
@@ -59,15 +61,24 @@ pub enum OutPoint {
         vout: u32,
     },
     // Created by mainchain deposits.
+    #[schema(value_type = crate::types::schema::BitcoinOutPoint)]
     Deposit(
         #[borsh(serialize_with = "borsh_serialize_bitcoin_outpoint")]
         bitcoin::OutPoint,
     ),
 }
 
-impl PartialSchema for OutPoint {
-    fn schema() -> RefOr<utoipa::openapi::Schema> {
-        <Self as ToSchema>::schema().1
+impl std::fmt::Display for OutPoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Regular { txid, vout } => write!(f, "regular {txid} {vout}"),
+            Self::Coinbase { merkle_root, vout } => {
+                write!(f, "coinbase {merkle_root} {vout}")
+            }
+            Self::Deposit(bitcoin::OutPoint { txid, vout }) => {
+                write!(f, "deposit {txid} {vout}")
+            }
+        }
     }
 }
 
@@ -82,45 +93,7 @@ pub enum InPoint {
     },
     // Created by mainchain withdrawals
     Withdrawal {
-        txid: bitcoin::Txid,
-    },
-}
-
-fn borsh_serialize_bitcoin_address<V, W>(
-    bitcoin_address: &bitcoin::Address<V>,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    V: bitcoin::address::NetworkValidation,
-    W: borsh::io::Write,
-{
-    let spk = bitcoin_address
-        .as_unchecked()
-        .assume_checked_ref()
-        .script_pubkey();
-    borsh::BorshSerialize::serialize(spk.as_bytes(), writer)
-}
-
-#[derive(
-    BorshSerialize,
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    PartialEq,
-    Serialize,
-    ToSchema,
-)]
-#[schema(as = OutputContent)]
-pub enum Content {
-    BitName,
-    BitNameReservation,
-    Value(u64),
-    Withdrawal {
-        value: u64,
-        main_fee: u64,
-        #[borsh(serialize_with = "borsh_serialize_bitcoin_address")]
-        main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
+        m6id: M6id,
     },
 }
 
@@ -137,10 +110,44 @@ pub enum Content {
 pub struct Output {
     #[serde(with = "serde_display_fromstr_human_readable")]
     pub address: Address,
-    #[schema(value_type = OutputContent)]
     pub content: Content,
     #[serde(with = "serde_hexstr_human_readable")]
     pub memo: Vec<u8>,
+}
+
+impl Output {
+    pub fn new(address: Address, content: Content) -> Self {
+        Self {
+            address,
+            content,
+            memo: Vec::new(),
+        }
+    }
+
+    /// true if the output content corresponds to a BitName
+    pub fn is_bitname(&self) -> bool {
+        self.content.is_bitname()
+    }
+
+    /// true if the output content corresponds to a reservation
+    pub fn is_reservation(&self) -> bool {
+        self.content.is_reservation()
+    }
+
+    /// `true` if the output content corresponds to a value output
+    pub fn is_value(&self) -> bool {
+        match self.content {
+            Content::Bitcoin(_) | Content::Withdrawal { .. } => true,
+            Content::BitName | Content::BitNameReservation => false,
+        }
+    }
+}
+
+impl GetValue for Output {
+    #[inline(always)]
+    fn get_value(&self) -> bitcoin::Amount {
+        self.content.get_value()
+    }
 }
 
 pub type TxInputs = Vec<OutPoint>;
@@ -180,19 +187,24 @@ where
 #[educe(Hash)]
 pub struct BitNameData {
     /// commitment to arbitrary data
+    #[schema(value_type = Option<String>)]
     pub commitment: Option<Hash>,
     /// optional ipv4 addr
+    #[schema(value_type = Option<String>)]
     pub ipv4_addr: Option<Ipv4Addr>,
     /// optional ipv6 addr
+    #[schema(value_type = Option<String>)]
     pub ipv6_addr: Option<Ipv6Addr>,
     /// optional pubkey used for encryption
+    #[schema(value_type = Option<String>)]
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// optional pubkey used for signing messages
     #[borsh(serialize_with = "borsh_serialize_option_verifying_key")]
     #[educe(Hash(method = "hash_option_verifying_key"))]
+    #[schema(value_type = Option<String>)]
     pub signing_pubkey: Option<VerifyingKey>,
     /// optional minimum paymail fee, in sats
-    pub paymail_fee: Option<u64>,
+    pub paymail_fee_sats: Option<u64>,
 }
 
 /// delete, retain, or set a value
@@ -207,10 +219,10 @@ impl<T> Update<T> {
     /// Create a schema from a schema for `T`.
     fn schema(schema_t: RefOr<Schema>) -> RefOr<Schema> {
         let schema_delete = utoipa::openapi::ObjectBuilder::new()
-            .schema_type(utoipa::openapi::SchemaType::String)
+            .schema_type(utoipa::openapi::Type::String)
             .enum_values(Some(["Delete"]));
         let schema_retain = utoipa::openapi::ObjectBuilder::new()
-            .schema_type(utoipa::openapi::SchemaType::String)
+            .schema_type(utoipa::openapi::Type::String)
             .enum_values(Some(["Retain"]));
         let schema_set = utoipa::openapi::ObjectBuilder::new()
             .property("Set", schema_t)
@@ -225,51 +237,75 @@ impl<T> Update<T> {
     }
 }
 
-pub type UpdateHash = Update<Hash>;
-impl<'a> ToSchema<'a> for Update<Hash> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref = utoipa::openapi::Ref::from_schema_name("Hash");
-        ("UpdateHash", Self::schema(schema_ref.into()))
+impl PartialSchema for Update<Hash> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
     }
 }
 
-pub type UpdateIpv4Addr = Update<Ipv4Addr>;
-impl<'a> ToSchema<'a> for Update<Ipv4Addr> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref = utoipa::openapi::Ref::from_schema_name("Ipv4Addr");
-        ("UpdateIpv4Addr", Self::schema(schema_ref.into()))
+impl ToSchema for Update<Hash> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateHash")
     }
 }
 
-pub type UpdateIpv6Addr = Update<Ipv6Addr>;
-impl<'a> ToSchema<'a> for Update<Ipv6Addr> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref = utoipa::openapi::Ref::from_schema_name("Ipv6Addr");
-        ("UpdateIpv6Addr", Self::schema(schema_ref.into()))
+impl PartialSchema for Update<Ipv4Addr> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
     }
 }
 
-pub type UpdateEncryptionPubKey = Update<EncryptionPubKey>;
-impl<'a> ToSchema<'a> for Update<EncryptionPubKey> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref =
-            utoipa::openapi::Ref::from_schema_name("EncryptionPubKey");
-        ("UpdateEncryptionPubKey", Self::schema(schema_ref.into()))
+impl ToSchema for Update<Ipv4Addr> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateIpv4Addr")
     }
 }
 
-pub type UpdateVerifyingKey = Update<VerifyingKey>;
-impl<'a> ToSchema<'a> for Update<VerifyingKey> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        let schema_ref = utoipa::openapi::Ref::from_schema_name("VerifyingKey");
-        ("UpdateVerifyingKey", Self::schema(schema_ref.into()))
+impl PartialSchema for Update<Ipv6Addr> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
     }
 }
 
-pub type UpdateU64 = Update<u64>;
-impl<'a> ToSchema<'a> for Update<u64> {
-    fn schema() -> (&'a str, RefOr<Schema>) {
-        ("UpdateU64", Self::schema(<u64 as PartialSchema>::schema()))
+impl ToSchema for Update<Ipv6Addr> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateIpv6Addr")
+    }
+}
+
+impl PartialSchema for Update<EncryptionPubKey> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
+    }
+}
+
+impl ToSchema for Update<EncryptionPubKey> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateEncryptionPubKey")
+    }
+}
+
+impl PartialSchema for Update<VerifyingKey> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<String as PartialSchema>::schema())
+    }
+}
+
+impl ToSchema for Update<VerifyingKey> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateVerifyingKey")
+    }
+}
+
+impl PartialSchema for Update<u64> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        Self::schema(<u64 as PartialSchema>::schema())
+    }
+}
+
+impl ToSchema for Update<u64> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UpdateU64")
     }
 }
 
@@ -292,24 +328,24 @@ where
 #[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct BitNameDataUpdates {
     /// commitment to arbitrary data
-    #[schema(value_type = UpdateHash)]
+    #[schema(schema_with = <Update<Hash> as PartialSchema>::schema)]
     pub commitment: Update<Hash>,
     /// optional ipv4 addr
-    #[schema(value_type = UpdateIpv4Addr)]
+    #[schema(schema_with = <Update<Ipv4Addr> as PartialSchema>::schema)]
     pub ipv4_addr: Update<Ipv4Addr>,
     /// optional ipv6 addr
-    #[schema(value_type = UpdateIpv6Addr)]
+    #[schema(schema_with = <Update<Ipv6Addr> as PartialSchema>::schema)]
     pub ipv6_addr: Update<Ipv6Addr>,
     /// optional pubkey used for encryption
-    #[schema(value_type = UpdateEncryptionPubKey)]
+    #[schema(schema_with = <Update<EncryptionPubKey> as PartialSchema>::schema)]
     pub encryption_pubkey: Update<EncryptionPubKey>,
     /// optional pubkey used for signing messages
     #[borsh(serialize_with = "borsh_serialize_update_pubkey")]
-    #[schema(value_type = UpdateVerifyingKey)]
+    #[schema(schema_with = <Update<VerifyingKey> as PartialSchema>::schema)]
     pub signing_pubkey: Update<VerifyingKey>,
     /// optional minimum paymail fee, in sats
-    #[schema(value_type = UpdateU64)]
-    pub paymail_fee: Update<u64>,
+    #[schema(schema_with = <Update<u64> as PartialSchema>::schema)]
+    pub paymail_fee_sats: Update<u64>,
 }
 
 fn borsh_serialize_signature<W>(
@@ -339,6 +375,7 @@ pub enum TransactionData {
     BitNameReservation {
         /// commitment to the BitName that will be registered
         #[serde(with = "serde_hexstr_human_readable")]
+        #[schema(value_type = String)]
         commitment: Hash,
     },
     BitNameRegistration {
@@ -346,6 +383,7 @@ pub enum TransactionData {
         name_hash: BitName,
         /// reveal of the nonce used for the BitName reservation commitment
         #[serde(with = "serde_hexstr_human_readable")]
+        #[schema(value_type = String)]
         revealed_nonce: Hash,
         /// initial BitName data
         bitname_data: Box<BitNameData>,
@@ -355,153 +393,6 @@ pub enum TransactionData {
 }
 
 pub type TxData = TransactionData;
-
-#[derive(
-    BorshSerialize, Clone, Debug, Default, Deserialize, Serialize, ToSchema,
-)]
-pub struct Transaction {
-    #[schema(schema_with = TxInputs::schema)]
-    pub inputs: TxInputs,
-    #[schema(schema_with = TxOutputs::schema)]
-    pub outputs: TxOutputs,
-    #[serde(with = "serde_hexstr_human_readable")]
-    pub memo: Vec<u8>,
-    pub data: Option<TransactionData>,
-}
-
-/// Representation of Output Content that includes asset type and/or
-/// reservation commitment
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
-#[schema(as = FilledOutputContent)]
-pub enum FilledContent {
-    Bitcoin(u64),
-    BitcoinWithdrawal {
-        value: u64,
-        main_fee: u64,
-        main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
-    },
-    BitName(BitName),
-    /// Reservation txid and commitment
-    BitNameReservation(Txid, Hash),
-}
-
-fn filled_output_content_schema_ref() -> utoipa::openapi::Ref {
-    utoipa::openapi::Ref::new("FilledOutputContent")
-}
-
-/// Representation of output that includes asset type
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
-pub struct FilledOutput {
-    #[serde(with = "serde_display_fromstr_human_readable")]
-    pub address: Address,
-    #[schema(schema_with = filled_output_content_schema_ref)]
-    pub content: FilledContent,
-    #[serde(with = "serde_hexstr_human_readable")]
-    pub memo: Vec<u8>,
-}
-
-/// Representation of a spent output
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct SpentOutput {
-    pub output: FilledOutput,
-    pub inpoint: InPoint,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct FilledTransaction {
-    pub transaction: Transaction,
-    pub spent_utxos: Vec<FilledOutput>,
-}
-
-#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
-pub struct Authorized<T> {
-    pub transaction: T,
-    /// Authorizations are called witnesses in Bitcoin.
-    pub authorizations: Vec<Authorization>,
-}
-
-pub type AuthorizedTransaction = Authorized<Transaction>;
-
-impl From<Authorized<FilledTransaction>> for AuthorizedTransaction {
-    fn from(tx: Authorized<FilledTransaction>) -> Self {
-        Self {
-            transaction: tx.transaction.transaction,
-            authorizations: tx.authorizations,
-        }
-    }
-}
-
-impl std::fmt::Display for OutPoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Regular { txid, vout } => write!(f, "regular {txid} {vout}"),
-            Self::Coinbase { merkle_root, vout } => {
-                write!(f, "coinbase {merkle_root} {vout}")
-            }
-            Self::Deposit(bitcoin::OutPoint { txid, vout }) => {
-                write!(f, "deposit {txid} {vout}")
-            }
-        }
-    }
-}
-
-impl Content {
-    /// true if the output content corresponds to a BitName
-    pub fn is_bitname(&self) -> bool {
-        matches!(self, Self::BitName)
-    }
-
-    /// true if the output content corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        matches!(self, Self::BitNameReservation)
-    }
-
-    pub fn is_value(&self) -> bool {
-        matches!(self, Self::Value(_))
-    }
-    pub fn is_withdrawal(&self) -> bool {
-        matches!(self, Self::Withdrawal { .. })
-    }
-}
-
-impl GetValue for Content {
-    #[inline(always)]
-    fn get_value(&self) -> u64 {
-        match self {
-            Self::BitName => 0,
-            Self::BitNameReservation => 0,
-            Self::Value(value) => *value,
-            Self::Withdrawal { value, .. } => *value,
-        }
-    }
-}
-
-impl Output {
-    pub fn new(address: Address, content: Content) -> Self {
-        Self {
-            address,
-            content,
-            memo: Vec::new(),
-        }
-    }
-
-    /// true if the output content corresponds to a BitName
-    pub fn is_bitname(&self) -> bool {
-        self.content.is_bitname()
-    }
-
-    /// true if the output content corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        self.content.is_reservation()
-    }
-}
-
-impl GetValue for Output {
-    #[inline(always)]
-    fn get_value(&self) -> u64 {
-        self.content.get_value()
-    }
-}
 
 impl TxData {
     /// true if the tx data corresponds to a reservation
@@ -523,6 +414,19 @@ impl TxData {
     pub fn is_batch_icann(&self) -> bool {
         matches!(self, Self::BatchIcann(_))
     }
+}
+
+#[derive(
+    BorshSerialize, Clone, Debug, Default, Deserialize, Serialize, ToSchema,
+)]
+pub struct Transaction {
+    #[schema(schema_with = TxInputs::schema)]
+    pub inputs: TxInputs,
+    #[schema(schema_with = TxOutputs::schema)]
+    pub outputs: TxOutputs,
+    #[serde(with = "serde_hexstr_human_readable")]
+    pub memo: Vec<u8>,
+    pub data: Option<TransactionData>,
 }
 
 impl Transaction {
@@ -548,7 +452,7 @@ impl Transaction {
         self.outputs
             .iter()
             .enumerate()
-            .filter(|(_, output)| output.get_value() != 0)
+            .filter(|(_, output)| output.is_value())
     }
 
     /// return an iterator over bitname outputs
@@ -649,74 +553,14 @@ impl Transaction {
     }
 }
 
-impl FilledContent {
-    /// returns the BitName ID (name hash) if the filled output content
-    /// corresponds to a BitName output.
-    pub fn bitname(&self) -> Option<&BitName> {
-        match self {
-            Self::BitName(name_hash) => Some(name_hash),
-            _ => None,
-        }
-    }
-
-    /// true if the output content corresponds to a bitname
-    pub fn is_bitname(&self) -> bool {
-        matches!(self, Self::BitName(_))
-    }
-
-    /// true if the output content corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        matches!(self, Self::BitNameReservation { .. })
-    }
-
-    /// true if the output content corresponds to a withdrawal
-    pub fn is_withdrawal(&self) -> bool {
-        matches!(self, Self::BitcoinWithdrawal { .. })
-    }
-
-    /// returns the reservation txid and commitment if the filled output
-    /// content corresponds to a BitName reservation output.
-    pub fn reservation_data(&self) -> Option<(&Txid, &Hash)> {
-        match self {
-            Self::BitNameReservation(txid, commitment) => {
-                Some((txid, commitment))
-            }
-            _ => None,
-        }
-    }
-
-    /// returns the reservation commitment if the filled output content
-    /// corresponds to a BitName reservation output.
-    pub fn reservation_commitment(&self) -> Option<&Hash> {
-        self.reservation_data().map(|(_, commitment)| commitment)
-    }
-}
-
-impl From<FilledContent> for Content {
-    fn from(filled: FilledContent) -> Self {
-        match filled {
-            FilledContent::Bitcoin(value) => Content::Value(value),
-            FilledContent::BitcoinWithdrawal {
-                value,
-                main_fee,
-                main_address,
-            } => Content::Withdrawal {
-                value,
-                main_fee,
-                main_address,
-            },
-            FilledContent::BitName(_) => Content::BitName,
-            FilledContent::BitNameReservation { .. } => {
-                Content::BitNameReservation
-            }
-        }
-    }
-}
-
-impl GetValue for FilledContent {
-    fn get_value(&self) -> u64 {
-        Content::from(self.clone()).get_value()
-    }
+/// Representation of output that includes asset type
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
+pub struct FilledOutput {
+    #[serde(with = "serde_display_fromstr_human_readable")]
+    pub address: Address,
+    pub content: FilledContent,
+    #[serde(with = "serde_hexstr_human_readable")]
+    pub memo: Vec<u8>,
 }
 
 impl FilledOutput {
@@ -774,9 +618,22 @@ impl From<FilledOutput> for Output {
 }
 
 impl GetValue for FilledOutput {
-    fn get_value(&self) -> u64 {
+    fn get_value(&self) -> bitcoin::Amount {
         self.content.get_value()
     }
+}
+
+/// Representation of a spent output
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SpentOutput {
+    pub output: FilledOutput,
+    pub inpoint: InPoint,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct FilledTransaction {
+    pub transaction: Transaction,
+    pub spent_utxos: Vec<FilledOutput>,
 }
 
 impl FilledTransaction {
@@ -865,24 +722,32 @@ impl FilledTransaction {
     }
 
     /// returns the total value spent
-    pub fn spent_value(&self) -> u64 {
-        self.spent_utxos.iter().map(GetValue::get_value).sum()
+    pub fn spent_value(&self) -> Result<bitcoin::Amount, AmountOverflowError> {
+        self.spent_utxos
+            .iter()
+            .map(GetValue::get_value)
+            .checked_sum()
+            .ok_or(AmountOverflowError)
     }
 
     /// returns the total value in the outputs
-    pub fn value_out(&self) -> u64 {
-        self.outputs().iter().map(GetValue::get_value).sum()
+    pub fn value_out(&self) -> Result<bitcoin::Amount, AmountOverflowError> {
+        self.outputs()
+            .iter()
+            .map(GetValue::get_value)
+            .checked_sum()
+            .ok_or(AmountOverflowError)
     }
 
     /// returns the difference between the value spent and value out, if it is
     /// non-negative.
-    pub fn fee(&self) -> Option<u64> {
-        let spent_value = self.spent_value();
-        let value_out = self.value_out();
+    pub fn fee(&self) -> Result<Option<bitcoin::Amount>, AmountOverflowError> {
+        let spent_value = self.spent_value()?;
+        let value_out = self.value_out()?;
         if spent_value < value_out {
-            None
+            Ok(None)
         } else {
-            Some(spent_value - value_out)
+            Ok(Some(spent_value - value_out))
         }
     }
 
@@ -974,7 +839,7 @@ impl FilledTransaction {
                     Content::BitNameReservation => {
                         filled_reservation_output_content.next()?.clone()
                     }
-                    Content::Value(value) => FilledContent::Bitcoin(value),
+                    Content::Bitcoin(value) => FilledContent::Bitcoin(value),
                     Content::Withdrawal {
                         value,
                         main_fee,
@@ -1027,6 +892,24 @@ impl FilledTransaction {
     }
 }
 
+#[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize)]
+pub struct Authorized<T> {
+    pub transaction: T,
+    /// Authorizations are called witnesses in Bitcoin.
+    pub authorizations: Vec<Authorization>,
+}
+
+pub type AuthorizedTransaction = Authorized<Transaction>;
+
+impl From<Authorized<FilledTransaction>> for AuthorizedTransaction {
+    fn from(tx: Authorized<FilledTransaction>) -> Self {
+        Self {
+            transaction: tx.transaction.transaction,
+            authorizations: tx.authorizations,
+        }
+    }
+}
+
 #[derive(
     BorshSerialize,
     Clone,
@@ -1037,20 +920,7 @@ impl FilledTransaction {
     Serialize,
     ToSchema,
 )]
-#[aliases(
-    PointedOutput = Pointed<Output>,
-    PointedFilledOutput = Pointed<FilledOutput>
-)]
 pub struct Pointed<OutputKind = Output> {
     pub outpoint: OutPoint,
-    // Utoipa can't handle generics properly
-    #[schema(value_type = Value)]
     pub output: OutputKind,
-}
-
-pub mod open_api_schemas {
-    pub use super::{
-        PointedFilledOutput, PointedOutput, UpdateEncryptionPubKey, UpdateHash,
-        UpdateIpv4Addr, UpdateIpv6Addr, UpdateU64, UpdateVerifyingKey,
-    };
 }

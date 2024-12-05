@@ -3,11 +3,6 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr},
 };
 
-use bip300301::{
-    bitcoin::Amount as BitcoinAmount,
-    bitcoin::{self, transaction::Version as BitcoinTxVersion},
-    TwoWayPegData, WithdrawalBundleStatus,
-};
 use futures::Stream;
 use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
 use nonempty::{nonempty, NonEmpty};
@@ -18,19 +13,29 @@ use crate::{
     types::{
         self, constants,
         hashes::{self, BitName},
-        Address, AggregatedWithdrawal, Authorized, AuthorizedTransaction,
+        proto::mainchain::TwoWayPegData,
+        Address, AggregatedWithdrawal, AmountOverflowError,
+        AmountUnderflowError, Authorized, AuthorizedTransaction,
         BatchIcannRegistrationData, BitNameDataUpdates, BlockHash, Body,
         EncryptionPubKey, FilledOutput, FilledOutputContent, FilledTransaction,
-        GetAddress as _, GetValue as _, Hash, Header, InPoint, MerkleRoot,
-        OutPoint, OutputContent, SpentOutput, Transaction, TxData, Txid,
-        Update, Verify as _, WithdrawalBundle,
+        GetAddress as _, GetValue as _, Hash, Header, InPoint, M6id,
+        MerkleRoot, OutPoint, OutputContent, SpentOutput, Transaction, TxData,
+        Txid, Update, Verify as _, WithdrawalBundle, WithdrawalBundleError,
+        WithdrawalBundleStatus,
     },
     util::{EnvExt, UnitKey, Watchable, WatchableDb},
 };
 
-/** Data of type `T` paired with
- *  * the txid at which it was last updated
- *  * block height at which it was last updated */
+/// Data of type `T` paired with block height at which it was last updated
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct HeightStamped<T> {
+    value: T,
+    height: u32,
+}
+
+/// Data of type `T` paired with
+/// * the txid at which it was last updated
+/// * block height at which it was last updated
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct TxidStamped<T> {
     data: T,
@@ -42,9 +47,46 @@ struct TxidStamped<T> {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[repr(transparent)]
 #[serde(transparent)]
-struct RollBack<T>(NonEmpty<TxidStamped<T>>);
+struct RollBack<T>(NonEmpty<T>);
 
-impl<T> RollBack<T> {
+impl<T> RollBack<HeightStamped<T>> {
+    fn new(value: T, height: u32) -> Self {
+        let height_stamped = HeightStamped { value, height };
+        Self(nonempty![height_stamped])
+    }
+
+    /// Pop the most recent value
+    fn pop(mut self) -> (Option<Self>, HeightStamped<T>) {
+        if let Some(value) = self.0.pop() {
+            (Some(self), value)
+        } else {
+            (None, self.0.head)
+        }
+    }
+
+    /// Attempt to push a value as the new most recent.
+    /// Returns the value if the operation fails.
+    fn push(&mut self, value: T, height: u32) -> Result<(), T> {
+        if self.0.last().height >= height {
+            return Err(value);
+        }
+        let height_stamped = HeightStamped { value, height };
+        self.0.push(height_stamped);
+        Ok(())
+    }
+
+    /// Returns the earliest value
+    fn earliest(&self) -> &HeightStamped<T> {
+        self.0.first()
+    }
+
+    /// Returns the most recent value
+    fn latest(&self) -> &HeightStamped<T> {
+        self.0.last()
+    }
+}
+
+impl<T> RollBack<TxidStamped<T>> {
     fn new(value: T, txid: Txid, height: u32) -> Self {
         let txid_stamped = TxidStamped {
             data: value,
@@ -90,40 +132,56 @@ impl<T> RollBack<T> {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BitNameData {
     /// commitment to arbitrary data
-    commitment: RollBack<Option<Hash>>,
+    commitment: RollBack<TxidStamped<Option<Hash>>>,
     /// set if the plain bitname is known to be an ICANN domain
     is_icann: bool,
     /// optional ipv4 addr
-    ipv4_addr: RollBack<Option<Ipv4Addr>>,
+    ipv4_addr: RollBack<TxidStamped<Option<Ipv4Addr>>>,
     /// optional ipv6 addr
-    ipv6_addr: RollBack<Option<Ipv6Addr>>,
+    ipv6_addr: RollBack<TxidStamped<Option<Ipv6Addr>>>,
     /// optional pubkey used for encryption
-    encryption_pubkey: RollBack<Option<EncryptionPubKey>>,
+    encryption_pubkey: RollBack<TxidStamped<Option<EncryptionPubKey>>>,
     /// optional pubkey used for signing messages
-    signing_pubkey: RollBack<Option<VerifyingKey>>,
+    signing_pubkey: RollBack<TxidStamped<Option<VerifyingKey>>>,
     /// optional minimum paymail fee, in sats
-    paymail_fee: RollBack<Option<u64>>,
+    paymail_fee_sats: RollBack<TxidStamped<Option<u64>>>,
 }
 
 impl BitNameData {
     // initialize from BitName data provided during a registration
     fn init(bitname_data: types::BitNameData, txid: Txid, height: u32) -> Self {
         Self {
-            commitment: RollBack::new(bitname_data.commitment, txid, height),
+            commitment: RollBack::<TxidStamped<_>>::new(
+                bitname_data.commitment,
+                txid,
+                height,
+            ),
             is_icann: false,
-            ipv4_addr: RollBack::new(bitname_data.ipv4_addr, txid, height),
-            ipv6_addr: RollBack::new(bitname_data.ipv6_addr, txid, height),
-            encryption_pubkey: RollBack::new(
+            ipv4_addr: RollBack::<TxidStamped<_>>::new(
+                bitname_data.ipv4_addr,
+                txid,
+                height,
+            ),
+            ipv6_addr: RollBack::<TxidStamped<_>>::new(
+                bitname_data.ipv6_addr,
+                txid,
+                height,
+            ),
+            encryption_pubkey: RollBack::<TxidStamped<_>>::new(
                 bitname_data.encryption_pubkey,
                 txid,
                 height,
             ),
-            signing_pubkey: RollBack::new(
+            signing_pubkey: RollBack::<TxidStamped<_>>::new(
                 bitname_data.signing_pubkey,
                 txid,
                 height,
             ),
-            paymail_fee: RollBack::new(bitname_data.paymail_fee, txid, height),
+            paymail_fee_sats: RollBack::<TxidStamped<_>>::new(
+                bitname_data.paymail_fee_sats,
+                txid,
+                height,
+            ),
         }
     }
 
@@ -141,12 +199,12 @@ impl BitNameData {
             ref mut ipv6_addr,
             ref mut encryption_pubkey,
             ref mut signing_pubkey,
-            ref mut paymail_fee,
+            ref mut paymail_fee_sats,
         } = self;
 
         // apply an update to a single data field
         fn apply_field_update<T>(
-            data_field: &mut RollBack<Option<T>>,
+            data_field: &mut RollBack<TxidStamped<Option<T>>>,
             update: Update<T>,
             txid: Txid,
             height: u32,
@@ -174,7 +232,12 @@ impl BitNameData {
             txid,
             height,
         );
-        apply_field_update(paymail_fee, updates.paymail_fee, txid, height);
+        apply_field_update(
+            paymail_fee_sats,
+            updates.paymail_fee_sats,
+            txid,
+            height,
+        );
     }
 
     // revert bitname data updates
@@ -186,7 +249,7 @@ impl BitNameData {
     ) {
         // apply an update to a single data field
         fn revert_field_update<T>(
-            data_field: &mut RollBack<Option<T>>,
+            data_field: &mut RollBack<TxidStamped<Option<T>>>,
             update: Update<T>,
             txid: Txid,
             height: u32,
@@ -222,9 +285,14 @@ impl BitNameData {
             ref mut ipv6_addr,
             ref mut encryption_pubkey,
             ref mut signing_pubkey,
-            ref mut paymail_fee,
+            ref mut paymail_fee_sats,
         } = self;
-        revert_field_update(paymail_fee, updates.paymail_fee, txid, height);
+        revert_field_update(
+            paymail_fee_sats,
+            updates.paymail_fee_sats,
+            txid,
+            height,
+        );
         revert_field_update(
             signing_pubkey,
             updates.signing_pubkey,
@@ -257,7 +325,10 @@ impl BitNameData {
                 .at_block_height(height)?
                 .data,
             signing_pubkey: self.signing_pubkey.at_block_height(height)?.data,
-            paymail_fee: self.paymail_fee.at_block_height(height)?.data,
+            paymail_fee_sats: self
+                .paymail_fee_sats
+                .at_block_height(height)?
+                .data,
         })
     }
 
@@ -269,7 +340,7 @@ impl BitNameData {
             ipv6_addr: self.ipv6_addr.latest().data,
             encryption_pubkey: self.encryption_pubkey.latest().data,
             signing_pubkey: self.signing_pubkey.latest().data,
-            paymail_fee: self.paymail_fee.latest().data,
+            paymail_fee_sats: self.paymail_fee_sats.latest().data,
         }
     }
 }
@@ -290,6 +361,10 @@ pub enum InvalidHeaderError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    AmountOverflow(#[from] AmountOverflowError),
+    #[error(transparent)]
+    AmountUnderflow(#[from] AmountUnderflowError),
     #[error("failed to verify authorization")]
     AuthorizationError,
     #[error("bad coinbase output content")]
@@ -300,6 +375,8 @@ pub enum Error {
     BitNameAlreadyIcann { name_hash: BitName },
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
+    #[error(transparent)]
+    BorshSerialize(borsh::io::Error),
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
     #[error("heed error")]
@@ -342,6 +419,8 @@ pub enum Error {
     NoTip,
     #[error("utxo {outpoint} doesn't exist")]
     NoUtxo { outpoint: OutPoint },
+    #[error("Withdrawal bundle event block doesn't exist")]
+    NoWithdrawalBundleEventBlock,
     #[error(transparent)]
     SignatureError(#[from] ed25519_dalek::SignatureError),
     #[error("Too few BitName outputs")]
@@ -356,11 +435,23 @@ pub enum Error {
         n_reservation_inputs: usize,
         n_reservation_outputs: usize,
     },
+    #[error("Unknown withdrawal bundle: {m6id}")]
+    UnknownWithdrawalBundle { m6id: M6id },
     #[error("utxo double spent")]
     UtxoDoubleSpent,
+    #[error(transparent)]
+    WithdrawalBundle(#[from] WithdrawalBundleError),
     #[error("wrong public key for address")]
     WrongPubKeyForAddress,
 }
+
+type WithdrawalBundlesDb = Database<
+    SerdeBincode<M6id>,
+    SerdeBincode<(
+        WithdrawalBundle,
+        RollBack<HeightStamped<WithdrawalBundleStatus>>,
+    )>,
+>;
 
 #[derive(Clone)]
 pub struct State {
@@ -377,18 +468,21 @@ pub struct State {
     /// Pending withdrawal bundle and block height
     pub pending_withdrawal_bundle:
         Database<SerdeBincode<UnitKey>, SerdeBincode<(WithdrawalBundle, u32)>>,
-    /// Mapping from block height to withdrawal bundle and status
-    pub withdrawal_bundles: Database<
-        SerdeBincode<u32>,
-        SerdeBincode<(WithdrawalBundle, WithdrawalBundleStatus)>,
+    latest_failed_withdrawal_bundle: Database<
+        SerdeBincode<UnitKey>,
+        SerdeBincode<RollBack<HeightStamped<M6id>>>,
     >,
+    withdrawal_bundles: WithdrawalBundlesDb,
     /// deposit blocks and the height at which they were applied, keyed sequentially
     pub deposit_blocks:
+        Database<SerdeBincode<u32>, SerdeBincode<(bitcoin::BlockHash, u32)>>,
+    /// withdrawal bundle event blocks and the height at which they were applied, keyed sequentially
+    pub withdrawal_bundle_event_blocks:
         Database<SerdeBincode<u32>, SerdeBincode<(bitcoin::BlockHash, u32)>>,
 }
 
 impl State {
-    pub const NUM_DBS: u32 = 9;
+    pub const NUM_DBS: u32 = 11;
     pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
@@ -402,10 +496,18 @@ impl State {
         let stxos = env.create_database(&mut rwtxn, Some("stxos"))?;
         let pending_withdrawal_bundle =
             env.create_database(&mut rwtxn, Some("pending_withdrawal_bundle"))?;
+        let latest_failed_withdrawal_bundle = env.create_database(
+            &mut rwtxn,
+            Some("latest_failed_withdrawal_bundle"),
+        )?;
         let withdrawal_bundles =
             env.create_database(&mut rwtxn, Some("withdrawal_bundles"))?;
         let deposit_blocks =
             env.create_database(&mut rwtxn, Some("deposit_blocks"))?;
+        let withdrawal_bundle_event_blocks = env.create_database(
+            &mut rwtxn,
+            Some("withdrawal_bundle_event_blocks"),
+        )?;
         rwtxn.commit()?;
         Ok(Self {
             tip,
@@ -415,7 +517,9 @@ impl State {
             utxos,
             stxos,
             pending_withdrawal_bundle,
+            latest_failed_withdrawal_bundle,
             withdrawal_bundles,
+            withdrawal_bundle_event_blocks,
             deposit_blocks,
         })
     }
@@ -531,13 +635,17 @@ impl State {
         &self,
         rotxn: &RoTxn,
     ) -> Result<Option<(u32, WithdrawalBundle)>, Error> {
-        for item in self.withdrawal_bundles.rev_iter(rotxn)? {
-            if let (height, (bundle, WithdrawalBundleStatus::Failed)) = item? {
-                let res = Some((height, bundle));
-                return Ok(res);
-            }
-        }
-        Ok(None)
+        let Some(latest_failed_m6id) =
+            self.latest_failed_withdrawal_bundle.get(rotxn, &UnitKey)?
+        else {
+            return Ok(None);
+        };
+        let latest_failed_m6id = latest_failed_m6id.latest().value;
+        let (bundle, bundle_status) = self.withdrawal_bundles.get(rotxn, &latest_failed_m6id)?
+            .expect("Inconsistent DBs: latest failed m6id should exist in withdrawal_bundles");
+        let bundle_status = bundle_status.latest();
+        assert_eq!(bundle_status.value, WithdrawalBundleStatus::Failed);
+        Ok(Some((bundle_status.height, bundle)))
     }
 
     fn fill_transaction(
@@ -607,7 +715,6 @@ impl State {
         txn: &RoTxn,
         block_height: u32,
     ) -> Result<Option<WithdrawalBundle>, Error> {
-        use bitcoin::blockdata::{opcodes, script};
         // Weight of a bundle with 0 outputs.
         const BUNDLE_0_WEIGHT: u64 = 504;
         // Weight of a single output.
@@ -636,11 +743,14 @@ impl State {
                     .or_insert(AggregatedWithdrawal {
                         spend_utxos: HashMap::new(),
                         main_address: main_address.clone(),
-                        value: 0,
-                        main_fee: 0,
+                        value: bitcoin::Amount::ZERO,
+                        main_fee: bitcoin::Amount::ZERO,
                     });
                 // Add up all values.
-                aggregated.value += value;
+                aggregated.value = aggregated
+                    .value
+                    .checked_add(value)
+                    .ok_or(AmountOverflowError)?;
                 // Set maximum mainchain fee.
                 if main_fee > aggregated.main_fee {
                     aggregated.main_fee = main_fee;
@@ -654,7 +764,7 @@ impl State {
         let mut aggregated_withdrawals: Vec<_> =
             address_to_aggregated_withdrawal.into_values().collect();
         aggregated_withdrawals.sort_by_key(|a| std::cmp::Reverse(a.clone()));
-        let mut fee = 0;
+        let mut fee = bitcoin::Amount::ZERO;
         let mut spend_utxos = BTreeMap::<OutPoint, FilledOutput>::new();
         let mut bundle_outputs = vec![];
         for aggregated in &aggregated_withdrawals {
@@ -662,88 +772,31 @@ impl State {
                 break;
             }
             let bundle_output = bitcoin::TxOut {
-                value: BitcoinAmount::from_sat(aggregated.value),
+                value: aggregated.value,
                 script_pubkey: aggregated
                     .main_address
-                    .payload()
+                    .assume_checked_ref()
                     .script_pubkey(),
             };
             spend_utxos.extend(aggregated.spend_utxos.clone());
             bundle_outputs.push(bundle_output);
             fee += aggregated.main_fee;
         }
-        let txin = bitcoin::TxIn {
-            script_sig: script::Builder::new()
-                // OP_FALSE == OP_0
-                .push_opcode(opcodes::OP_FALSE)
-                .into_script(),
-            ..bitcoin::TxIn::default()
-        };
-        // Create return dest output.
-        // The destination string for the change of a WT^
-        let script = script::Builder::new()
-            .push_opcode(opcodes::all::OP_RETURN)
-            .push_slice([68; 1])
-            .into_script();
-        let return_dest_txout = bitcoin::TxOut {
-            value: BitcoinAmount::ZERO,
-            script_pubkey: script,
-        };
-        // Create mainchain fee output.
-        let script = script::Builder::new()
-            .push_opcode(opcodes::all::OP_RETURN)
-            .push_slice(fee.to_le_bytes())
-            .into_script();
-        let mainchain_fee_txout = bitcoin::TxOut {
-            value: BitcoinAmount::ZERO,
-            script_pubkey: script,
-        };
-        // Create inputs commitment.
-        let inputs: Vec<OutPoint> = [
-            // Commit to inputs.
-            spend_utxos.keys().copied().collect(),
-            // Commit to block height.
-            vec![OutPoint::Regular {
-                txid: [0; 32].into(),
-                vout: block_height,
-            }],
-        ]
-        .concat();
-        let commitment = hashes::hash(&inputs);
-        let script = script::Builder::new()
-            .push_opcode(opcodes::all::OP_RETURN)
-            .push_slice(commitment)
-            .into_script();
-        let inputs_commitment_txout = bitcoin::TxOut {
-            value: BitcoinAmount::ZERO,
-            script_pubkey: script,
-        };
-        let transaction = bitcoin::Transaction {
-            version: BitcoinTxVersion::TWO,
-            lock_time: bitcoin::blockdata::locktime::absolute::LockTime::ZERO,
-            input: vec![txin],
-            output: [
-                vec![
-                    return_dest_txout,
-                    mainchain_fee_txout,
-                    inputs_commitment_txout,
-                ],
-                bundle_outputs,
-            ]
-            .concat(),
-        };
-        if transaction.weight().to_wu()
+        let bundle = WithdrawalBundle::new(
+            block_height,
+            fee,
+            spend_utxos,
+            bundle_outputs,
+        )?;
+        if bundle.tx().weight().to_wu()
             > bitcoin::policy::MAX_STANDARD_TX_WEIGHT as u64
         {
             Err(Error::BundleTooHeavy {
-                weight: transaction.weight().to_wu(),
+                weight: bundle.tx().weight().to_wu(),
                 max_weight: bitcoin::policy::MAX_STANDARD_TX_WEIGHT as u64,
             })?;
         }
-        Ok(Some(WithdrawalBundle {
-            spend_utxos,
-            transaction,
-        }))
+        Ok(Some(bundle))
     }
 
     /// Get pending withdrawal bundle and block height
@@ -875,18 +928,18 @@ impl State {
         &self,
         rotxn: &RoTxn,
         tx: &FilledTransaction,
-    ) -> Result<u64, Error> {
+    ) -> Result<bitcoin::Amount, Error> {
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitnames(rotxn, tx)?;
         let () = self.validate_batch_icann(tx)?;
-        tx.fee().ok_or(Error::NotEnoughValueIn)
+        tx.fee()?.ok_or(Error::NotEnoughValueIn)
     }
 
     pub fn validate_transaction(
         &self,
         rotxn: &RoTxn,
         transaction: &AuthorizedTransaction,
-    ) -> Result<u64, Error> {
+    ) -> Result<bitcoin::Amount, Error> {
         let filled_transaction =
             self.fill_transaction(rotxn, &transaction.transaction)?;
         for (authorization, spent_utxo) in transaction
@@ -912,7 +965,7 @@ impl State {
         rotxn: &RoTxn,
         header: &Header,
         body: &Body,
-    ) -> Result<(u64, MerkleRoot), Error> {
+    ) -> Result<(bitcoin::Amount, MerkleRoot), Error> {
         let tip_hash = self.get_tip(rotxn)?;
         if header.prev_side_hash != tip_hash {
             let err = InvalidHeaderError::PrevSideHash {
@@ -921,11 +974,13 @@ impl State {
             };
             return Err(Error::InvalidHeader(err));
         };
-        let mut coinbase_value: u64 = 0;
+        let mut coinbase_value = bitcoin::Amount::ZERO;
         for output in &body.coinbase {
-            coinbase_value += output.get_value();
+            coinbase_value = coinbase_value
+                .checked_add(output.get_value())
+                .ok_or(AmountOverflowError)?;
         }
-        let mut total_fees: u64 = 0;
+        let mut total_fees = bitcoin::Amount::ZERO;
         let mut spent_utxos = HashSet::new();
         let filled_txs: Vec<_> = body
             .transactions
@@ -939,7 +994,11 @@ impl State {
                 }
                 spent_utxos.insert(*input);
             }
-            total_fees += self.validate_filled_transaction(rotxn, filled_tx)?;
+            total_fees = total_fees
+                .checked_add(
+                    self.validate_filled_transaction(rotxn, filled_tx)?,
+                )
+                .ok_or(AmountOverflowError)?;
         }
         if coinbase_value > total_fees {
             return Err(Error::NotEnoughFees);
@@ -947,7 +1006,7 @@ impl State {
         let merkle_root = Body::compute_merkle_root(
             body.coinbase.as_slice(),
             filled_txs.as_slice(),
-        )
+        )?
         .ok_or(Error::MerkleRoot)?;
         if merkle_root != header.merkle_root {
             let err = Error::InvalidBody {
@@ -983,14 +1042,28 @@ impl State {
         Ok(block_hash)
     }
 
+    pub fn get_last_withdrawal_bundle_event_block_hash(
+        &self,
+        rotxn: &RoTxn,
+    ) -> Result<Option<bitcoin::BlockHash>, Error> {
+        let block_hash = self
+            .withdrawal_bundle_event_blocks
+            .last(rotxn)?
+            .map(|(_, (block_hash, _))| block_hash);
+        Ok(block_hash)
+    }
+
     pub fn connect_two_way_peg_data(
         &self,
         rwtxn: &mut RwTxn,
         two_way_peg_data: &TwoWayPegData,
     ) -> Result<(), Error> {
         let block_height = self.get_height(rwtxn)?;
+        tracing::trace!(%block_height, "Connecting 2WPD...");
         // Handle deposits.
-        if let Some(deposit_block_hash) = two_way_peg_data.deposit_block_hash {
+        if let Some(latest_deposit_block_hash) =
+            two_way_peg_data.latest_deposit_block_hash()
+        {
             let deposit_block_seq_idx = self
                 .deposit_blocks
                 .last(rwtxn)?
@@ -998,21 +1071,32 @@ impl State {
             self.deposit_blocks.put(
                 rwtxn,
                 &deposit_block_seq_idx,
-                &(deposit_block_hash, block_height - 1),
+                &(latest_deposit_block_hash, block_height - 1),
             )?;
         }
-        for deposit in &two_way_peg_data.deposits {
-            if let Ok(address) = deposit.output.address.parse() {
-                let outpoint = OutPoint::Deposit(deposit.outpoint);
-                let output = FilledOutput::new(
-                    address,
-                    FilledOutputContent::Bitcoin(deposit.output.value),
-                );
-                self.utxos.put(rwtxn, &outpoint, &output)?;
-            }
+        for deposit in two_way_peg_data
+            .deposits()
+            .flat_map(|(_, deposits)| deposits)
+        {
+            let outpoint = OutPoint::Deposit(deposit.outpoint);
+            let output = deposit.output.clone();
+            self.utxos.put(rwtxn, &outpoint, &output)?;
         }
 
-        // Handle withdrawals.
+        // Handle withdrawals
+        if let Some(latest_withdrawal_bundle_event_block_hash) =
+            two_way_peg_data.latest_withdrawal_bundle_event_block_hash()
+        {
+            let withdrawal_bundle_event_block_seq_idx = self
+                .withdrawal_bundle_event_blocks
+                .last(rwtxn)?
+                .map_or(0, |(seq_idx, _)| seq_idx + 1);
+            self.withdrawal_bundle_event_blocks.put(
+                rwtxn,
+                &withdrawal_bundle_event_block_seq_idx,
+                &(*latest_withdrawal_bundle_event_block_hash, block_height - 1),
+            )?;
+        }
         let last_withdrawal_bundle_failure_height = self
             .get_latest_failed_withdrawal_bundle(rwtxn)?
             .map(|(height, _bundle)| height)
@@ -1027,12 +1111,12 @@ impl State {
             if let Some(bundle) =
                 self.collect_withdrawal_bundle(rwtxn, block_height)?
             {
-                for (outpoint, spend_output) in &bundle.spend_utxos {
+                let m6id = bundle.compute_m6id();
+                for (outpoint, spend_output) in bundle.spend_utxos() {
                     self.utxos.delete(rwtxn, outpoint)?;
-                    let txid = bundle.transaction.txid();
                     let spent_output = SpentOutput {
                         output: spend_output.clone(),
-                        inpoint: InPoint::Withdrawal { txid },
+                        inpoint: InPoint::Withdrawal { m6id },
                     };
                     self.stxos.put(rwtxn, outpoint, &spent_output)?;
                 }
@@ -1041,27 +1125,137 @@ impl State {
                     &UnitKey,
                     &(bundle, block_height),
                 )?;
+                tracing::trace!(
+                    %block_height,
+                    %m6id,
+                    "Stored pending withdrawal bundle"
+                );
             }
         }
-        for (txid, status) in &two_way_peg_data.bundle_statuses {
-            if let Some((bundle, bundle_block_height)) =
-                self.pending_withdrawal_bundle.get(rwtxn, &UnitKey)?
-            {
-                if bundle.transaction.txid() != *txid {
-                    continue;
+        for (_, event) in two_way_peg_data.withdrawal_bundle_events() {
+            match event.status {
+                WithdrawalBundleStatus::Submitted => {
+                    let Some((bundle, bundle_block_height)) =
+                        self.pending_withdrawal_bundle.get(rwtxn, &UnitKey)?
+                    else {
+                        if let Some((_bundle, bundle_status)) =
+                            self.withdrawal_bundles.get(rwtxn, &event.m6id)?
+                        {
+                            // Already applied
+                            assert_eq!(
+                                bundle_status.earliest().value,
+                                WithdrawalBundleStatus::Submitted
+                            );
+                            continue;
+                        }
+                        return Err(Error::UnknownWithdrawalBundle {
+                            m6id: event.m6id,
+                        });
+                    };
+                    assert_eq!(bundle_block_height, block_height - 2);
+                    if bundle.compute_m6id() != event.m6id {
+                        return Err(Error::UnknownWithdrawalBundle {
+                            m6id: event.m6id,
+                        });
+                    }
+                    tracing::debug!(
+                        m6id = %event.m6id,
+                        "Withdrawal bundle successfully submitted"
+                    );
+                    self.withdrawal_bundles.put(
+                        rwtxn,
+                        &event.m6id,
+                        &(
+                            bundle,
+                            RollBack::<HeightStamped<_>>::new(
+                                WithdrawalBundleStatus::Submitted,
+                                block_height,
+                            ),
+                        ),
+                    )?;
+                    self.pending_withdrawal_bundle.delete(rwtxn, &UnitKey)?;
                 }
-                assert_eq!(bundle_block_height, block_height);
-                self.withdrawal_bundles.put(
-                    rwtxn,
-                    &block_height,
-                    &(bundle.clone(), *status),
-                )?;
-                self.pending_withdrawal_bundle.delete(rwtxn, &UnitKey)?;
-                if let WithdrawalBundleStatus::Failed = status {
-                    for (outpoint, output) in &bundle.spend_utxos {
+                WithdrawalBundleStatus::Confirmed => {
+                    let Some((bundle, mut bundle_status)) =
+                        self.withdrawal_bundles.get(rwtxn, &event.m6id)?
+                    else {
+                        return Err(Error::UnknownWithdrawalBundle {
+                            m6id: event.m6id,
+                        });
+                    };
+                    if bundle_status.latest().value
+                        == WithdrawalBundleStatus::Confirmed
+                    {
+                        // Already applied
+                        continue;
+                    } else {
+                        assert_eq!(
+                            bundle_status.latest().value,
+                            WithdrawalBundleStatus::Submitted
+                        );
+                    }
+                    bundle_status
+                        .push(WithdrawalBundleStatus::Confirmed, block_height)
+                        .expect("Push confirmed status should be valid");
+                    self.withdrawal_bundles.put(
+                        rwtxn,
+                        &event.m6id,
+                        &(bundle, bundle_status),
+                    )?;
+                }
+                WithdrawalBundleStatus::Failed => {
+                    let Some((bundle, mut bundle_status)) =
+                        self.withdrawal_bundles.get(rwtxn, &event.m6id)?
+                    else {
+                        return Err(Error::UnknownWithdrawalBundle {
+                            m6id: event.m6id,
+                        });
+                    };
+                    if bundle_status.latest().value
+                        == WithdrawalBundleStatus::Failed
+                    {
+                        // Already applied
+                        continue;
+                    } else {
+                        assert_eq!(
+                            bundle_status.latest().value,
+                            WithdrawalBundleStatus::Submitted
+                        );
+                    }
+                    bundle_status
+                        .push(WithdrawalBundleStatus::Failed, block_height)
+                        .expect("Push failed status should be valid");
+                    for (outpoint, output) in bundle.spend_utxos() {
                         self.stxos.delete(rwtxn, outpoint)?;
                         self.utxos.put(rwtxn, outpoint, output)?;
                     }
+                    let latest_failed_m6id =
+                        if let Some(mut latest_failed_m6id) = self
+                            .latest_failed_withdrawal_bundle
+                            .get(rwtxn, &UnitKey)?
+                        {
+                            latest_failed_m6id
+                                .push(event.m6id, block_height)
+                                .expect(
+                                    "Push latest failed m6id should be valid",
+                                );
+                            latest_failed_m6id
+                        } else {
+                            RollBack::<HeightStamped<_>>::new(
+                                event.m6id,
+                                block_height,
+                            )
+                        };
+                    self.latest_failed_withdrawal_bundle.put(
+                        rwtxn,
+                        &UnitKey,
+                        &latest_failed_m6id,
+                    )?;
+                    self.withdrawal_bundles.put(
+                        rwtxn,
+                        &event.m6id,
+                        &(bundle, bundle_status),
+                    )?;
                 }
             }
         }
@@ -1075,41 +1269,168 @@ impl State {
     ) -> Result<(), Error> {
         let block_height = self.get_height(rwtxn)?;
         // Restore pending withdrawal bundle
-        for (txid, status) in two_way_peg_data.bundle_statuses.iter().rev() {
-            if let Some((
-                latest_bundle_height,
-                (latest_bundle, latest_bundle_status),
-            )) = self.withdrawal_bundles.last(rwtxn)?
-            {
-                if latest_bundle.transaction.txid() != *txid {
-                    continue;
+        for (_, event) in two_way_peg_data.withdrawal_bundle_events().rev() {
+            match event.status {
+                WithdrawalBundleStatus::Submitted => {
+                    let Some((bundle, bundle_status)) =
+                        self.withdrawal_bundles.get(rwtxn, &event.m6id)?
+                    else {
+                        if let Some((bundle, _)) = self
+                            .pending_withdrawal_bundle
+                            .get(rwtxn, &UnitKey)?
+                            && bundle.compute_m6id() == event.m6id
+                        {
+                            // Already applied
+                            continue;
+                        }
+                        return Err(Error::UnknownWithdrawalBundle {
+                            m6id: event.m6id,
+                        });
+                    };
+                    let bundle_status = bundle_status.latest();
+                    assert_eq!(
+                        bundle_status.value,
+                        WithdrawalBundleStatus::Submitted
+                    );
+                    assert_eq!(bundle_status.height, block_height);
+                    self.pending_withdrawal_bundle.put(
+                        rwtxn,
+                        &UnitKey,
+                        &(bundle, bundle_status.height - 2),
+                    )?;
+                    self.withdrawal_bundles.delete(rwtxn, &event.m6id)?;
                 }
-                assert_eq!(*status, latest_bundle_status);
-                assert_eq!(latest_bundle_height, block_height);
-                self.withdrawal_bundles
-                    .delete(rwtxn, &latest_bundle_height)?;
-                self.pending_withdrawal_bundle.put(
-                    rwtxn,
-                    &UnitKey,
-                    &(latest_bundle.clone(), latest_bundle_height),
-                )?;
-                if *status == WithdrawalBundleStatus::Failed {
-                    for (outpoint, output) in
-                        latest_bundle.spend_utxos.into_iter().rev()
+                WithdrawalBundleStatus::Confirmed => {
+                    let Some((bundle, bundle_status)) =
+                        self.withdrawal_bundles.get(rwtxn, &event.m6id)?
+                    else {
+                        return Err(Error::UnknownWithdrawalBundle {
+                            m6id: event.m6id,
+                        });
+                    };
+                    let (prev_bundle_status, latest_bundle_status) =
+                        bundle_status.pop();
+                    if latest_bundle_status.value
+                        == WithdrawalBundleStatus::Submitted
+                    {
+                        // Already applied
+                        continue;
+                    } else {
+                        assert_eq!(
+                            latest_bundle_status.value,
+                            WithdrawalBundleStatus::Confirmed
+                        );
+                    }
+                    assert_eq!(latest_bundle_status.height, block_height);
+                    let prev_bundle_status = prev_bundle_status
+                        .expect("Pop confirmed bundle status should be valid");
+                    assert_eq!(
+                        prev_bundle_status.latest().value,
+                        WithdrawalBundleStatus::Submitted
+                    );
+                    self.withdrawal_bundles.put(
+                        rwtxn,
+                        &event.m6id,
+                        &(bundle, prev_bundle_status),
+                    )?;
+                }
+                WithdrawalBundleStatus::Failed => {
+                    let Some((bundle, bundle_status)) =
+                        self.withdrawal_bundles.get(rwtxn, &event.m6id)?
+                    else {
+                        return Err(Error::UnknownWithdrawalBundle {
+                            m6id: event.m6id,
+                        });
+                    };
+                    let (prev_bundle_status, latest_bundle_status) =
+                        bundle_status.pop();
+                    if latest_bundle_status.value
+                        == WithdrawalBundleStatus::Submitted
+                    {
+                        // Already applied
+                        continue;
+                    } else {
+                        assert_eq!(
+                            latest_bundle_status.value,
+                            WithdrawalBundleStatus::Failed
+                        );
+                    }
+                    assert_eq!(latest_bundle_status.height, block_height);
+                    let prev_bundle_status = prev_bundle_status
+                        .expect("Pop failed bundle status should be valid");
+                    assert_eq!(
+                        prev_bundle_status.latest().value,
+                        WithdrawalBundleStatus::Submitted
+                    );
+                    for (outpoint, output) in bundle.spend_utxos().iter().rev()
                     {
                         let spent_output = SpentOutput {
                             output: output.clone(),
-                            inpoint: InPoint::Withdrawal { txid: *txid },
+                            inpoint: InPoint::Withdrawal { m6id: event.m6id },
                         };
-                        self.stxos.put(rwtxn, &outpoint, &spent_output)?;
-                        if self.utxos.delete(rwtxn, &outpoint)? {
-                            return Err(Error::NoUtxo { outpoint });
+                        self.stxos.put(rwtxn, outpoint, &spent_output)?;
+                        if self.utxos.delete(rwtxn, outpoint)? {
+                            return Err(Error::NoUtxo {
+                                outpoint: *outpoint,
+                            });
                         };
+                    }
+                    self.withdrawal_bundles.put(
+                        rwtxn,
+                        &event.m6id,
+                        &(bundle, prev_bundle_status),
+                    )?;
+                    let (prev_latest_failed_m6id, latest_failed_m6id) = self
+                        .latest_failed_withdrawal_bundle
+                        .get(rwtxn, &UnitKey)?
+                        .expect("latest failed withdrawal bundle should exist")
+                        .pop();
+                    assert_eq!(latest_failed_m6id.value, event.m6id);
+                    assert_eq!(latest_failed_m6id.height, block_height);
+                    if let Some(prev_latest_failed_m6id) =
+                        prev_latest_failed_m6id
+                    {
+                        self.latest_failed_withdrawal_bundle.put(
+                            rwtxn,
+                            &UnitKey,
+                            &prev_latest_failed_m6id,
+                        )?;
+                    } else {
+                        self.latest_failed_withdrawal_bundle
+                            .delete(rwtxn, &UnitKey)?;
                     }
                 }
             }
         }
-        // Handle withdrawals.
+        // Handle withdrawals
+        if let Some(latest_withdrawal_bundle_event_block_hash) =
+            two_way_peg_data.latest_withdrawal_bundle_event_block_hash()
+        {
+            let (
+                last_withdrawal_bundle_event_block_seq_idx,
+                (
+                    last_withdrawal_bundle_event_block_hash,
+                    last_withdrawal_bundle_event_block_height,
+                ),
+            ) = self
+                .withdrawal_bundle_event_blocks
+                .last(rwtxn)?
+                .ok_or(Error::NoWithdrawalBundleEventBlock)?;
+            assert_eq!(
+                *latest_withdrawal_bundle_event_block_hash,
+                last_withdrawal_bundle_event_block_hash
+            );
+            assert_eq!(
+                block_height - 1,
+                last_withdrawal_bundle_event_block_height
+            );
+            if !self
+                .deposit_blocks
+                .delete(rwtxn, &last_withdrawal_bundle_event_block_seq_idx)?
+            {
+                return Err(Error::NoWithdrawalBundleEventBlock);
+            };
+        }
         let last_withdrawal_bundle_failure_height = self
             .get_latest_failed_withdrawal_bundle(rwtxn)?
             .map(|(height, _bundle)| height)
@@ -1118,18 +1439,22 @@ impl State {
             > Self::WITHDRAWAL_BUNDLE_FAILURE_GAP
             && let Some((bundle, bundle_height)) =
                 self.pending_withdrawal_bundle.get(rwtxn, &UnitKey)?
-            && bundle_height == block_height
+            && bundle_height == block_height - 2
         {
             self.pending_withdrawal_bundle.delete(rwtxn, &UnitKey)?;
-            for (outpoint, output) in bundle.spend_utxos.into_iter().rev() {
-                if !self.stxos.delete(rwtxn, &outpoint)? {
-                    return Err(Error::NoStxo { outpoint });
+            for (outpoint, output) in bundle.spend_utxos().iter().rev() {
+                if !self.stxos.delete(rwtxn, outpoint)? {
+                    return Err(Error::NoStxo {
+                        outpoint: *outpoint,
+                    });
                 };
-                self.utxos.put(rwtxn, &outpoint, &output)?;
+                self.utxos.put(rwtxn, outpoint, output)?;
             }
         }
-        // Handle deposits.
-        if let Some(deposit_block_hash) = two_way_peg_data.deposit_block_hash {
+        // Handle deposits
+        if let Some(latest_deposit_block_hash) =
+            two_way_peg_data.latest_deposit_block_hash()
+        {
             let (
                 last_deposit_block_seq_idx,
                 (last_deposit_block_hash, last_deposit_block_height),
@@ -1137,7 +1462,7 @@ impl State {
                 .deposit_blocks
                 .last(rwtxn)?
                 .ok_or(Error::NoDepositBlock)?;
-            assert_eq!(deposit_block_hash, last_deposit_block_hash);
+            assert_eq!(latest_deposit_block_hash, last_deposit_block_hash);
             assert_eq!(block_height - 1, last_deposit_block_height);
             if !self
                 .deposit_blocks
@@ -1146,12 +1471,14 @@ impl State {
                 return Err(Error::NoDepositBlock);
             };
         }
-        for deposit in two_way_peg_data.deposits.iter().rev() {
-            if let Ok(_address) = deposit.output.address.parse::<Address>() {
-                let outpoint = OutPoint::Deposit(deposit.outpoint);
-                if !self.utxos.delete(rwtxn, &outpoint)? {
-                    return Err(Error::NoUtxo { outpoint });
-                }
+        for deposit in two_way_peg_data
+            .deposits()
+            .flat_map(|(_, deposits)| deposits)
+            .rev()
+        {
+            let outpoint = OutPoint::Deposit(deposit.outpoint);
+            if !self.utxos.delete(rwtxn, &outpoint)? {
+                return Err(Error::NoUtxo { outpoint });
             }
         }
         Ok(())
@@ -1377,7 +1704,7 @@ impl State {
                 vout: vout as u32,
             };
             let filled_content = match output.content.clone() {
-                OutputContent::Value(value) => {
+                OutputContent::Bitcoin(value) => {
                     FilledOutputContent::Bitcoin(value)
                 }
                 OutputContent::Withdrawal {
@@ -1468,7 +1795,7 @@ impl State {
         let merkle_root = Body::compute_merkle_root(
             body.coinbase.as_slice(),
             filled_txs.as_slice(),
-        )
+        )?
         .ok_or(Error::MerkleRoot)?;
         if merkle_root != header.merkle_root {
             let err = Error::InvalidBody {
@@ -1583,7 +1910,7 @@ impl State {
         let merkle_root = Body::compute_merkle_root(
             body.coinbase.as_slice(),
             filled_txs.as_slice(),
-        )
+        )?
         .ok_or(Error::MerkleRoot)?;
         if merkle_root != header.merkle_root {
             let err = Error::InvalidBody {
@@ -1601,32 +1928,39 @@ impl State {
     pub fn sidechain_wealth(
         &self,
         rotxn: &RoTxn,
-    ) -> Result<BitcoinAmount, Error> {
-        let mut total_deposit_utxo_value: u64 = 0;
+    ) -> Result<bitcoin::Amount, Error> {
+        let mut total_deposit_utxo_value = bitcoin::Amount::ZERO;
         self.utxos.iter(rotxn)?.try_for_each(|utxo| {
             let (outpoint, output) = utxo?;
             if let OutPoint::Deposit(_) = outpoint {
-                total_deposit_utxo_value += output.get_value();
+                total_deposit_utxo_value = total_deposit_utxo_value
+                    .checked_add(output.get_value())
+                    .ok_or(AmountOverflowError)?;
             }
             Ok::<_, Error>(())
         })?;
-        let mut total_deposit_stxo_value: u64 = 0;
-        let mut total_withdrawal_stxo_value: u64 = 0;
+        let mut total_deposit_stxo_value = bitcoin::Amount::ZERO;
+        let mut total_withdrawal_stxo_value = bitcoin::Amount::ZERO;
         self.stxos.iter(rotxn)?.try_for_each(|stxo| {
             let (outpoint, spent_output) = stxo?;
             if let OutPoint::Deposit(_) = outpoint {
-                total_deposit_stxo_value += spent_output.output.get_value();
+                total_deposit_stxo_value = total_deposit_stxo_value
+                    .checked_add(spent_output.output.get_value())
+                    .ok_or(AmountOverflowError)?;
             }
             if let InPoint::Withdrawal { .. } = spent_output.inpoint {
-                total_withdrawal_stxo_value += spent_output.output.get_value();
+                total_withdrawal_stxo_value = total_deposit_stxo_value
+                    .checked_add(spent_output.output.get_value())
+                    .ok_or(AmountOverflowError)?;
             }
             Ok::<_, Error>(())
         })?;
 
-        let total_wealth_sats: u64 = (total_deposit_utxo_value
-            + total_deposit_stxo_value)
-            - total_withdrawal_stxo_value;
-        let total_wealth = BitcoinAmount::from_sat(total_wealth_sats);
+        let total_wealth: bitcoin::Amount = total_deposit_utxo_value
+            .checked_add(total_deposit_stxo_value)
+            .ok_or(AmountOverflowError)?
+            .checked_sub(total_withdrawal_stxo_value)
+            .ok_or(AmountOverflowError)?;
         Ok(total_wealth)
     }
 }

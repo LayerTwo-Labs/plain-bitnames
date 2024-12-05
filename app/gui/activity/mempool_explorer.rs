@@ -1,10 +1,7 @@
 use eframe::egui;
 use human_size::{Byte, Kibibyte, Mebibyte, SpecificSize};
 
-use plain_bitnames::{
-    bip300301::bitcoin,
-    types::{GetValue, OutPoint},
-};
+use plain_bitnames::types::{GetValue, OutPoint};
 
 use crate::app::App;
 
@@ -14,9 +11,13 @@ pub struct MempoolExplorer {
 }
 
 impl MempoolExplorer {
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
-        let transactions = app.node.get_all_transactions().unwrap_or_default();
-        let utxos = app.wallet.get_utxos().unwrap_or_default();
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
+        let transactions = app
+            .and_then(|app| app.node.get_all_transactions().ok())
+            .unwrap_or_default();
+        let utxos = app
+            .and_then(|app| app.wallet.get_utxos().ok())
+            .unwrap_or_default();
         egui::SidePanel::left("transaction_picker")
             .resizable(false)
             .show_inside(ui, |ui| {
@@ -32,21 +33,21 @@ impl MempoolExplorer {
                         for (index, transaction) in
                             transactions.iter().enumerate()
                         {
-                            let value_out: u64 = transaction
+                            let value_out: bitcoin::Amount = transaction
                                 .transaction
                                 .outputs
                                 .iter()
                                 .map(GetValue::get_value)
                                 .sum();
-                            let value_in: u64 = transaction
+                            let value_in: bitcoin::Amount = transaction
                                 .transaction
                                 .inputs
                                 .iter()
                                 .map(|input| {
                                     utxos.get(input).map(GetValue::get_value)
                                 })
-                                .sum::<Option<u64>>()
-                                .unwrap_or(0);
+                                .sum::<Option<bitcoin::Amount>>()
+                                .unwrap_or(bitcoin::Amount::ZERO);
                             let txid =
                                 &format!("{}", transaction.transaction.txid())
                                     [0..8];
@@ -62,10 +63,6 @@ impl MempoolExplorer {
                                         egui::Align::Max,
                                     ),
                                     |ui| {
-                                        let value_out =
-                                            bitcoin::Amount::from_sat(
-                                                value_out,
-                                            );
                                         ui.monospace(format!("{value_out}"));
                                     },
                                 );
@@ -74,8 +71,6 @@ impl MempoolExplorer {
                                         egui::Align::Max,
                                     ),
                                     |ui| {
-                                        let fee =
-                                            bitcoin::Amount::from_sat(fee);
                                         ui.monospace(format!("{fee}"));
                                     },
                                 );
@@ -121,8 +116,7 @@ impl MempoolExplorer {
                             };
                             let output = &utxos[input];
                             let hash = &hash[0..8];
-                            let value =
-                                bitcoin::Amount::from_sat(output.get_value());
+                            let value = output.get_value();
                             ui.monospace(kind.to_string());
                             ui.monospace(format!("{hash}:{vout}",));
                             ui.monospace(format!("{value}",));
@@ -144,8 +138,7 @@ impl MempoolExplorer {
                             transaction.transaction.outputs.iter().enumerate()
                         {
                             let address = &format!("{}", output.address)[0..8];
-                            let value =
-                                bitcoin::Amount::from_sat(output.get_value());
+                            let value = output.get_value();
                             ui.monospace(format!("{vout}"));
                             ui.monospace(address.to_string());
                             ui.monospace(format!("{value}"));

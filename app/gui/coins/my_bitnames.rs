@@ -1,15 +1,21 @@
 use eframe::egui;
 use itertools::{Either, Itertools};
 
-use plain_bitnames::types::FilledOutput;
+use plain_bitnames::types::{BitName, FilledOutput, Hash, Txid};
 
 use crate::{app::App, gui::util::UiExt};
+
+type KnownNameReservation = (Txid, Hash, String);
+type UnknownNameReservation = (Txid, Hash);
 
 #[derive(Debug, Default)]
 pub struct MyBitnames;
 
 impl MyBitnames {
-    pub fn show_reservations(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    /// Returns BitName reservations with known and unknown names
+    fn get_bitname_reservations(
+        app: &App,
+    ) -> (Vec<KnownNameReservation>, Vec<UnknownNameReservation>) {
         let utxos_read = app.utxos.read();
         // all bitname reservations
         let bitname_reservations = utxos_read
@@ -41,6 +47,17 @@ impl MyBitnames {
         );
         // sort name-unknown bitname reservations by txid
         unknown_name_bitname_reservations.sort_by_key(|(txid, _)| *txid);
+        (
+            known_name_bitname_reservations,
+            unknown_name_bitname_reservations,
+        )
+    }
+
+    pub fn show_reservations(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
+        let (
+            known_name_bitname_reservations,
+            unknown_name_bitname_reservations,
+        ) = app.map(Self::get_bitname_reservations).unwrap_or_default();
         let _response = egui::SidePanel::left("My BitName Reservations")
             .exact_width(350.)
             .resizable(false)
@@ -92,7 +109,8 @@ impl MyBitnames {
             });
     }
 
-    pub fn show_bitnames(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    /// Returns BitNames with known and unknown names
+    fn get_bitnames(app: &App) -> (Vec<(BitName, String)>, Vec<BitName>) {
         let utxos_read = app.utxos.read();
         // all owned bitnames
         let bitnames = utxos_read.values().filter_map(FilledOutput::bitname);
@@ -116,6 +134,12 @@ impl MyBitnames {
         });
         // sort name-unknown bitnames by bitname value
         unknown_name_bitnames.sort();
+        (known_name_bitnames, unknown_name_bitnames)
+    }
+
+    pub fn show_bitnames(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
+        let (known_name_bitnames, unknown_name_bitnames) =
+            app.map(Self::get_bitnames).unwrap_or_default();
         egui::SidePanel::left("My BitNames")
             .exact_width(350.)
             .resizable(false)
@@ -152,7 +176,7 @@ impl MyBitnames {
             });
     }
 
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         let _reservations_response = self.show_reservations(app, ui);
         let _bitnames_response = self.show_bitnames(app, ui);
     }

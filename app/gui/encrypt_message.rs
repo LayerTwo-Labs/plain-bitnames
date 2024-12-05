@@ -34,8 +34,11 @@ impl EncryptMessage {
         });
     }
 
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         ui.heading("Encrypt Message");
+        let Some(app) = app else {
+            return;
+        };
         let receiver_input_response = ui
             .horizontal(|ui| {
                 ui.monospace(

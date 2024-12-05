@@ -9,7 +9,6 @@ use hex::FromHex;
 
 use plain_bitnames::{
     authorization::VerifyingKey,
-    bip300301::bitcoin,
     types::{BitNameData, EncryptionPubKey, Hash, Transaction, Txid},
 };
 
@@ -33,8 +32,8 @@ pub struct TrySetBitNameData {
     pub encryption_pubkey: TrySetOption<EncryptionPubKey>,
     /// optional pubkey used for signing messages
     pub signing_pubkey: TrySetOption<VerifyingKey>,
-    /// optional pubkey used for signing messages
-    pub paymail_fee: TrySetOption<u64>,
+    /// paymail fee in sats
+    pub paymail_fee_sats: TrySetOption<u64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -52,8 +51,8 @@ pub enum TxType {
 
 #[derive(Debug, Default)]
 pub struct TxCreator {
-    pub value_in: u64,
-    pub value_out: u64,
+    pub value_in: bitcoin::Amount,
+    pub value_out: bitcoin::Amount,
     pub tx_type: TxType,
     // if the base tx has changed, need to recompute final tx
     base_txid: Txid,
@@ -89,8 +88,8 @@ impl TryFrom<TrySetBitNameData> for BitNameData {
             .signing_pubkey
             .0
             .map_err(|err| format!("Cannot parse signing pubkey: \"{err}\""))?;
-        let paymail_fee = try_set
-            .paymail_fee
+        let paymail_fee_sats = try_set
+            .paymail_fee_sats
             .0
             .map_err(|err| format!("Cannot parse paymail fee: \"{err}\""))?;
         Ok(BitNameData {
@@ -99,7 +98,7 @@ impl TryFrom<TrySetBitNameData> for BitNameData {
             ipv6_addr,
             encryption_pubkey,
             signing_pubkey,
-            paymail_fee,
+            paymail_fee_sats,
         })
     }
 }
@@ -118,7 +117,7 @@ impl TxCreator {
     // set tx data for the current transaction
     fn set_tx_data(
         &self,
-        app: &mut App,
+        app: &App,
         mut tx: Transaction,
     ) -> anyhow::Result<Transaction> {
         match &self.tx_type {
@@ -284,7 +283,7 @@ impl TxCreator {
                     ui,
                     "bitname_data_paymail_fee",
                     100,
-                    &mut bitname_data.paymail_fee,
+                    &mut bitname_data.paymail_fee_sats,
                     |s| u64::from_str(&s),
                     u64::to_string,
                 )
@@ -299,10 +298,11 @@ impl TxCreator {
 
     pub fn show(
         &mut self,
-        app: &mut App,
+        app: Option<&App>,
         ui: &mut egui::Ui,
         base_tx: &mut Transaction,
     ) -> anyhow::Result<()> {
+        let Some(app) = app else { return Ok(()) };
         let tx_type_dropdown = ui.horizontal(|ui| {
             let combobox = egui::ComboBox::from_id_source("tx_type")
                 .selected_text(format!("{}", self.tx_type))
@@ -380,8 +380,7 @@ impl TxCreator {
         ui.monospace(format!("txid: {txid}"));
         if self.value_in >= self.value_out {
             let fee = self.value_in - self.value_out;
-            let fee = bitcoin::Amount::from_sat(fee);
-            ui.monospace(format!("fee:  {fee}"));
+            ui.monospace(format!("fee(sats):  {}", fee.to_sat()));
             if ui.button("sign and send").clicked() {
                 let () = app.sign_and_send(final_tx.clone())?;
                 *base_tx = Transaction::default();

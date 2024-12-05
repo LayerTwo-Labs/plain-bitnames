@@ -25,7 +25,7 @@ pub struct Paymail {
 impl Paymail {
     pub fn show(
         &mut self,
-        app: &mut App,
+        app: Option<&App>,
         ui: &mut egui::Ui,
     ) -> anyhow::Result<()> {
         ui.heading("My Paymail");

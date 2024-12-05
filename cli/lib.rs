@@ -1,12 +1,8 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-use bip300301::bitcoin;
 use clap::{Parser, Subcommand};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
-use plain_bitnames::{
-    node::THIS_SIDECHAIN,
-    types::{Address, BlockHash},
-};
+use plain_bitnames::types::{Address, BlockHash, THIS_SIDECHAIN};
 use plain_bitnames_app_rpc_api::RpcClient;
 
 #[derive(Clone, Debug, Subcommand)]
@@ -18,6 +14,14 @@ pub enum Command {
     Bitnames,
     /// Connect to a peer
     ConnectPeer { addr: SocketAddr },
+    /// Deposit to address
+    CreateDeposit {
+        address: Address,
+        #[arg(long)]
+        value_sats: u64,
+        #[arg(long)]
+        fee_sats: u64,
+    },
     /// Format a deposit address
     FormatDepositAddress { address: Address },
     /// Generate a mnemonic seed phrase
@@ -97,7 +101,7 @@ impl Cli {
         let res = match self.command {
             Command::Balance => {
                 let balance = rpc_client.balance().await?;
-                format!("{balance}")
+                serde_json::to_string_pretty(&balance)?
             }
             Command::Bitnames => {
                 let bitnames = rpc_client.bitnames().await?;
@@ -106,6 +110,16 @@ impl Cli {
             Command::ConnectPeer { addr } => {
                 let () = rpc_client.connect_peer(addr).await?;
                 String::default()
+            }
+            Command::CreateDeposit {
+                address,
+                value_sats,
+                fee_sats,
+            } => {
+                let txid = rpc_client
+                    .create_deposit(address, value_sats, fee_sats)
+                    .await?;
+                format!("{txid}")
             }
             Command::FormatDepositAddress { address } => {
                 rpc_client.format_deposit_address(address).await?
@@ -161,7 +175,8 @@ impl Cli {
                 String::default()
             }
             Command::SidechainWealth => {
-                let sidechain_wealth = rpc_client.sidechain_wealth().await?;
+                let sidechain_wealth =
+                    rpc_client.sidechain_wealth_sats().await?;
                 format!("{sidechain_wealth}")
             }
             Command::Stop => {

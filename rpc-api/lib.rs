@@ -1,199 +1,25 @@
 //! RPC API
 
-use std::{collections::HashMap, marker::PhantomData, net::SocketAddr};
+use std::{collections::HashMap, net::SocketAddr};
 
-use bip300301::bitcoin;
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use l2l_openapi::open_api;
-use plain_bitnames::types::{
-    hashes::BitName, open_api_schemas, Address, Authorization,
-    BatchIcannRegistrationData, BitNameData, BitNameDataUpdates, Block,
-    BlockHash, Body, FilledOutput, FilledOutputContent, Header, MerkleRoot,
-    OutPoint, Output, OutputContent, PointedOutput, Transaction,
-    TransactionData, TxIn, Txid,
+use plain_bitnames::{
+    types::{
+        hashes::BitName, schema as bitnames_schema, Address, Authorization,
+        BatchIcannRegistrationData, BitNameData, BitNameDataUpdates, Block,
+        BlockHash, Body, FilledOutput, FilledOutputContent, Header, MerkleRoot,
+        OutPoint, Output, OutputContent, PointedOutput, Transaction,
+        TransactionData, TxIn, Txid,
+    },
+    wallet::Balance,
 };
 use serde::{Deserialize, Serialize};
-use utoipa::{
-    openapi::{RefOr, Schema, SchemaType},
-    PartialSchema, ToSchema,
-};
+use utoipa::ToSchema;
 
-/// Utoipa does not support tuples at all, so these are represented as an
-/// arbitrary json value
-#[derive(Default)]
-struct ArrayTupleSchema<A, B>(PhantomData<A>, PhantomData<B>);
-
-impl<A, B> PartialSchema for ArrayTupleSchema<A, B> {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(SchemaType::Value);
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-struct BitcoinAddrSchema;
-
-impl PartialSchema for BitcoinAddrSchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(SchemaType::String);
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for BitcoinAddrSchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("bitcoin.Address", <Self as PartialSchema>::schema())
-    }
-}
-
-struct BitcoinAmountSchema;
-
-impl PartialSchema for BitcoinAmountSchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(SchemaType::String);
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for BitcoinAmountSchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("bitcoin.Amount", <Self as PartialSchema>::schema())
-    }
-}
-
-struct BitcoinBlockHashSchema;
-
-impl PartialSchema for BitcoinBlockHashSchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(SchemaType::String);
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for BitcoinBlockHashSchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("bitcoin.BlockHash", <Self as PartialSchema>::schema())
-    }
-}
-
-struct BitcoinOutPointSchema;
-
-impl PartialSchema for BitcoinOutPointSchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::new();
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for BitcoinOutPointSchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("bitcoin.OutPoint", <Self as PartialSchema>::schema())
-    }
-}
-
-struct EncryptionPubKeySchema;
-
-impl PartialSchema for EncryptionPubKeySchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(SchemaType::String);
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for EncryptionPubKeySchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("EncryptionPubKey", <Self as PartialSchema>::schema())
-    }
-}
-
-struct HashSchema;
-
-impl PartialSchema for HashSchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::new();
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for HashSchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("Hash", <Self as PartialSchema>::schema())
-    }
-}
-
-struct Ipv4AddrSchema;
-
-impl PartialSchema for Ipv4AddrSchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(SchemaType::String);
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for Ipv4AddrSchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("Ipv4Addr", <Self as PartialSchema>::schema())
-    }
-}
-
-struct Ipv6AddrSchema;
-
-impl PartialSchema for Ipv6AddrSchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(SchemaType::String);
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for Ipv6AddrSchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("Ipv6Addr", <Self as PartialSchema>::schema())
-    }
-}
-
-struct OpenApiSchema;
-
-impl PartialSchema for OpenApiSchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::new();
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for OpenApiSchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("OpenApiSchema", <Self as PartialSchema>::schema())
-    }
-}
-
-struct SocketAddrSchema;
-
-impl PartialSchema for SocketAddrSchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(SchemaType::String);
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for SocketAddrSchema {
-    fn schema() -> (&'static str, RefOr<utoipa::openapi::schema::Schema>) {
-        ("SocketAddr", <Self as PartialSchema>::schema())
-    }
-}
-
-struct VerifyingKeySchema;
-
-impl PartialSchema for VerifyingKeySchema {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(SchemaType::String);
-        RefOr::T(Schema::Object(obj))
-    }
-}
-
-impl ToSchema<'static> for VerifyingKeySchema {
-    fn schema() -> (&'static str, RefOr<Schema>) {
-        ("VerifyingKey", <Self as PartialSchema>::schema())
-    }
-}
+mod schema;
+#[cfg(test)]
+mod test;
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct TxInfo {
@@ -203,39 +29,42 @@ pub struct TxInfo {
 }
 
 #[open_api(ref_schemas[
-    open_api_schemas::PointedFilledOutput, open_api_schemas::PointedOutput,
-    open_api_schemas::UpdateHash,
-    open_api_schemas::UpdateIpv4Addr, open_api_schemas::UpdateIpv6Addr,
-    open_api_schemas::UpdateEncryptionPubKey,
-    open_api_schemas::UpdateVerifyingKey, open_api_schemas::UpdateU64,
-    Address, Authorization, BatchIcannRegistrationData, BitcoinAddrSchema,
-    BitcoinBlockHashSchema, BitcoinOutPointSchema, BitName, BitNameData,
-    BitNameDataUpdates,
-    BlockHash, Body, EncryptionPubKeySchema,
-    FilledOutputContent, HashSchema,
-    Header, Ipv4AddrSchema, Ipv6AddrSchema, MerkleRoot, OutPoint,
-    Output, OutputContent, Transaction, TransactionData, Txid, TxIn,
-    VerifyingKeySchema
+    bitnames_schema::BitcoinAddr, bitnames_schema::BitcoinBlockHash,
+    bitnames_schema::BitcoinOutPoint, Address, Authorization,
+    BatchIcannRegistrationData, BitName, BitNameData, BitNameDataUpdates,
+    BlockHash, Body, FilledOutput, FilledOutputContent, Header, MerkleRoot,
+    OutPoint, Output, OutputContent, Transaction, TransactionData, Txid, TxIn,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
     /// Get balance in sats
+    #[open_api_method(output_schema(ToSchema))]
     #[method(name = "balance")]
-    async fn balance(&self) -> RpcResult<u64>;
+    async fn balance(&self) -> RpcResult<Balance>;
 
     /// List all BitNames
     #[open_api_method(output_schema(
-        PartialSchema = "ArrayTupleSchema<BitName, BitNameData>"
+        PartialSchema = "schema::ArrayTuple<BitName, BitNameData>"
     ))]
     #[method(name = "bitnames")]
     async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>>;
+
+    /// Deposit to address
+    #[open_api_method(output_schema(PartialSchema = "schema::BitcoinTxid"))]
+    #[method(name = "create_deposit")]
+    async fn create_deposit(
+        &self,
+        address: Address,
+        value_sats: u64,
+        fee_sats: u64,
+    ) -> RpcResult<bitcoin::Txid>;
 
     /// Connect to a peer
     #[open_api_method(output_schema(ToSchema))]
     #[method(name = "connect_peer")]
     async fn connect_peer(
         &self,
-        #[open_api_method_arg(schema(ToSchema = "SocketAddrSchema"))]
+        #[open_api_method_arg(schema(ToSchema = "schema::SocketAddr"))]
         addr: SocketAddr,
     ) -> RpcResult<()>;
 
@@ -293,7 +122,7 @@ pub trait Rpc {
 
     /// List all UTXOs
     #[open_api_method(output_schema(
-        PartialSchema = "Vec<open_api_schemas::PointedFilledOutput>"
+        ToSchema = "Vec<PointedOutput<FilledOutputContent>>"
     ))]
     #[method(name = "list_utxos")]
     async fn list_utxos(&self) -> RpcResult<Vec<PointedOutput<FilledOutput>>>;
@@ -308,7 +137,7 @@ pub trait Rpc {
     async fn my_utxos(&self) -> RpcResult<Vec<PointedOutput<FilledOutput>>>;
 
     /// Get OpenRPC schema
-    #[open_api_method(output_schema(PartialSchema = "OpenApiSchema"))]
+    #[open_api_method(output_schema(ToSchema = "schema::OpenApi"))]
     #[method(name = "openapi_schema")]
     async fn openapi_schema(&self) -> RpcResult<utoipa::openapi::OpenApi>;
 
@@ -321,10 +150,9 @@ pub trait Rpc {
     #[method(name = "set_seed_from_mnemonic")]
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()>;
 
-    /// Get total sidechain wealth
-    #[open_api_method(output_schema(ToSchema = "BitcoinAmountSchema"))]
+    /// Get total sidechain wealth in sats
     #[method(name = "sidechain_wealth")]
-    async fn sidechain_wealth(&self) -> RpcResult<bitcoin::Amount>;
+    async fn sidechain_wealth_sats(&self) -> RpcResult<u64>;
 
     /// Stop the node
     #[method(name = "stop")]
@@ -344,7 +172,9 @@ pub trait Rpc {
     #[method(name = "withdraw")]
     async fn withdraw(
         &self,
-        #[open_api_method_arg(schema(PartialSchema = "BitcoinAddrSchema"))]
+        #[open_api_method_arg(schema(
+            PartialSchema = "bitnames_schema::BitcoinAddr"
+        ))]
         mainchain_address: bitcoin::Address<
             bitcoin::address::NetworkUnchecked,
         >,

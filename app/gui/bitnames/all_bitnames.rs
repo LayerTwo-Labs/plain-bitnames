@@ -24,7 +24,7 @@ fn show_bitname_data(
         ipv6_addr,
         encryption_pubkey,
         signing_pubkey,
-        paymail_fee,
+        paymail_fee_sats,
     } = bitname_data;
     let commitment = commitment.map_or("Not set".to_owned(), hex::encode);
     let ipv4_addr = ipv4_addr
@@ -35,7 +35,7 @@ fn show_bitname_data(
         .map_or("Not set".to_owned(), |epk| hex::encode(epk.0.as_bytes()));
     let signing_pubkey = signing_pubkey
         .map_or("Not set".to_owned(), |pk| hex::encode(pk.as_bytes()));
-    let paymail_fee = paymail_fee
+    let paymail_fee_sats = paymail_fee_sats
         .map_or("Not set".to_owned(), |paymail_fee| paymail_fee.to_string());
     ui.horizontal(|ui| {
         ui.monospace_selectable_singleline(
@@ -75,7 +75,7 @@ fn show_bitname_data(
         | ui.horizontal(|ui| {
             ui.monospace_selectable_singleline(
                 false,
-                format!("Paymail fee: {paymail_fee}"),
+                format!("Paymail fee: {paymail_fee_sats}"),
             )
         })
         .join()
@@ -97,8 +97,11 @@ fn show_bitname_with_data(
 }
 
 impl AllBitNames {
-    pub fn show(&mut self, app: &mut App, ui: &mut egui::Ui) {
+    pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            let Some(app) = app else {
+                return;
+            };
             match app.node.bitnames() {
                 Err(node_err) => {
                     ui.monospace_selectable_multiline(node_err.to_string());

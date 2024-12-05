@@ -2,10 +2,7 @@ use std::collections::HashSet;
 
 use eframe::egui;
 
-use plain_bitnames::{
-    bip300301::bitcoin,
-    types::{FilledOutput, GetValue, OutPoint, Transaction},
-};
+use plain_bitnames::types::{FilledOutput, GetValue, OutPoint, Transaction};
 
 use crate::app::App;
 
@@ -15,22 +12,29 @@ pub struct UtxoSelector;
 impl UtxoSelector {
     pub fn show(
         &mut self,
-        app: &mut App,
+        app: Option<&App>,
         ui: &mut egui::Ui,
         tx: &mut Transaction,
     ) {
         ui.heading("Spend UTXO");
         let selected: HashSet<_> = tx.inputs.iter().cloned().collect();
-        let utxos = app.utxos.read();
-        let total: u64 = utxos
-            .iter()
-            .filter(|(outpoint, _)| !selected.contains(outpoint))
-            .map(|(_, output)| output.get_value())
-            .sum();
-        let mut utxos: Vec<_> = utxos.iter().collect();
-        utxos.sort_by_key(|(outpoint, _)| format!("{outpoint}"));
+        let (total, utxos): (bitcoin::Amount, Vec<_>) = app
+            .map(|app| {
+                let utxos_read = app.utxos.read();
+                let total: bitcoin::Amount = utxos_read
+                    .iter()
+                    .filter(|(outpoint, _)| !selected.contains(outpoint))
+                    .map(|(_, output)| output.get_value())
+                    .sum();
+                let mut utxos: Vec<_> =
+                    (*utxos_read).clone().into_iter().collect();
+                drop(utxos_read);
+                utxos.sort_by_key(|(outpoint, _)| format!("{outpoint}"));
+                (total, utxos)
+            })
+            .unwrap_or_default();
         ui.separator();
-        ui.monospace(format!("Total: {}", bitcoin::Amount::from_sat(total)));
+        ui.monospace(format!("Total: {}", total));
         ui.separator();
         egui::Grid::new("utxos").striped(true).show(ui, |ui| {
             ui.monospace("kind");
@@ -38,20 +42,20 @@ impl UtxoSelector {
             ui.monospace("value");
             ui.end_row();
             for (outpoint, output) in utxos {
-                if selected.contains(outpoint) {
+                if selected.contains(&outpoint) {
                     continue;
                 }
                 //ui.horizontal(|ui| {});
-                show_utxo(ui, outpoint, output);
+                show_utxo(ui, &outpoint, &output);
 
                 if ui
                     .add_enabled(
-                        !selected.contains(outpoint),
+                        !selected.contains(&outpoint),
                         egui::Button::new("spend"),
                     )
                     .clicked()
                 {
-                    tx.inputs.push(*outpoint);
+                    tx.inputs.push(outpoint);
                 }
                 ui.end_row();
             }
@@ -76,7 +80,7 @@ pub fn show_utxo(
         }
     };
     let hash = &hash[0..8];
-    let value = bitcoin::Amount::from_sat(output.get_value());
+    let value = output.get_value();
     ui.monospace(kind.to_string());
     ui.monospace(format!("{hash}:{vout}",));
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Max), |ui| {

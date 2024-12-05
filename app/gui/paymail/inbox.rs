@@ -39,11 +39,14 @@ impl Inbox {
 
     fn show_inbox(
         &mut self,
-        app: &mut App,
+        app: Option<&App>,
         settings: &Settings,
         ui: &mut egui::Ui,
     ) -> Result<(), anyhow::Error> {
-        let paymail = app.get_paymail(Some(&settings.bitname_inboxes))?;
+        let paymail = app
+            .map(|app| app.get_paymail(Some(&settings.bitname_inboxes)))
+            .transpose()?
+            .unwrap_or_default();
         let mut paymail: Vec<_> = paymail.iter().collect();
         // FIXME: sort by block/index
         paymail.sort_by_key(|(outpoint, _)| format!("{outpoint}"));
@@ -82,7 +85,7 @@ impl Inbox {
 
     pub fn show(
         &mut self,
-        app: &mut App,
+        app: Option<&App>,
         settings: &Settings,
         ui: &mut egui::Ui,
     ) {
