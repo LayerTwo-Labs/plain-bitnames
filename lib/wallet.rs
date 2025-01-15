@@ -20,9 +20,9 @@ use crate::{
     authorization::{get_address, Authorization},
     types::{
         hashes::BitName, Address, AmountOverflowError, AmountUnderflowError,
-        AuthorizedTransaction, BitNameData, FilledOutput, GetValue, Hash,
-        InPoint, OutPoint, Output, OutputContent, SpentOutput, Transaction,
-        TxData,
+        AuthorizedTransaction, FilledOutput, GetValue, Hash, InPoint,
+        MutableBitNameData, OutPoint, Output, OutputContent, SpentOutput,
+        Transaction, TxData,
     },
     util::{EnvExt, Watchable, WatchableDb},
 };
@@ -360,7 +360,7 @@ impl Wallet {
         &self,
         tx: &mut Transaction,
         plain_name: &str,
-        bitname_data: Cow<BitNameData>,
+        bitname_data: Cow<MutableBitNameData>,
     ) -> Result<(), Error> {
         assert!(tx.is_regular(), "this function only accepts a regular tx");
         // address for the registration output

@@ -13,6 +13,8 @@ use utoipa::ToSchema;
 pub use crate::authorization::Authorization;
 
 mod address;
+pub mod bitname_data;
+pub mod bitname_seq_id;
 pub mod constants;
 pub mod hashes;
 pub mod proto;
@@ -20,13 +22,17 @@ pub mod schema;
 mod transaction;
 
 pub use address::Address;
+pub use bitname_data::{
+    BitNameData, BitNameDataUpdates, MutableBitNameData, Update,
+};
+pub use bitname_seq_id::BitNameSeqId;
 pub use hashes::{BitName, BlockHash, Hash, M6id, MerkleRoot, Txid};
 pub use transaction::{
-    Authorized, AuthorizedTransaction, BatchIcannRegistrationData, BitNameData,
-    BitNameDataUpdates, Content as OutputContent,
-    FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
-    InPoint, OutPoint, Output, Pointed as PointedOutput, SpentOutput,
-    Transaction, TransactionData, TxData, Update,
+    Authorized, AuthorizedTransaction, BatchIcannRegistrationData,
+    Content as OutputContent, FilledContent as FilledOutputContent,
+    FilledOutput, FilledTransaction, InPoint, OutPoint, Output,
+    Pointed as PointedOutput, SpentOutput, Transaction, TransactionData,
+    TxData,
 };
 
 pub const THIS_SIDECHAIN: u8 = 2;

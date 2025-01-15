@@ -1,449 +1,32 @@
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    net::{Ipv4Addr, Ipv6Addr},
-};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use futures::Stream;
 use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
-use nonempty::NonEmpty;
-use serde::{Deserialize, Serialize};
 
 use crate::{
-    authorization::{Authorization, VerifyingKey},
+    authorization::Authorization,
     types::{
         self, constants,
         hashes::{self, BitName},
         proto::mainchain::TwoWayPegData,
-        Address, AggregatedWithdrawal, AmountOverflowError,
-        AmountUnderflowError, Authorized, AuthorizedTransaction,
-        BatchIcannRegistrationData, BitNameDataUpdates, BlockHash, Body,
-        EncryptionPubKey, FilledOutput, FilledOutputContent, FilledTransaction,
-        GetAddress as _, GetValue as _, Hash, Header, InPoint, M6id,
-        MerkleRoot, OutPoint, OutputContent, SpentOutput, Transaction, TxData,
-        Txid, Update, Verify as _, WithdrawalBundle, WithdrawalBundleError,
+        Address, AggregatedWithdrawal, AmountOverflowError, Authorized,
+        AuthorizedTransaction, BatchIcannRegistrationData, BitNameDataUpdates,
+        BitNameSeqId, BlockHash, Body, FilledOutput, FilledOutputContent,
+        FilledTransaction, GetAddress as _, GetValue as _, Hash, Header,
+        InPoint, M6id, MerkleRoot, OutPoint, OutputContent, SpentOutput,
+        Transaction, TxData, Txid, Verify as _, WithdrawalBundle,
         WithdrawalBundleStatus,
     },
     util::{EnvExt, UnitKey, Watchable, WatchableDb},
 };
 
-/// Data of type `T` paired with block height at which it was last updated
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct HeightStamped<T> {
-    value: T,
-    height: u32,
-}
+mod bitname_data;
+pub mod error;
+mod rollback;
 
-/// Data of type `T` paired with
-/// * the txid at which it was last updated
-/// * block height at which it was last updated
-#[derive(Clone, Debug, Deserialize, Serialize)]
-struct TxidStamped<T> {
-    data: T,
-    txid: Txid,
-    height: u32,
-}
-
-/// Wrapper struct for fields that support rollbacks
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[repr(transparent)]
-#[serde(transparent)]
-struct RollBack<T>(NonEmpty<T>);
-
-impl<T> RollBack<HeightStamped<T>> {
-    fn new(value: T, height: u32) -> Self {
-        let height_stamped = HeightStamped { value, height };
-        Self(NonEmpty::new(height_stamped))
-    }
-
-    /// Pop the most recent value
-    fn pop(mut self) -> (Option<Self>, HeightStamped<T>) {
-        if let Some(value) = self.0.pop() {
-            (Some(self), value)
-        } else {
-            (None, self.0.head)
-        }
-    }
-
-    /// Attempt to push a value as the new most recent.
-    /// Returns the value if the operation fails.
-    fn push(&mut self, value: T, height: u32) -> Result<(), T> {
-        if self.0.last().height >= height {
-            return Err(value);
-        }
-        let height_stamped = HeightStamped { value, height };
-        self.0.push(height_stamped);
-        Ok(())
-    }
-
-    /// Returns the earliest value
-    fn earliest(&self) -> &HeightStamped<T> {
-        self.0.first()
-    }
-
-    /// Returns the most recent value
-    fn latest(&self) -> &HeightStamped<T> {
-        self.0.last()
-    }
-}
-
-impl<T> RollBack<TxidStamped<T>> {
-    fn new(value: T, txid: Txid, height: u32) -> Self {
-        let txid_stamped = TxidStamped {
-            data: value,
-            txid,
-            height,
-        };
-        Self(NonEmpty::new(txid_stamped))
-    }
-
-    /// push a value as the new most recent
-    fn push(&mut self, value: T, txid: Txid, height: u32) {
-        let txid_stamped = TxidStamped {
-            data: value,
-            txid,
-            height,
-        };
-        self.0.push(txid_stamped)
-    }
-
-    /// pop the most recent value
-    fn pop(&mut self) -> Option<TxidStamped<T>> {
-        self.0.pop()
-    }
-
-    /** Returns the value as it was, at the specified block height.
-     *  If a value was updated several times in the block, returns the
-     *  last value seen in the block. */
-    fn at_block_height(&self, height: u32) -> Option<&TxidStamped<T>> {
-        self.0
-            .iter()
-            .rev()
-            .find(|txid_stamped| txid_stamped.height <= height)
-    }
-
-    /// returns the most recent value, along with it's txid
-    fn latest(&self) -> &TxidStamped<T> {
-        self.0.last()
-    }
-}
-
-/// Representation of BitName data that supports rollbacks.
-/// The most recent datum is the element at the back of the vector.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct BitNameData {
-    /// commitment to arbitrary data
-    commitment: RollBack<TxidStamped<Option<Hash>>>,
-    /// set if the plain bitname is known to be an ICANN domain
-    is_icann: bool,
-    /// optional ipv4 addr
-    ipv4_addr: RollBack<TxidStamped<Option<Ipv4Addr>>>,
-    /// optional ipv6 addr
-    ipv6_addr: RollBack<TxidStamped<Option<Ipv6Addr>>>,
-    /// optional pubkey used for encryption
-    encryption_pubkey: RollBack<TxidStamped<Option<EncryptionPubKey>>>,
-    /// optional pubkey used for signing messages
-    signing_pubkey: RollBack<TxidStamped<Option<VerifyingKey>>>,
-    /// optional minimum paymail fee, in sats
-    paymail_fee_sats: RollBack<TxidStamped<Option<u64>>>,
-}
-
-impl BitNameData {
-    // initialize from BitName data provided during a registration
-    fn init(bitname_data: types::BitNameData, txid: Txid, height: u32) -> Self {
-        Self {
-            commitment: RollBack::<TxidStamped<_>>::new(
-                bitname_data.commitment,
-                txid,
-                height,
-            ),
-            is_icann: false,
-            ipv4_addr: RollBack::<TxidStamped<_>>::new(
-                bitname_data.ipv4_addr,
-                txid,
-                height,
-            ),
-            ipv6_addr: RollBack::<TxidStamped<_>>::new(
-                bitname_data.ipv6_addr,
-                txid,
-                height,
-            ),
-            encryption_pubkey: RollBack::<TxidStamped<_>>::new(
-                bitname_data.encryption_pubkey,
-                txid,
-                height,
-            ),
-            signing_pubkey: RollBack::<TxidStamped<_>>::new(
-                bitname_data.signing_pubkey,
-                txid,
-                height,
-            ),
-            paymail_fee_sats: RollBack::<TxidStamped<_>>::new(
-                bitname_data.paymail_fee_sats,
-                txid,
-                height,
-            ),
-        }
-    }
-
-    // apply bitname data updates
-    fn apply_updates(
-        &mut self,
-        updates: BitNameDataUpdates,
-        txid: Txid,
-        height: u32,
-    ) {
-        let Self {
-            ref mut commitment,
-            is_icann: _,
-            ref mut ipv4_addr,
-            ref mut ipv6_addr,
-            ref mut encryption_pubkey,
-            ref mut signing_pubkey,
-            ref mut paymail_fee_sats,
-        } = self;
-
-        // apply an update to a single data field
-        fn apply_field_update<T>(
-            data_field: &mut RollBack<TxidStamped<Option<T>>>,
-            update: Update<T>,
-            txid: Txid,
-            height: u32,
-        ) {
-            match update {
-                Update::Delete => data_field.push(None, txid, height),
-                Update::Retain => (),
-                Update::Set(value) => {
-                    data_field.push(Some(value), txid, height)
-                }
-            }
-        }
-        apply_field_update(commitment, updates.commitment, txid, height);
-        apply_field_update(ipv4_addr, updates.ipv4_addr, txid, height);
-        apply_field_update(ipv6_addr, updates.ipv6_addr, txid, height);
-        apply_field_update(
-            encryption_pubkey,
-            updates.encryption_pubkey,
-            txid,
-            height,
-        );
-        apply_field_update(
-            signing_pubkey,
-            updates.signing_pubkey,
-            txid,
-            height,
-        );
-        apply_field_update(
-            paymail_fee_sats,
-            updates.paymail_fee_sats,
-            txid,
-            height,
-        );
-    }
-
-    // revert bitname data updates
-    fn revert_updates(
-        &mut self,
-        updates: BitNameDataUpdates,
-        txid: Txid,
-        height: u32,
-    ) {
-        // apply an update to a single data field
-        fn revert_field_update<T>(
-            data_field: &mut RollBack<TxidStamped<Option<T>>>,
-            update: Update<T>,
-            txid: Txid,
-            height: u32,
-        ) where
-            T: std::fmt::Debug + Eq,
-        {
-            match update {
-                Update::Delete => {
-                    let popped = data_field.pop();
-                    assert!(popped.is_some());
-                    let popped = popped.unwrap();
-                    assert!(popped.data.is_none());
-                    assert_eq!(popped.txid, txid);
-                    assert_eq!(popped.height, height)
-                }
-                Update::Retain => (),
-                Update::Set(value) => {
-                    let popped = data_field.pop();
-                    assert!(popped.is_some());
-                    let popped = popped.unwrap();
-                    assert!(popped.data.is_some());
-                    assert_eq!(popped.data.unwrap(), value);
-                    assert_eq!(popped.txid, txid);
-                    assert_eq!(popped.height, height)
-                }
-            }
-        }
-
-        let Self {
-            ref mut commitment,
-            is_icann: _,
-            ref mut ipv4_addr,
-            ref mut ipv6_addr,
-            ref mut encryption_pubkey,
-            ref mut signing_pubkey,
-            ref mut paymail_fee_sats,
-        } = self;
-        revert_field_update(
-            paymail_fee_sats,
-            updates.paymail_fee_sats,
-            txid,
-            height,
-        );
-        revert_field_update(
-            signing_pubkey,
-            updates.signing_pubkey,
-            txid,
-            height,
-        );
-        revert_field_update(
-            encryption_pubkey,
-            updates.encryption_pubkey,
-            txid,
-            height,
-        );
-        revert_field_update(ipv6_addr, updates.ipv6_addr, txid, height);
-        revert_field_update(ipv4_addr, updates.ipv4_addr, txid, height);
-        revert_field_update(commitment, updates.commitment, txid, height);
-    }
-
-    /** Returns the Bitname data as it was, at the specified block height.
-     *  If a value was updated several times in the block, returns the
-     *  last value seen in the block.
-     *  Returns `None` if the data did not exist at the specified block
-     *  height. */
-    pub fn at_block_height(&self, height: u32) -> Option<types::BitNameData> {
-        Some(types::BitNameData {
-            commitment: self.commitment.at_block_height(height)?.data,
-            ipv4_addr: self.ipv4_addr.at_block_height(height)?.data,
-            ipv6_addr: self.ipv6_addr.at_block_height(height)?.data,
-            encryption_pubkey: self
-                .encryption_pubkey
-                .at_block_height(height)?
-                .data,
-            signing_pubkey: self.signing_pubkey.at_block_height(height)?.data,
-            paymail_fee_sats: self
-                .paymail_fee_sats
-                .at_block_height(height)?
-                .data,
-        })
-    }
-
-    /// get the current bitname data
-    pub fn current(&self) -> types::BitNameData {
-        types::BitNameData {
-            commitment: self.commitment.latest().data,
-            ipv4_addr: self.ipv4_addr.latest().data,
-            ipv6_addr: self.ipv6_addr.latest().data,
-            encryption_pubkey: self.encryption_pubkey.latest().data,
-            signing_pubkey: self.signing_pubkey.latest().data,
-            paymail_fee_sats: self.paymail_fee_sats.latest().data,
-        }
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum InvalidHeaderError {
-    #[error("expected block hash {expected}, but computed {computed}")]
-    BlockHash {
-        expected: BlockHash,
-        computed: BlockHash,
-    },
-    #[error("expected previous sidechain block hash {expected}, but received {received}")]
-    PrevSideHash {
-        expected: BlockHash,
-        received: BlockHash,
-    },
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error(transparent)]
-    AmountOverflow(#[from] AmountOverflowError),
-    #[error(transparent)]
-    AmountUnderflow(#[from] AmountUnderflowError),
-    #[error("failed to verify authorization")]
-    AuthorizationError,
-    #[error("bad coinbase output content")]
-    BadCoinbaseOutputContent,
-    #[error("bitname {name_hash} already registered")]
-    BitNameAlreadyRegistered { name_hash: BitName },
-    #[error("bitname {name_hash} already registered as an ICANN name")]
-    BitNameAlreadyIcann { name_hash: BitName },
-    #[error("bundle too heavy {weight} > {max_weight}")]
-    BundleTooHeavy { weight: u64, max_weight: u64 },
-    #[error(transparent)]
-    BorshSerialize(borsh::io::Error),
-    #[error("failed to fill tx output contents: invalid transaction")]
-    FillTxOutputContentsFailed,
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
-    #[error("invalid ICANN name: {plain_name}")]
-    IcannNameInvalid { plain_name: String },
-    #[error("invalid body: expected merkle root {expected}, but computed {computed}")]
-    InvalidBody {
-        expected: MerkleRoot,
-        computed: MerkleRoot,
-    },
-    #[error("invalid header: {0}")]
-    InvalidHeader(InvalidHeaderError),
-    #[error("failed to compute merkle root")]
-    MerkleRoot,
-    #[error("missing BitName {name_hash}")]
-    MissingBitName { name_hash: BitName },
-    #[error(
-        "Missing BitName data for {name_hash} at block height {block_height}"
-    )]
-    MissingBitNameData {
-        name_hash: BitName,
-        block_height: u32,
-    },
-    #[error("missing BitName input {name_hash}")]
-    MissingBitNameInput { name_hash: BitName },
-    #[error("missing BitName reservation {txid}")]
-    MissingReservation { txid: Txid },
-    #[error("no BitNames to update")]
-    NoBitNamesToUpdate,
-    #[error("deposit block doesn't exist")]
-    NoDepositBlock,
-    #[error("total fees less than coinbase value")]
-    NotEnoughFees,
-    #[error("value in is less than value out")]
-    NotEnoughValueIn,
-    #[error("stxo {outpoint} doesn't exist")]
-    NoStxo { outpoint: OutPoint },
-    #[error("no tip")]
-    NoTip,
-    #[error("utxo {outpoint} doesn't exist")]
-    NoUtxo { outpoint: OutPoint },
-    #[error("Withdrawal bundle event block doesn't exist")]
-    NoWithdrawalBundleEventBlock,
-    #[error(transparent)]
-    SignatureError(#[from] ed25519_dalek::SignatureError),
-    #[error("Too few BitName outputs")]
-    TooFewBitNameOutputs,
-    #[error("unbalanced BitNames: {n_bitname_inputs} BitName inputs, {n_bitname_outputs} BitName outputs")]
-    UnbalancedBitNames {
-        n_bitname_inputs: usize,
-        n_bitname_outputs: usize,
-    },
-    #[error("unbalanced reservations: {n_reservation_inputs} reservation inputs, {n_reservation_outputs} reservation outputs")]
-    UnbalancedReservations {
-        n_reservation_inputs: usize,
-        n_reservation_outputs: usize,
-    },
-    #[error("Unknown withdrawal bundle: {m6id}")]
-    UnknownWithdrawalBundle { m6id: M6id },
-    #[error("utxo double spent")]
-    UtxoDoubleSpent,
-    #[error(transparent)]
-    WithdrawalBundle(#[from] WithdrawalBundleError),
-    #[error("wrong public key for address")]
-    WrongPubKeyForAddress,
-}
+use bitname_data::BitNameData;
+pub use error::Error;
+use rollback::{HeightStamped, RollBack};
 
 type WithdrawalBundlesDb = Database<
     SerdeBincode<M6id>,
@@ -459,9 +42,11 @@ pub struct State {
     tip: WatchableDb<SerdeBincode<UnitKey>, SerdeBincode<BlockHash>>,
     /// Current height
     height: Database<SerdeBincode<UnitKey>, SerdeBincode<u32>>,
-    /// associates tx hashes with bitname reservation commitments
+    /// Associates tx hashes with bitname reservation commitments
     pub bitname_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
-    /// associates bitname IDs (name hashes) with bitname data
+    /// Associates BitName sequence numbers with BitName IDs (name hashes)
+    pub bitname_seq_to_bitname: Database<BitNameSeqId, SerdeBincode<BitName>>,
+    /// Associates bitname IDs (name hashes) with bitname data
     pub bitnames: Database<SerdeBincode<BitName>, SerdeBincode<BitNameData>>,
     pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
     pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
@@ -482,7 +67,7 @@ pub struct State {
 }
 
 impl State {
-    pub const NUM_DBS: u32 = 11;
+    pub const NUM_DBS: u32 = 12;
     pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 5;
 
     pub fn new(env: &heed::Env) -> Result<Self, Error> {
@@ -491,6 +76,8 @@ impl State {
         let height = env.create_database(&mut rwtxn, Some("height"))?;
         let bitname_reservations =
             env.create_database(&mut rwtxn, Some("bitname_reservations"))?;
+        let bitname_seq_to_bitname =
+            env.create_database(&mut rwtxn, Some("bitname_seq_to_bitname"))?;
         let bitnames = env.create_database(&mut rwtxn, Some("bitnames"))?;
         let utxos = env.create_database(&mut rwtxn, Some("utxos"))?;
         let stxos = env.create_database(&mut rwtxn, Some("stxos"))?;
@@ -513,6 +100,7 @@ impl State {
             tip,
             height,
             bitname_reservations,
+            bitname_seq_to_bitname,
             bitnames,
             utxos,
             stxos,
@@ -968,7 +556,7 @@ impl State {
     ) -> Result<(bitcoin::Amount, MerkleRoot), Error> {
         let tip_hash = self.get_tip(rotxn)?;
         if header.prev_side_hash != tip_hash {
-            let err = InvalidHeaderError::PrevSideHash {
+            let err = error::InvalidHeader::PrevSideHash {
                 expected: tip_hash,
                 received: header.prev_side_hash,
             };
@@ -1490,7 +1078,7 @@ impl State {
         rwtxn: &mut RwTxn,
         filled_tx: &FilledTransaction,
         name_hash: BitName,
-        bitname_data: &types::BitNameData,
+        bitname_data: &types::MutableBitNameData,
         height: u32,
     ) -> Result<(), Error> {
         // Find the reservation to burn
@@ -1516,8 +1104,19 @@ impl State {
                 txid: *burned_reservation_txid,
             });
         }
-        let bitname_data =
-            BitNameData::init(bitname_data.clone(), filled_tx.txid(), height);
+        let next_seq_id = self
+            .bitname_seq_to_bitname
+            .last(rwtxn)?
+            .map(|(seq, _)| seq.next())
+            .unwrap_or(BitNameSeqId::new(0));
+        self.bitname_seq_to_bitname
+            .put(rwtxn, &next_seq_id, &name_hash)?;
+        let bitname_data = BitNameData::init(
+            bitname_data.clone(),
+            filled_tx.txid(),
+            height,
+            next_seq_id,
+        );
         self.bitnames.put(rwtxn, &name_hash, &bitname_data)?;
         Ok(())
     }
@@ -1531,6 +1130,13 @@ impl State {
         if !self.bitnames.delete(rwtxn, &name_hash)? {
             return Err(Error::MissingBitName { name_hash });
         }
+        let (last_seq_id, latest_registered_bitname) = self
+            .bitname_seq_to_bitname
+            .last(rwtxn)?
+            .expect("A registered bitname should have a seq id");
+        assert_eq!(latest_registered_bitname, name_hash);
+        self.bitname_seq_to_bitname.delete(rwtxn, &last_seq_id)?;
+
         // Find the reservation to restore
         let implied_commitment =
             filled_tx.implied_reservation_commitment().expect(
@@ -1692,7 +1298,7 @@ impl State {
         let height = self.get_height(rwtxn)?;
         let tip_hash = self.get_tip(rwtxn)?;
         if tip_hash != header.prev_side_hash {
-            let err = InvalidHeaderError::PrevSideHash {
+            let err = error::InvalidHeader::PrevSideHash {
                 expected: tip_hash,
                 received: header.prev_side_hash,
             };
@@ -1818,7 +1424,7 @@ impl State {
     ) -> Result<(), Error> {
         let tip_hash = self.get_tip(rwtxn)?;
         if tip_hash != header.hash() {
-            let err = InvalidHeaderError::BlockHash {
+            let err = error::InvalidHeader::BlockHash {
                 expected: tip_hash,
                 computed: header.hash(),
             };

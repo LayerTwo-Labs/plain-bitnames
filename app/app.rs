@@ -411,7 +411,7 @@ impl App {
                     if !ownership.contains(&height) {
                         return None;
                     };
-                    bitname_data.paymail_fee_sats
+                    bitname_data.mutable_data.paymail_fee_sats
                 })
                 .min();
             let Some(min_fee) = min_fee else {

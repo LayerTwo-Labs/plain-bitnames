@@ -9,7 +9,7 @@ use hex::FromHex;
 
 use plain_bitnames::{
     authorization::VerifyingKey,
-    types::{BitNameData, EncryptionPubKey, Hash, Transaction, Txid},
+    types::{EncryptionPubKey, Hash, MutableBitNameData, Transaction, Txid},
 };
 
 use crate::{app::App, gui::util::InnerResponseExt};
@@ -65,7 +65,7 @@ impl<T> std::default::Default for TrySetOption<T> {
     }
 }
 
-impl TryFrom<TrySetBitNameData> for BitNameData {
+impl TryFrom<TrySetBitNameData> for MutableBitNameData {
     type Error = String;
 
     fn try_from(try_set: TrySetBitNameData) -> Result<Self, Self::Error> {
@@ -92,7 +92,7 @@ impl TryFrom<TrySetBitNameData> for BitNameData {
             .paymail_fee_sats
             .0
             .map_err(|err| format!("Cannot parse paymail fee: \"{err}\""))?;
-        Ok(BitNameData {
+        Ok(MutableBitNameData {
             commitment,
             ipv4_addr,
             ipv6_addr,
@@ -126,7 +126,7 @@ impl TxCreator {
                 plaintext_name,
                 bitname_data,
             } => {
-                let bitname_data: BitNameData = (bitname_data.as_ref())
+                let bitname_data: MutableBitNameData = (bitname_data.as_ref())
                     .clone()
                     .try_into()
                     .map_err(|err| anyhow::anyhow!("{err}"))?;

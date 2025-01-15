@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use eframe::egui;
 use hex::FromHex;
-use plain_bitnames::types::{hashes::BitName, BitNameData};
+use plain_bitnames::types::{hashes::BitName, BitNameData, MutableBitNameData};
 
 use crate::{
     app::App,
@@ -19,13 +19,17 @@ fn show_bitname_data(
     bitname_data: &BitNameData,
 ) -> egui::Response {
     let BitNameData {
+        seq_id,
+        mutable_data,
+    } = bitname_data;
+    let MutableBitNameData {
         commitment,
         ipv4_addr,
         ipv6_addr,
         encryption_pubkey,
         signing_pubkey,
         paymail_fee_sats,
-    } = bitname_data;
+    } = mutable_data;
     let commitment = commitment.map_or("Not set".to_owned(), hex::encode);
     let ipv4_addr = ipv4_addr
         .map_or("Not set".to_owned(), |ipv4_addr| ipv4_addr.to_string());
@@ -38,12 +42,16 @@ fn show_bitname_data(
     let paymail_fee_sats = paymail_fee_sats
         .map_or("Not set".to_owned(), |paymail_fee| paymail_fee.to_string());
     ui.horizontal(|ui| {
-        ui.monospace_selectable_singleline(
-            true,
-            format!("Commitment: {commitment}"),
-        )
+        ui.monospace_selectable_singleline(false, format!("Seq ID: {seq_id}"))
     })
     .join()
+        | ui.horizontal(|ui| {
+            ui.monospace_selectable_singleline(
+                true,
+                format!("Commitment: {commitment}"),
+            )
+        })
+        .join()
         | ui.horizontal(|ui| {
             ui.monospace_selectable_singleline(
                 false,

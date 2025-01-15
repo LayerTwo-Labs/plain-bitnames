@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 
 use eframe::egui;
-use plain_bitnames::types::BitNameData;
+use plain_bitnames::types::MutableBitNameData;
 
 use crate::{
     app::App,
@@ -21,7 +21,7 @@ fn reserve_bitname(
 fn register_bitname(
     app: &App,
     plaintext_name: &str,
-    bitname_data: Cow<BitNameData>,
+    bitname_data: Cow<MutableBitNameData>,
     fee: bitcoin::Amount,
 ) -> anyhow::Result<()> {
     let mut tx = app.wallet.create_regular_transaction(fee)?;
@@ -117,7 +117,7 @@ impl Register {
             bitcoin::Denomination::Bitcoin,
         );
         tx_creator::TxCreator::show_bitname_options(ui, &mut self.bitname_data);
-        let bitname_data: Result<BitNameData, _> =
+        let bitname_data: Result<MutableBitNameData, _> =
             self.bitname_data.clone().try_into();
         if let Err(err) = &bitname_data {
             ui.monospace_selectable_multiline(err.clone());
