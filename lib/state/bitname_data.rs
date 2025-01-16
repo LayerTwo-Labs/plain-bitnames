@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{SocketAddrV4, SocketAddrV6};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,9 +20,11 @@ pub struct BitNameData {
     /// set if the plain bitname is known to be an ICANN domain
     pub(in crate::state) is_icann: bool,
     /// optional ipv4 addr
-    pub(in crate::state) ipv4_addr: RollBack<TxidStamped<Option<Ipv4Addr>>>,
+    pub(in crate::state) socket_addr_v4:
+        RollBack<TxidStamped<Option<SocketAddrV4>>>,
     /// optional ipv6 addr
-    pub(in crate::state) ipv6_addr: RollBack<TxidStamped<Option<Ipv6Addr>>>,
+    pub(in crate::state) socket_addr_v6:
+        RollBack<TxidStamped<Option<SocketAddrV6>>>,
     /// optional pubkey used for encryption
     pub(in crate::state) encryption_pubkey:
         RollBack<TxidStamped<Option<EncryptionPubKey>>>,
@@ -49,13 +51,13 @@ impl BitNameData {
                 height,
             ),
             is_icann: false,
-            ipv4_addr: RollBack::<TxidStamped<_>>::new(
-                bitname_data.ipv4_addr,
+            socket_addr_v4: RollBack::<TxidStamped<_>>::new(
+                bitname_data.socket_addr_v4,
                 txid,
                 height,
             ),
-            ipv6_addr: RollBack::<TxidStamped<_>>::new(
-                bitname_data.ipv6_addr,
+            socket_addr_v6: RollBack::<TxidStamped<_>>::new(
+                bitname_data.socket_addr_v6,
                 txid,
                 height,
             ),
@@ -88,8 +90,8 @@ impl BitNameData {
             seq_id: _,
             ref mut commitment,
             is_icann: _,
-            ref mut ipv4_addr,
-            ref mut ipv6_addr,
+            ref mut socket_addr_v4,
+            ref mut socket_addr_v6,
             ref mut encryption_pubkey,
             ref mut signing_pubkey,
             ref mut paymail_fee_sats,
@@ -111,8 +113,18 @@ impl BitNameData {
             }
         }
         apply_field_update(commitment, updates.commitment, txid, height);
-        apply_field_update(ipv4_addr, updates.ipv4_addr, txid, height);
-        apply_field_update(ipv6_addr, updates.ipv6_addr, txid, height);
+        apply_field_update(
+            socket_addr_v4,
+            updates.socket_addr_v4,
+            txid,
+            height,
+        );
+        apply_field_update(
+            socket_addr_v6,
+            updates.socket_addr_v6,
+            txid,
+            height,
+        );
         apply_field_update(
             encryption_pubkey,
             updates.encryption_pubkey,
@@ -175,8 +187,8 @@ impl BitNameData {
             seq_id: _,
             ref mut commitment,
             is_icann: _,
-            ref mut ipv4_addr,
-            ref mut ipv6_addr,
+            ref mut socket_addr_v4,
+            ref mut socket_addr_v6,
             ref mut encryption_pubkey,
             ref mut signing_pubkey,
             ref mut paymail_fee_sats,
@@ -199,8 +211,18 @@ impl BitNameData {
             txid,
             height,
         );
-        revert_field_update(ipv6_addr, updates.ipv6_addr, txid, height);
-        revert_field_update(ipv4_addr, updates.ipv4_addr, txid, height);
+        revert_field_update(
+            socket_addr_v4,
+            updates.socket_addr_v4,
+            txid,
+            height,
+        );
+        revert_field_update(
+            socket_addr_v6,
+            updates.socket_addr_v6,
+            txid,
+            height,
+        );
         revert_field_update(commitment, updates.commitment, txid, height);
     }
 
@@ -215,8 +237,8 @@ impl BitNameData {
     ) -> Option<crate::types::BitNameData> {
         let mutable_data = crate::types::MutableBitNameData {
             commitment: self.commitment.at_block_height(height)?.data,
-            ipv4_addr: self.ipv4_addr.at_block_height(height)?.data,
-            ipv6_addr: self.ipv6_addr.at_block_height(height)?.data,
+            socket_addr_v4: self.socket_addr_v4.at_block_height(height)?.data,
+            socket_addr_v6: self.socket_addr_v6.at_block_height(height)?.data,
             encryption_pubkey: self
                 .encryption_pubkey
                 .at_block_height(height)?
@@ -237,8 +259,8 @@ impl BitNameData {
     pub fn current(&self) -> crate::types::BitNameData {
         let mutable_data = crate::types::MutableBitNameData {
             commitment: self.commitment.latest().data,
-            ipv4_addr: self.ipv4_addr.latest().data,
-            ipv6_addr: self.ipv6_addr.latest().data,
+            socket_addr_v4: self.socket_addr_v4.latest().data,
+            socket_addr_v6: self.socket_addr_v6.latest().data,
             encryption_pubkey: self.encryption_pubkey.latest().data,
             signing_pubkey: self.signing_pubkey.latest().data,
             paymail_fee_sats: self.paymail_fee_sats.latest().data,

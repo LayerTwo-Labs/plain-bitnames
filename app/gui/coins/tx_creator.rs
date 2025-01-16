@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    net::{Ipv4Addr, Ipv6Addr},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, SocketAddrV6},
     str::FromStr,
 };
 
@@ -24,9 +24,9 @@ pub struct TrySetBitNameData {
     /// commitment to arbitrary data
     pub commitment: TrySetOption<Hash>,
     /// optional ipv4 addr
-    pub ipv4_addr: TrySetOption<Ipv4Addr>,
+    pub socket_addr_v4: TrySetOption<SocketAddrV4>,
     /// optional ipv6 addr
-    pub ipv6_addr: TrySetOption<Ipv6Addr>,
+    pub socket_addr_v6: TrySetOption<SocketAddrV6>,
     /// optional pubkey used for encryption
     pub encryption_pubkey: TrySetOption<EncryptionPubKey>,
     /// optional pubkey used for signing messages
@@ -72,12 +72,12 @@ impl TryFrom<TrySetBitNameData> for MutableBitNameData {
             .commitment
             .0
             .map_err(|err| format!("Cannot parse commitment: \"{err}\""))?;
-        let ipv4_addr = try_set
-            .ipv4_addr
+        let socket_addr_v4 = try_set
+            .socket_addr_v4
             .0
             .map_err(|err| format!("Cannot parse ipv4 address: \"{err}\""))?;
-        let ipv6_addr = try_set
-            .ipv6_addr
+        let socket_addr_v6 = try_set
+            .socket_addr_v6
             .0
             .map_err(|err| format!("Cannot parse ipv6 address: \"{err}\""))?;
         let encryption_pubkey = try_set.encryption_pubkey.0.map_err(|err| {
@@ -93,8 +93,8 @@ impl TryFrom<TrySetBitNameData> for MutableBitNameData {
             .map_err(|err| format!("Cannot parse paymail fee: \"{err}\""))?;
         Ok(MutableBitNameData {
             commitment,
-            ipv4_addr,
-            ipv6_addr,
+            socket_addr_v4,
+            socket_addr_v6,
             encryption_pubkey,
             signing_pubkey,
             paymail_fee_sats,
@@ -225,10 +225,10 @@ impl TxCreator {
                 | Self::show_option_field_default(
                     ui,
                     "bitname_data_ipv4",
-                    Ipv4Addr::UNSPECIFIED,
-                    &mut bitname_data.ipv4_addr,
-                    |s| Ipv4Addr::from_str(&s),
-                    Ipv4Addr::to_string,
+                    SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 3000),
+                    &mut bitname_data.socket_addr_v4,
+                    |s| SocketAddrV4::from_str(&s),
+                    SocketAddrV4::to_string,
                 )
         });
         let ipv6_resp = ui.horizontal(|ui| {
@@ -236,10 +236,10 @@ impl TxCreator {
                 | Self::show_option_field_default(
                     ui,
                     "bitname_data_ipv6",
-                    Ipv6Addr::UNSPECIFIED,
-                    &mut bitname_data.ipv6_addr,
-                    |s| Ipv6Addr::from_str(&s),
-                    Ipv6Addr::to_string,
+                    SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 3000, 0, 0),
+                    &mut bitname_data.socket_addr_v6,
+                    |s| SocketAddrV6::from_str(&s),
+                    SocketAddrV6::to_string,
                 )
         });
         let encryption_pubkey_resp = ui.horizontal(|ui| {

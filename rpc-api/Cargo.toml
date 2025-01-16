@@ -18,6 +18,11 @@ utoipa = "5.2.0"
 git = "https://github.com/Ash-L2L/l2l-openapi"
 rev = "38c42ee637d083f1cdc807b546f6930b880dcad9"
 
+[dependencies.serde_with]
+version = "3.4.0"
+default-features = false
+features = ["hex", "macros"]
+
 [dev-dependencies]
 anyhow = "1.0.72"
 

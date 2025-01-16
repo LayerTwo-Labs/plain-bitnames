@@ -52,6 +52,16 @@ impl RpcServer for RpcServerImpl {
         self.app.wallet.get_balance().map_err(convert_wallet_err)
     }
 
+    async fn bitname_data(
+        &self,
+        bitname_id: BitName,
+    ) -> RpcResult<BitNameData> {
+        self.app
+            .node
+            .get_current_bitname_data(&bitname_id)
+            .map_err(convert_node_err)
+    }
+
     async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>> {
         self.app.node.bitnames().map_err(convert_node_err)
     }

@@ -3863,7 +3863,7 @@ checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
 
 [[package]]
 name = "plain_bitnames"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "addr",
  "anyhow",
@@ -3914,7 +3914,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "base64",
@@ -3959,22 +3959,24 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_cli"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "bitcoin",
+ "blake3",
  "clap",
  "jsonrpsee",
  "plain_bitnames",
  "plain_bitnames_app_rpc_api",
  "serde_json",
+ "serde_json_canonicalizer",
  "tokio",
  "utoipa",
 ]
 
 [[package]]
 name = "plain_bitnames_app_rpc_api"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -3983,6 +3985,7 @@ dependencies = [
  "plain_bitnames",
  "serde",
  "serde_json",
+ "serde_with",
  "utoipa",
 ]
 
@@ -4612,6 +4615,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f3cb5ba0dc43242ce17de99c180e96db90b235b8a9fdc9543c96d2209116bd9f"
 
 [[package]]
+name = "ryu-js"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad97d4ce1560a5e27cec89519dc8300d1aa6035b099821261c651486a19e44d5"
+
+[[package]]
 name = "same-file"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4740,6 +4749,17 @@ dependencies = [
  "memchr",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serde_json_canonicalizer"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "18032888bfda612a88f6b9c7c7a12e8168686936702fe584e3f1b1fc7848443a"
+dependencies = [
+ "ryu-js",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -255,6 +255,14 @@ impl FromHex for BitName {
     }
 }
 
+impl std::str::FromStr for BitName {
+    type Err = <BitName as FromHex>::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        BitName::from_hex(s)
+    }
+}
+
 impl utoipa::PartialSchema for BitName {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         let obj =

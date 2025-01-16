@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{SocketAddrV4, SocketAddrV6};
 
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
@@ -28,10 +28,10 @@ pub struct MutableBitNameData {
     pub commitment: Option<Hash>,
     /// optional ipv4 addr
     #[schema(value_type = Option<String>)]
-    pub ipv4_addr: Option<Ipv4Addr>,
+    pub socket_addr_v4: Option<SocketAddrV4>,
     /// optional ipv6 addr
     #[schema(value_type = Option<String>)]
-    pub ipv6_addr: Option<Ipv6Addr>,
+    pub socket_addr_v6: Option<SocketAddrV6>,
     /// optional pubkey used for encryption
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// optional pubkey used for signing messages
@@ -100,27 +100,27 @@ impl ToSchema for Update<Hash> {
     }
 }
 
-impl PartialSchema for Update<Ipv4Addr> {
+impl PartialSchema for Update<SocketAddrV4> {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         Self::schema(<String as PartialSchema>::schema())
     }
 }
 
-impl ToSchema for Update<Ipv4Addr> {
+impl ToSchema for Update<SocketAddrV4> {
     fn name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("UpdateIpv4Addr")
+        std::borrow::Cow::Borrowed("UpdateSocketAddrV4")
     }
 }
 
-impl PartialSchema for Update<Ipv6Addr> {
+impl PartialSchema for Update<SocketAddrV6> {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         Self::schema(<String as PartialSchema>::schema())
     }
 }
 
-impl ToSchema for Update<Ipv6Addr> {
+impl ToSchema for Update<SocketAddrV6> {
     fn name() -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed("UpdateIpv6Addr")
+        std::borrow::Cow::Borrowed("UpdateSocketAddrV6")
     }
 }
 
@@ -167,11 +167,11 @@ pub struct BitNameDataUpdates {
     #[schema(schema_with = <Update<Hash> as PartialSchema>::schema)]
     pub commitment: Update<Hash>,
     /// optional ipv4 addr
-    #[schema(schema_with = <Update<Ipv4Addr> as PartialSchema>::schema)]
-    pub ipv4_addr: Update<Ipv4Addr>,
+    #[schema(schema_with = <Update<SocketAddrV4> as PartialSchema>::schema)]
+    pub socket_addr_v4: Update<SocketAddrV4>,
     /// optional ipv6 addr
-    #[schema(schema_with = <Update<Ipv6Addr> as PartialSchema>::schema)]
-    pub ipv6_addr: Update<Ipv6Addr>,
+    #[schema(schema_with = <Update<SocketAddrV6> as PartialSchema>::schema)]
+    pub socket_addr_v6: Update<SocketAddrV6>,
     /// optional pubkey used for encryption
     #[schema(schema_with = <Update<EncryptionPubKey> as PartialSchema>::schema)]
     pub encryption_pubkey: Update<EncryptionPubKey>,

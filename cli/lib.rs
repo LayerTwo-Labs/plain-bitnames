@@ -2,14 +2,16 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use clap::{Parser, Subcommand};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
-use plain_bitnames::types::{Address, BlockHash, THIS_SIDECHAIN};
-use plain_bitnames_app_rpc_api::RpcClient;
+use plain_bitnames::types::{Address, BitName, BlockHash, THIS_SIDECHAIN};
+use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
 
 #[derive(Clone, Debug, Subcommand)]
 #[command(arg_required_else_help(true))]
 pub enum Command {
     /// Get balance in sats
     Balance,
+    /// Retrieve data for a single BitName
+    BitnameData { bitname_id: BitName },
     /// List all BitNames
     Bitnames,
     /// Connect to a peer
@@ -56,6 +58,11 @@ pub enum Command {
     OpenApiSchema,
     /// Reserve a BitName
     ReserveBitname { plaintext_name: String },
+    /// Resolve a commitment from a BitName
+    ResolveCommit {
+        bitname_id: BitName,
+        field_name: String,
+    },
     /// Set the wallet seed from a mnemonic seed phrase
     SetSeedFromMnemonic { mnemonic: String },
     /// Get total sidechain wealth
@@ -87,6 +94,37 @@ const DEFAULT_RPC_ADDR: SocketAddr = SocketAddr::new(
     6000 + THIS_SIDECHAIN as u16,
 );
 
+async fn resolve_commit(
+    bitname_id: BitName,
+    field_name: String,
+    rpc_client: &HttpClient,
+) -> anyhow::Result<Option<serde_json::Value>> {
+    let bitname_data = rpc_client.bitname_data(bitname_id).await?;
+    let socket_addr = bitname_data
+        .mutable_data
+        .socket_addr_v4
+        .map(SocketAddr::from)
+        .or_else(|| {
+            bitname_data
+                .mutable_data
+                .socket_addr_v6
+                .map(SocketAddr::from)
+        })
+        .ok_or_else(|| anyhow::anyhow!("No IP/port address resolved"))?;
+    let commitment = bitname_data
+        .mutable_data
+        .commitment
+        .ok_or_else(|| anyhow::anyhow!("No commitment resolved"))?;
+    let http_client = HttpClientBuilder::default()
+        .build(format!("http://{}", socket_addr))?;
+    let mut bitname_commit = http_client.bitname_commit(None).await?;
+    let canonical_bytes = serde_json_canonicalizer::to_vec(&bitname_commit)?;
+    let canonical_hash: plain_bitnames::types::Hash =
+        blake3::hash(&canonical_bytes).into();
+    anyhow::ensure!(commitment == canonical_hash);
+    Ok(bitname_commit.remove(&field_name))
+}
+
 #[derive(Clone, Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
@@ -106,6 +144,10 @@ impl Cli {
             Command::Balance => {
                 let balance = rpc_client.balance().await?;
                 serde_json::to_string_pretty(&balance)?
+            }
+            Command::BitnameData { bitname_id } => {
+                let bitname_data = rpc_client.bitname_data(bitname_id).await?;
+                serde_json::to_string_pretty(&bitname_data)?
             }
             Command::Bitnames => {
                 let bitnames = rpc_client.bitnames().await?;
@@ -181,6 +223,14 @@ impl Cli {
             Command::ReserveBitname { plaintext_name } => {
                 let txid = rpc_client.reserve_bitname(plaintext_name).await?;
                 format!("{txid}")
+            }
+            Command::ResolveCommit {
+                bitname_id,
+                field_name,
+            } => {
+                let res =
+                    resolve_commit(bitname_id, field_name, &rpc_client).await?;
+                serde_json::to_string_pretty(&res)?
             }
             Command::SetSeedFromMnemonic { mnemonic } => {
                 let () = rpc_client.set_seed_from_mnemonic(mnemonic).await?;

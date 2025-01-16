@@ -15,6 +15,7 @@ use plain_bitnames::{
     wallet::Balance,
 };
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use utoipa::ToSchema;
 
 mod schema;
@@ -41,6 +42,11 @@ pub trait Rpc {
     #[open_api_method(output_schema(ToSchema))]
     #[method(name = "balance")]
     async fn balance(&self) -> RpcResult<Balance>;
+
+    /// Retrieve data for a single BitName
+    #[method(name = "bitname_data")]
+    async fn bitname_data(&self, bitname_id: BitName)
+        -> RpcResult<BitNameData>;
 
     /// List all BitNames
     #[open_api_method(output_schema(
@@ -190,4 +196,20 @@ pub trait Rpc {
         fee_sats: u64,
         mainchain_fee_sats: u64,
     ) -> RpcResult<Txid>;
+}
+
+/// Wrapper struct for hex-encoded bytes
+#[serde_as]
+#[derive(Debug, Deserialize, Serialize)]
+#[repr(transparent)]
+#[serde(transparent)]
+pub struct HexStr(#[serde_as(as = "serde_with::hex::Hex")] pub Vec<u8>);
+
+#[rpc(client, server)]
+pub trait BitNameCommitRpc {
+    #[method(name = "bitname_commit")]
+    async fn bitname_commit(
+        &self,
+        bytes: Option<HexStr>,
+    ) -> RpcResult<serde_json::Map<String, serde_json::Value>>;
 }
