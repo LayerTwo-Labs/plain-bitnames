@@ -7,9 +7,8 @@ use std::{
 use eframe::egui::{self, Response};
 use hex::FromHex;
 
-use plain_bitnames::{
-    authorization::VerifyingKey,
-    types::{EncryptionPubKey, Hash, MutableBitNameData, Transaction, Txid},
+use plain_bitnames::types::{
+    EncryptionPubKey, Hash, MutableBitNameData, Transaction, Txid, VerifyingKey,
 };
 
 use crate::{app::App, gui::util::InnerResponseExt};
@@ -252,29 +251,20 @@ impl TxCreator {
                     "bitname_data_encryption_pubkey",
                     default_pubkey,
                     &mut bitname_data.encryption_pubkey,
-                    |s| <[u8; 32]>::from_hex(s).map(EncryptionPubKey::from),
-                    |epk| hex::encode(epk.0.as_bytes()),
+                    |s| EncryptionPubKey::from_str(&s),
+                    EncryptionPubKey::to_string,
                 )
         });
         let signing_pubkey_resp = ui.horizontal(|ui| {
-            let default_pubkey =
-                VerifyingKey::from_bytes(&<[u8; 32] as Default>::default())
-                    .unwrap();
-            let try_from_str = |s: String| {
-                <[u8; 32]>::from_hex(s).map_err(either::Left).and_then(
-                    |bytes| {
-                        VerifyingKey::from_bytes(&bytes).map_err(either::Right)
-                    },
-                )
-            };
+            let default_pubkey = VerifyingKey::try_from(&[0u8; 32]).unwrap();
             ui.monospace("Signing PubKey:       ")
                 | Self::show_option_field_default(
                     ui,
                     "bitname_data_signing_pubkey",
                     default_pubkey,
                     &mut bitname_data.signing_pubkey,
-                    try_from_str,
-                    |pk| hex::encode(pk.to_bytes()),
+                    |s| VerifyingKey::from_str(&s),
+                    VerifyingKey::to_string,
                 )
         });
         let paymail_fee_resp = ui.horizontal(|ui| {

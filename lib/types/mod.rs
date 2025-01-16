@@ -17,6 +17,7 @@ pub mod bitname_data;
 pub mod bitname_seq_id;
 pub mod constants;
 pub mod hashes;
+pub mod keys;
 pub mod proto;
 pub mod schema;
 mod transaction;
@@ -27,6 +28,7 @@ pub use bitname_data::{
 };
 pub use bitname_seq_id::BitNameSeqId;
 pub use hashes::{BitName, BlockHash, Hash, M6id, MerkleRoot, Txid};
+pub use keys::{EncryptionPubKey, VerifyingKey};
 pub use transaction::{
     Authorized, AuthorizedTransaction, BatchIcannRegistrationData,
     Content as OutputContent, FilledContent as FilledOutputContent,
@@ -117,35 +119,6 @@ pub trait GetAddress {
 pub trait GetValue {
     fn get_value(&self) -> bitcoin::Amount;
 }
-
-fn borsh_serialize_x25519_pubkey<W>(
-    pk: &x25519_dalek::PublicKey,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    borsh::BorshSerialize::serialize(pk.as_bytes(), writer)
-}
-
-/// Wrapper around x25519 pubkeys
-#[derive(
-    BorshSerialize,
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    Hash,
-    PartialEq,
-    Serialize,
-)]
-#[repr(transparent)]
-#[serde(transparent)]
-pub struct EncryptionPubKey(
-    #[borsh(serialize_with = "borsh_serialize_x25519_pubkey")]
-    pub  x25519_dalek::PublicKey,
-);
 
 fn borsh_serialize_bitcoin_block_hash<W>(
     block_hash: &bitcoin::BlockHash,
@@ -527,60 +500,6 @@ pub struct AggregatedWithdrawal {
     pub main_address: bitcoin::Address<bitcoin::address::NetworkUnchecked>,
     pub value: bitcoin::Amount,
     pub main_fee: bitcoin::Amount,
-}
-
-#[derive(Debug, Error)]
-pub enum Bech32mDecodeError {
-    #[error(transparent)]
-    Bech32m(#[from] bech32::DecodeError),
-    #[error("Wrong Bech32 HRP. Perhaps this key is being used somewhere it shouldn't be.")]
-    WrongHrp,
-    #[error("Wrong decoded byte length. Must decode to 32 bytes of data.")]
-    WrongSize,
-    #[error("Wrong Bech32 variant. Only Bech32m is accepted.")]
-    WrongVariant,
-}
-
-impl EncryptionPubKey {
-    /// HRP for Bech32m encoding
-    const BECH32M_HRP: bech32::Hrp = bech32::Hrp::parse_unchecked("bn-enc");
-
-    /// Encode to Bech32m format
-    pub fn bech32m_encode(&self) -> String {
-        bech32::encode::<bech32::Bech32m>(Self::BECH32M_HRP, self.0.as_bytes())
-            .expect("Bech32m Encoding should not fail")
-    }
-
-    /// Decode from Bech32m format
-    pub fn bech32m_decode(s: &str) -> Result<Self, Bech32mDecodeError> {
-        let (hrp, data) = bech32::decode(s)?;
-        if hrp != Self::BECH32M_HRP {
-            return Err(Bech32mDecodeError::WrongHrp);
-        }
-        let Ok(bytes) = <[u8; 32]>::try_from(data) else {
-            return Err(Bech32mDecodeError::WrongSize);
-        };
-        let res = Self::from(bytes);
-        if s != res.bech32m_encode() {
-            return Err(Bech32mDecodeError::WrongVariant);
-        }
-        Ok(Self::from(bytes))
-    }
-}
-
-impl std::fmt::Display for EncryptionPubKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.bech32m_encode().fmt(f)
-    }
-}
-
-impl<T> From<T> for EncryptionPubKey
-where
-    x25519_dalek::PublicKey: From<T>,
-{
-    fn from(value: T) -> Self {
-        Self(value.into())
-    }
 }
 
 impl Ord for AggregatedWithdrawal {

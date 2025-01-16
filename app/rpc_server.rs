@@ -10,8 +10,9 @@ use jsonrpsee::{
 use plain_bitnames::{
     node,
     types::{
-        hashes::BitName, Address, BitNameData, Block, BlockHash, FilledOutput,
-        OutPoint, PointedOutput, Transaction, Txid,
+        hashes::BitName, Address, BitNameData, Block, BlockHash,
+        EncryptionPubKey, FilledOutput, OutPoint, PointedOutput, Transaction,
+        Txid, VerifyingKey,
     },
     wallet::{self, Balance},
 };
@@ -107,6 +108,20 @@ impl RpcServer for RpcServerImpl {
         self.app
             .wallet
             .get_new_address()
+            .map_err(convert_wallet_err)
+    }
+
+    async fn get_new_encryption_key(&self) -> RpcResult<EncryptionPubKey> {
+        self.app
+            .wallet
+            .get_new_encryption_key()
+            .map_err(convert_wallet_err)
+    }
+
+    async fn get_new_verifying_key(&self) -> RpcResult<VerifyingKey> {
+        self.app
+            .wallet
+            .get_new_verifying_key()
             .map_err(convert_wallet_err)
     }
 

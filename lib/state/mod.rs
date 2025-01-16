@@ -506,6 +506,7 @@ impl State {
                 &batch_icann_data.plain_names,
             ));
             constants::BATCH_ICANN_VERIFYING_KEY
+                .0
                 .verify_strict(&msg_hash, &batch_icann_data.signature)?;
         }
         Ok(())

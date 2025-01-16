@@ -8,9 +8,9 @@ use plain_bitnames::{
     types::{
         hashes::BitName, schema as bitnames_schema, Address, Authorization,
         BatchIcannRegistrationData, BitNameData, BitNameDataUpdates, Block,
-        BlockHash, Body, FilledOutput, FilledOutputContent, Header, MerkleRoot,
-        OutPoint, Output, OutputContent, PointedOutput, Transaction,
-        TransactionData, TxIn, Txid,
+        BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
+        Header, MerkleRoot, OutPoint, Output, OutputContent, PointedOutput,
+        Transaction, TransactionData, TxIn, Txid, VerifyingKey,
     },
     wallet::Balance,
 };
@@ -87,6 +87,14 @@ pub trait Rpc {
     /// Get a new address
     #[method(name = "get_new_address")]
     async fn get_new_address(&self) -> RpcResult<Address>;
+
+    /// Get new encryption key
+    #[method(name = "get_new_encryption_key")]
+    async fn get_new_encryption_key(&self) -> RpcResult<EncryptionPubKey>;
+
+    /// Get new verifying/signing key
+    #[method(name = "get_new_verifying_key")]
+    async fn get_new_verifying_key(&self) -> RpcResult<VerifyingKey>;
 
     /// Get all paymail
     #[method(name = "get_paymail")]

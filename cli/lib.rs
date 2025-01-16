@@ -30,6 +30,10 @@ pub enum Command {
     GetBlock { block_hash: BlockHash },
     /// Get a new address
     GetNewAddress,
+    /// Get a new encryption pubkey
+    GetNewEncryptionKey,
+    /// Get a new verifying key
+    GetNewVerifyingKey,
     /// Get the current block count
     GetBlockcount,
     /// Get all paymail
@@ -136,6 +140,14 @@ impl Cli {
             Command::GetNewAddress => {
                 let address = rpc_client.get_new_address().await?;
                 format!("{address}")
+            }
+            Command::GetNewEncryptionKey => {
+                let epk = rpc_client.get_new_encryption_key().await?;
+                format!("{epk}")
+            }
+            Command::GetNewVerifyingKey => {
+                let vk = rpc_client.get_new_verifying_key().await?;
+                format!("{vk}")
             }
             Command::GetPaymail => {
                 let paymail = rpc_client.get_paymail().await?;

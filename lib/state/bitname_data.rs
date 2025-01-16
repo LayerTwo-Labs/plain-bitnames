@@ -1,12 +1,12 @@
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-use ed25519_dalek::VerifyingKey;
 use serde::{Deserialize, Serialize};
 
 use crate::{
     state::rollback::{RollBack, TxidStamped},
     types::{
         BitNameDataUpdates, BitNameSeqId, EncryptionPubKey, Hash, Txid, Update,
+        VerifyingKey,
     },
 };
 

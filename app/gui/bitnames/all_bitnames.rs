@@ -1,8 +1,13 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, HashMap},
+    str::FromStr,
+};
 
 use eframe::egui;
 use hex::FromHex;
-use plain_bitnames::types::{hashes::BitName, BitNameData, MutableBitNameData};
+use plain_bitnames::types::{
+    hashes::BitName, BitNameData, BitNameSeqId, MutableBitNameData,
+};
 
 use crate::{
     app::App,
@@ -35,10 +40,10 @@ fn show_bitname_data(
         .map_or("Not set".to_owned(), |ipv4_addr| ipv4_addr.to_string());
     let ipv6_addr = ipv6_addr
         .map_or("Not set".to_owned(), |ipv6_addr| ipv6_addr.to_string());
-    let encryption_pubkey = encryption_pubkey
-        .map_or("Not set".to_owned(), |epk| hex::encode(epk.0.as_bytes()));
-    let signing_pubkey = signing_pubkey
-        .map_or("Not set".to_owned(), |pk| hex::encode(pk.as_bytes()));
+    let encryption_pubkey =
+        encryption_pubkey.map_or("Not set".to_owned(), |epk| epk.to_string());
+    let signing_pubkey =
+        signing_pubkey.map_or("Not set".to_owned(), |svk| svk.to_string());
     let paymail_fee_sats = paymail_fee_sats
         .map_or("Not set".to_owned(), |paymail_fee| paymail_fee.to_string());
     ui.horizontal(|ui| {
@@ -105,6 +110,49 @@ fn show_bitname_with_data(
 }
 
 impl AllBitNames {
+    fn show_bitnames(
+        &mut self,
+        ui: &mut egui::Ui,
+        bitnames: Vec<(BitName, BitNameData)>,
+    ) {
+        let seq_id_to_bitname: HashMap<_, _> = bitnames
+            .iter()
+            .map(|(bitname, bitname_data)| (bitname_data.seq_id, *bitname))
+            .collect();
+        let bitnames = BTreeMap::from_iter(bitnames);
+        ui.horizontal(|ui| {
+            let query_edit = egui::TextEdit::singleline(&mut self.query)
+                .hint_text("Search by BitName, BitName ID, or sequence ID")
+                .desired_width(150.);
+            ui.add(query_edit);
+        });
+        if self.query.is_empty() {
+            bitnames.into_iter().for_each(|(bitname_id, bitname_data)| {
+                show_bitname_with_data(ui, &bitname_id, &bitname_data);
+            })
+        } else {
+            let name_hash = blake3::hash(self.query.as_bytes()).into();
+            let name_hash_pattern = BitName(name_hash);
+            if let Some(bitname_data) = bitnames.get(&name_hash_pattern) {
+                show_bitname_with_data(ui, &name_hash_pattern, bitname_data);
+            };
+            if let Ok(bitname_id_pattern) = BitName::from_hex(&self.query) {
+                if let Some(bitname_data) = bitnames.get(&bitname_id_pattern) {
+                    show_bitname_with_data(
+                        ui,
+                        &bitname_id_pattern,
+                        bitname_data,
+                    );
+                }
+            };
+            if let Ok(seq_id_pattern) = BitNameSeqId::from_str(&self.query) {
+                if let Some(bitname) = seq_id_to_bitname.get(&seq_id_pattern) {
+                    show_bitname_with_data(ui, bitname, &bitnames[bitname]);
+                }
+            }
+        }
+    }
+
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             let Some(app) = app else {
@@ -114,53 +162,7 @@ impl AllBitNames {
                 Err(node_err) => {
                     ui.monospace_selectable_multiline(node_err.to_string());
                 }
-                Ok(bitnames) => {
-                    let bitnames = BTreeMap::from_iter(bitnames);
-                    ui.horizontal(|ui| {
-                        let query_edit =
-                            egui::TextEdit::singleline(&mut self.query)
-                                .hint_text("Search")
-                                .desired_width(150.);
-                        ui.add(query_edit);
-                    });
-                    if self.query.is_empty() {
-                        bitnames.into_iter().for_each(
-                            |(bitname_id, bitname_data)| {
-                                show_bitname_with_data(
-                                    ui,
-                                    &bitname_id,
-                                    &bitname_data,
-                                );
-                            },
-                        )
-                    } else {
-                        let name_hash =
-                            blake3::hash(self.query.as_bytes()).into();
-                        let name_hash_pattern = BitName(name_hash);
-                        if let Some(bitname_data) =
-                            bitnames.get(&name_hash_pattern)
-                        {
-                            show_bitname_with_data(
-                                ui,
-                                &name_hash_pattern,
-                                bitname_data,
-                            );
-                        };
-                        if let Ok(bitname_id_pattern) =
-                            BitName::from_hex(&self.query)
-                        {
-                            if let Some(bitname_data) =
-                                bitnames.get(&bitname_id_pattern)
-                            {
-                                show_bitname_with_data(
-                                    ui,
-                                    &bitname_id_pattern,
-                                    bitname_data,
-                                );
-                            }
-                        }
-                    }
-                }
+                Ok(bitnames) => self.show_bitnames(ui, bitnames),
             }
         });
     }

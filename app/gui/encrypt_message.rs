@@ -8,7 +8,7 @@ use crate::app::App;
 
 #[derive(Debug)]
 pub struct EncryptMessage {
-    // pubkey or BitName
+    // Encryption pubkey or BitName
     receiver_input: String,
     // none if not yet set, otherwise result of parsing/resolving receiver pubkey
     receiver_pubkey: Option<anyhow::Result<EncryptionPubKey>>,
