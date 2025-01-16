@@ -3863,7 +3863,7 @@ checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
 
 [[package]]
 name = "plain_bitnames"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "addr",
  "anyhow",
@@ -3914,7 +3914,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -3959,7 +3959,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_cli"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -3974,7 +3974,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_rpc_api"
-version = "0.9.2"
+version = "0.9.3"
 dependencies = [
  "anyhow",
  "bitcoin",
