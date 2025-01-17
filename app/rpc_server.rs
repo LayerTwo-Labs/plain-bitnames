@@ -93,7 +93,7 @@ impl RpcServer for RpcServerImpl {
         &self,
         address: Address,
     ) -> RpcResult<String> {
-        let deposit_address = plain_bitnames::format_deposit_address(address);
+        let deposit_address = address.format_for_deposit();
         Ok(deposit_address)
     }
 
@@ -195,7 +195,7 @@ impl RpcServer for RpcServerImpl {
             .get_addresses()
             .map_err(convert_wallet_err)?;
         let mut res: Vec<_> = addrs.into_iter().collect();
-        res.sort_by_key(|addr| addr.to_base58());
+        res.sort_by_key(|addr| addr.as_base58());
         Ok(res)
     }
 

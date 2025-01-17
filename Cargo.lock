@@ -3863,7 +3863,7 @@ checksum = "953ec861398dccce10c670dfeaf3ec4911ca479e9c02154b3a215178c5f566f2"
 
 [[package]]
 name = "plain_bitnames"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "addr",
  "anyhow",
@@ -3897,7 +3897,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
- "sha256",
  "strum",
  "thiserror 2.0.11",
  "tiny-bip39",
@@ -3914,7 +3913,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -3959,7 +3958,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_cli"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -3976,7 +3975,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_rpc_api"
-version = "0.9.4"
+version = "0.9.5"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -4821,19 +4820,6 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
-]
-
-[[package]]
-name = "sha256"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "18278f6a914fa3070aa316493f7d2ddfb9ac86ebc06fa3b83bffda487e9065b0"
-dependencies = [
- "async-trait",
- "bytes",
- "hex",
- "sha2",
- "tokio",
 ]
 
 [[package]]
