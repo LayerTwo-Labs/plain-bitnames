@@ -50,15 +50,15 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             binary_ext: ""
-            cross: false
+            rustflags: ""
           - os: macos-latest
             target: x86_64-apple-darwin
             binary_ext: ""
-            cross: false
+            rustflags: ""
           - os: ubuntu-latest
             target: x86_64-pc-windows-gnu
             binary_ext: ".exe"
-            cross: true
+            rustflags: "-C linker=/usr/bin/x86_64-w64-mingw32-gcc"
 
     steps:
       - uses: actions/checkout@v4
@@ -72,21 +72,16 @@ jobs:
           targets: ${{ matrix.platform.target }}
 
       - name: Install mingw-w64 (Windows cross-compile only)
-        if: matrix.platform.cross
+        if: ${{ matrix.platform.target == 'x86_64-pc-windows-gnu' }}
         run: sudo apt install mingw-w64
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.5.1
 
       - name: Build
-        run: |
-          if [ "${{ matrix.platform.cross }}" = "true" ]; then
-            cargo build --release --target ${{ matrix.platform.target }} \
-              --target-dir target/${{ matrix.platform.target }} \
-              env RUSTFLAGS="-C linker=/usr/bin/x86_64-w64-mingw32-gcc"
-          else
-            cargo build --release
-          fi
+        env:
+          RUSTFLAGS: ${{ matrix.platform.rustflags }}
+        run: cargo build --release --target ${{ matrix.platform.target }} 
 
       - name: 'Set environment variables: version number and output filenames'
         run: |
