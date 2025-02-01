@@ -85,29 +85,16 @@ jobs:
 
       - name: 'Set environment variables: version number and output filenames'
         run: |
-          BITNAMES_APP_VERSION=$(cargo metadata --format-version 1 | \
+          APP_VERSION=$(cargo metadata --format-version 1 | \
             jq -er '.packages | map(select(.name == "plain_bitnames_app") | .version) | .[0]')
-          BITNAMES_APP_FILENAME="bitnames-${BITNAMES_APP_VERSION}-${{ matrix.platform.target }}${{ matrix.platform.binary_ext }}"
-          BITNAMES_CLI_FILENAME="bitnames-cli-${BITNAMES_APP_VERSION}-${{ matrix.platform.target }}${{ matrix.platform.binary_ext }}"
-          echo "BITNAMES_APP_VERSION=$BITNAMES_APP_VERSION" >> "$GITHUB_ENV"
-          echo "BITNAMES_APP_FILENAME=$BITNAMES_APP_FILENAME" >> "$GITHUB_ENV"
-          echo "BITNAMES_CLI_FILENAME=$BITNAMES_CLI_FILENAME" >> "$GITHUB_ENV"
-
-      - name: 'Set filenames for release binaries'
-        run: |
-          echo BITNAMES_APP_FILENAME $BITNAMES_APP_FILENAME
-          echo BITNAMES_CLI_FILENAME $BITNAMES_CLI_FILENAME
-          apt install tree
-          tree target
-          
-          if [ "${{ matrix.platform.target }}" = "x86_64-pc-windows-gnu" ]; then
-            pushd "target/${{ matrix.platform.target }}/release"
-          else
-            pushd "target/release"
-          fi
-          ln -fs "plain_bitnames_app${{ matrix.platform.binary_ext }}" "${BITNAMES_APP_FILENAME}"
-          ln -fs "plain_bitnames_app_cli${{ matrix.platform.binary_ext }}" "${BITNAMES_CLI_FILENAME}"
-          popd
+          APP_DIRNAME="bitnames-${APP_VERSION}-${{ matrix.name }}"
+          APP_FILENAME="${APP_DIRNAME}${{ matrix.binary-suffix }}"
+          echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
+          echo "APP_FILENAME=$APP_FILENAME" >> "$GITHUB_ENV"
+          echo "APP_DIRNAME=$APP_DIRNAME" >> "$GITHUB_ENV"
+      - run: |
+          mkdir release
+          cp target/${{ matrix.name }}/release/bitnames{{ matrix.binary-suffix }} release/${{ env.APP_FILENAME }}
 
       - name: 'Upload Artifacts (bitnames)'
         uses: actions/upload-artifact@v4
@@ -122,8 +109,7 @@ jobs:
         with:
           fail_on_unmatched_files: true
           files: |
-            ${{ matrix.platform.cross && format('target/{0}/release/{1}', matrix.platform.target, env.BITNAMES_APP_FILENAME) || format('target/release/{0}', env.BITNAMES_APP_FILENAME) }}
-            ${{ matrix.platform.cross && format('target/{0}/release/{1}', matrix.platform.target, env.BITNAMES_CLI_FILENAME) || format('target/release/{0}', env.BITNAMES_CLI_FILENAME) }}
+            release/${{ env.APP_FILENAME }}
 
   upload-releases-to-releases-drivechain-info:
     name: Upload releases to releases.drivechain.info
