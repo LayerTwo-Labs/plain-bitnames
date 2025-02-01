@@ -97,7 +97,7 @@ jobs:
         run: |
           echo BITNAMES_APP_FILENAME $BITNAMES_APP_FILENAME
           echo BITNAMES_CLI_FILENAME $BITNAMES_CLI_FILENAME
-          ls -la target/release
+          tree target
           
           if [ "${{ matrix.platform.target }}" = "x86_64-pc-windows-gnu" ]; then
             pushd "target/${{ matrix.platform.target }}/release"
