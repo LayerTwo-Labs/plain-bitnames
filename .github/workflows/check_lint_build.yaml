@@ -12,8 +12,6 @@ jobs:
     permissions:
       contents: write
     timeout-minutes: 20
-    # env:
-    #  RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,147 +37,76 @@ jobs:
       - name: Deny
         uses: EmbarkStudios/cargo-deny-action@v2
 
-      - name: Build
-        run: cargo build --release
-
-      - name: 'Set environment variables: version number and output filenames'
-        run: |
-          BITNAMES_APP_VERSION=$(cargo metadata --format-version 1 | \
-            jq -er '.packages | map(select(.name == "plain_bitnames_app") | .version) | .[0]')
-          BITNAMES_APP_FILENAME="bitnames-${BITNAMES_APP_VERSION}-x86_64-unknown-linux-gnu"
-          BITNAMES_CLI_FILENAME="bitnames-cli-${BITNAMES_APP_VERSION}-x86_64-unknown-linux-gnu"
-          echo "BITNAMES_APP_VERSION=$BITNAMES_APP_VERSION" >> "$GITHUB_ENV"
-          echo "BITNAMES_APP_FILENAME=$BITNAMES_APP_FILENAME" >> "$GITHUB_ENV"
-          echo "BITNAMES_CLI_FILENAME=$BITNAMES_CLI_FILENAME" >> "$GITHUB_ENV"
-
-      - name: 'Set filenames for release binaries'
-        run: |
-          pushd "target/release"
-          ln -fs "plain_bitnames_app" "${BITNAMES_APP_FILENAME}"
-          ln -fs "plain_bitnames_app_cli" "${BITNAMES_CLI_FILENAME}"
-          popd
-
-      - name: 'Upload Artifacts (bitnames)'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.BITNAMES_APP_FILENAME }}
-          if-no-files-found: error
-          path: |
-            target/release/${{ env.BITNAMES_APP_FILENAME }}
-            target/release/${{ env.BITNAMES_CLI_FILENAME }}
-
-      - name: Release
-        uses: softprops/action-gh-release@v2.0.2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          fail_on_unmatched_files: true
-          files: |
-            target/release/${{ env.BITNAMES_APP_FILENAME }}
-            target/release/${{ env.BITNAMES_CLI_FILENAME }}
-  
-  build-macos:
-    name: Build (macos-x86_64)
-    runs-on: macos-latest
+  build-platform:
+    name: Build (${{ matrix.platform.target }})
+    runs-on: ${{ matrix.platform.os }}
+    needs: check-lint-build-stable
     permissions:
       contents: write
     timeout-minutes: 20
-    # env:
-    #  RUSTFLAGS: -D warnings
+    strategy:
+      matrix:
+        platform:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            binary_ext: ""
+            cross: false
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            binary_ext: ""
+            cross: false
+          - os: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            binary_ext: ".exe"
+            cross: true
+
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
       - name: Install latest nightly toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly
+          targets: ${{ matrix.platform.target }}
 
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2.5.1
-
-      - name: Build
-        run: cargo build --release
-
-      - name: 'Set environment variables: version number and output filenames'
-        run: |
-          BITNAMES_APP_VERSION=$(cargo metadata --format-version 1 | \
-            jq -er '.packages | map(select(.name == "plain_bitnames_app") | .version) | .[0]')
-          BITNAMES_APP_FILENAME="bitnames-${BITNAMES_APP_VERSION}-x86_64-apple-darwin"
-          BITNAMES_CLI_FILENAME="bitnames-cli-${BITNAMES_APP_VERSION}-x86_64-apple-darwin"
-          echo "BITNAMES_APP_VERSION=$BITNAMES_APP_VERSION" >> "$GITHUB_ENV"
-          echo "BITNAMES_APP_FILENAME=$BITNAMES_APP_FILENAME" >> "$GITHUB_ENV"
-          echo "BITNAMES_CLI_FILENAME=$BITNAMES_CLI_FILENAME" >> "$GITHUB_ENV"
-
-      - name: 'set filenames for release binaries'
-        run: |
-          pushd "target/release"
-          ln -fs "plain_bitnames_app" "${BITNAMES_APP_FILENAME}"
-          ln -fs "plain_bitnames_app_cli" "${BITNAMES_CLI_FILENAME}"
-          popd
-
-      - name: 'Upload Artifacts (bitnames)'
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.BITNAMES_APP_FILENAME }}
-          if-no-files-found: error
-          path: |
-            target/release/${{ env.BITNAMES_APP_FILENAME }}
-            target/release/${{ env.BITNAMES_CLI_FILENAME }}
-
-      - name: Release
-        uses: softprops/action-gh-release@v2.0.2
-        if: startsWith(github.ref, 'refs/tags/')
-        with:
-          fail_on_unmatched_files: true
-          files: |
-            target/release/${{ env.BITNAMES_APP_FILENAME }}
-            target/release/${{ env.BITNAMES_CLI_FILENAME }}
-
-  build-windows:
-    name: Build (x86_64-pc-windows-gnu)
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    timeout-minutes: 20
-    # env:
-    #  RUSTFLAGS: -D warnings
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-      - name: Install latest nightly toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly
-          targets: x86_64-pc-windows-gnu
-
-        
-      - name: Install mingw-w64
+      - name: Install mingw-w64 (Windows cross-compile only)
+        if: matrix.platform.cross
         run: sudo apt install mingw-w64
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.5.1
 
       - name: Build
-        run: cargo build --release --target x86_64-pc-windows-gnu
-        env:
-          RUSTFLAGS: "-C linker=/usr/bin/x86_64-w64-mingw32-gcc"
+        run: |
+          if [ "${{ matrix.platform.cross }}" = "true" ]; then
+            cargo build --release --target ${{ matrix.platform.target }} \
+              --target-dir target/${{ matrix.platform.target }} \
+              env RUSTFLAGS="-C linker=/usr/bin/x86_64-w64-mingw32-gcc"
+          else
+            cargo build --release
+          fi
 
       - name: 'Set environment variables: version number and output filenames'
         run: |
           BITNAMES_APP_VERSION=$(cargo metadata --format-version 1 | \
             jq -er '.packages | map(select(.name == "plain_bitnames_app") | .version) | .[0]')
-          BITNAMES_APP_FILENAME="bitnames-${BITNAMES_APP_VERSION}-x86_64-pc-windows-gnu.exe"
-          BITNAMES_CLI_FILENAME="bitnames-cli-${BITNAMES_APP_VERSION}-x86_64-pc-windows-gnu.exe"
+          BITNAMES_APP_FILENAME="bitnames-${BITNAMES_APP_VERSION}-${{ matrix.platform.target }}${{ matrix.platform.binary_ext }}"
+          BITNAMES_CLI_FILENAME="bitnames-cli-${BITNAMES_APP_VERSION}-${{ matrix.platform.target }}${{ matrix.platform.binary_ext }}"
           echo "BITNAMES_APP_VERSION=$BITNAMES_APP_VERSION" >> "$GITHUB_ENV"
           echo "BITNAMES_APP_FILENAME=$BITNAMES_APP_FILENAME" >> "$GITHUB_ENV"
           echo "BITNAMES_CLI_FILENAME=$BITNAMES_CLI_FILENAME" >> "$GITHUB_ENV"
 
-      - name: 'set filenames for release binaries'
+      - name: 'Set filenames for release binaries'
         run: |
-          pushd "target/x86_64-pc-windows-gnu/release"
-          ln -fs "plain_bitnames_app.exe" "${BITNAMES_APP_FILENAME}"
-          ln -fs "plain_bitnames_app_cli.exe" "${BITNAMES_CLI_FILENAME}"
+          if [ "${{ matrix.platform.cross }}" = "true" ]; then
+            pushd "target/${{ matrix.platform.target }}/release"
+          else
+            pushd "target/release"
+          fi
+          ln -fs "plain_bitnames_app${{ matrix.platform.binary_ext }}" "${BITNAMES_APP_FILENAME}"
+          ln -fs "plain_bitnames_app_cli${{ matrix.platform.binary_ext }}" "${BITNAMES_CLI_FILENAME}"
           popd
 
       - name: 'Upload Artifacts (bitnames)'
@@ -188,8 +115,8 @@ jobs:
           name: ${{ env.BITNAMES_APP_FILENAME }}
           if-no-files-found: error
           path: |
-            target/x86_64-pc-windows-gnu/release/${{ env.BITNAMES_APP_FILENAME }}
-            target/x86_64-pc-windows-gnu/release/${{ env.BITNAMES_CLI_FILENAME }}
+            ${{ matrix.platform.cross && format('target/{0}/release/{1}', matrix.platform.target, env.BITNAMES_APP_FILENAME) || format('target/release/{0}', env.BITNAMES_APP_FILENAME) }}
+            ${{ matrix.platform.cross && format('target/{0}/release/{1}', matrix.platform.target, env.BITNAMES_CLI_FILENAME) || format('target/release/{0}', env.BITNAMES_CLI_FILENAME) }}
 
       - name: Release
         uses: softprops/action-gh-release@v2.0.2
@@ -197,13 +124,13 @@ jobs:
         with:
           fail_on_unmatched_files: true
           files: |
-            target/x86_64-pc-windows-gnu/release/${{ env.BITNAMES_APP_FILENAME }}
-            target/x86_64-pc-windows-gnu/release/${{ env.BITNAMES_CLI_FILENAME }}
-  
+            ${{ matrix.platform.cross && format('target/{0}/release/{1}', matrix.platform.target, env.BITNAMES_APP_FILENAME) || format('target/release/{0}', env.BITNAMES_APP_FILENAME) }}
+            ${{ matrix.platform.cross && format('target/{0}/release/{1}', matrix.platform.target, env.BITNAMES_CLI_FILENAME) || format('target/release/{0}', env.BITNAMES_CLI_FILENAME) }}
+
   upload-releases-to-releases-drivechain-info:
     name: Upload releases to releases.drivechain.info
     runs-on: ubuntu-latest
-    needs: [check-lint-build-stable, build-macos, build-windows]
+    needs: [build-platform]
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Download release assets
