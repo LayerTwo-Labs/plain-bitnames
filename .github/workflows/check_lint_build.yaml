@@ -87,14 +87,14 @@ jobs:
         run: |
           APP_VERSION=$(cargo metadata --format-version 1 | \
             jq -er '.packages | map(select(.name == "plain_bitnames_app") | .version) | .[0]')
-          APP_DIRNAME="bitnames-${APP_VERSION}-${{ matrix.name }}"
+          APP_DIRNAME="bitnames-${APP_VERSION}-${{ matrix.target }}"
           APP_FILENAME="${APP_DIRNAME}${{ matrix.binary-suffix }}"
           echo "APP_VERSION=$APP_VERSION" >> "$GITHUB_ENV"
           echo "APP_FILENAME=$APP_FILENAME" >> "$GITHUB_ENV"
           echo "APP_DIRNAME=$APP_DIRNAME" >> "$GITHUB_ENV"
       - run: |
           mkdir release
-          cp target/${{ matrix.name }}/release/bitnames{{ matrix.binary-suffix }} release/${{ env.APP_FILENAME }}
+          cp target/${{ matrix.target }}/release/bitnames{{ matrix.binary-suffix }} release/${{ env.APP_FILENAME }}
 
       - name: 'Upload Artifacts (bitnames)'
         uses: actions/upload-artifact@v4
