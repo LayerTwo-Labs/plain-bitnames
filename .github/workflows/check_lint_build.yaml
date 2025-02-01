@@ -97,6 +97,7 @@ jobs:
         run: |
           echo BITNAMES_APP_FILENAME $BITNAMES_APP_FILENAME
           echo BITNAMES_CLI_FILENAME $BITNAMES_CLI_FILENAME
+          apt install tree
           tree target
           
           if [ "${{ matrix.platform.target }}" = "x86_64-pc-windows-gnu" ]; then
@@ -114,8 +115,6 @@ jobs:
           name: ${{ env.BITNAMES_APP_FILENAME }}
           if-no-files-found: error
           path: |
-            ${{ matrix.platform.cross && format('target/{0}/release/{1}', matrix.platform.target, env.BITNAMES_APP_FILENAME) || format('target/release/{0}', env.BITNAMES_APP_FILENAME) }}
-            ${{ matrix.platform.cross && format('target/{0}/release/{1}', matrix.platform.target, env.BITNAMES_CLI_FILENAME) || format('target/release/{0}', env.BITNAMES_CLI_FILENAME) }}
 
       - name: Release
         uses: softprops/action-gh-release@v2.0.2
