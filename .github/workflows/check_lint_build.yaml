@@ -95,7 +95,11 @@ jobs:
 
       - name: 'Set filenames for release binaries'
         run: |
-          if [ "${{ matrix.platform.cross }}" = "true" ]; then
+          echo BITNAMES_APP_FILENAME $BITNAMES_APP_FILENAME
+          echo BITNAMES_CLI_FILENAME $BITNAMES_CLI_FILENAME
+          ls -la target/release
+          
+          if [ "${{ matrix.platform.target }}" = "x86_64-pc-windows-gnu" ]; then
             pushd "target/${{ matrix.platform.target }}/release"
           else
             pushd "target/release"
