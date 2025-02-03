@@ -72,8 +72,10 @@ fn update(
     utxos: &mut HashMap<OutPoint, FilledOutput>,
     wallet: &Wallet,
 ) -> Result<(), Error> {
+    tracing::trace!("Updating wallet");
     let () = update_wallet(node, wallet)?;
     *utxos = wallet.get_utxos()?;
+    tracing::trace!("Updated wallet");
     Ok(())
 }
 
@@ -311,7 +313,9 @@ impl App {
                 inbox_whitelist.contains(bitname)
             })
         };
-        let tip = self.node.get_tip()?;
+        let Some(tip) = self.node.try_get_tip()? else {
+            return Ok(HashMap::new());
+        };
         let outpoints_to_block_heights: HashMap<_, _> = utxos
             .iter()
             .map(|(&outpoint, _)| outpoint)
@@ -457,7 +461,7 @@ impl App {
             let txs = txs.into_iter().map(|tx| tx.into()).collect();
             Body::new(txs, coinbase)
         };
-        let prev_side_hash = self.node.get_tip()?;
+        let prev_side_hash = self.node.try_get_tip()?;
         let prev_main_hash = {
             let mut miner_write = miner.write().await;
             let prev_main_hash =

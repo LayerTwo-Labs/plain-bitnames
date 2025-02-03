@@ -14,7 +14,6 @@ use super::serde_hexstr_human_readable;
     BorshDeserialize,
     Clone,
     Copy,
-    Default,
     Deserialize,
     Eq,
     Hash,

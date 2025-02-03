@@ -10,10 +10,10 @@ pub enum InvalidHeader {
         expected: BlockHash,
         computed: BlockHash,
     },
-    #[error("expected previous sidechain block hash {expected}, but received {received}")]
+    #[error("expected previous sidechain block hash {expected:?}, but received {received:?}")]
     PrevSideHash {
-        expected: BlockHash,
-        received: BlockHash,
+        expected: Option<BlockHash>,
+        received: Option<BlockHash>,
     },
 }
 
