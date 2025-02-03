@@ -93,6 +93,16 @@ pub trait Rpc {
     #[method(name = "get_block")]
     async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block>;
 
+    /// Get mainchain blocks that commit to a specified block hash
+    #[open_api_method(output_schema(
+        PartialSchema = "bitnames_schema::BitcoinBlockHash"
+    ))]
+    #[method(name = "get_bmm_inclusions")]
+    async fn get_bmm_inclusions(
+        &self,
+        block_hash: plain_bitnames::types::BlockHash,
+    ) -> RpcResult<Vec<bitcoin::BlockHash>>;
+
     /// Get a new address
     #[method(name = "get_new_address")]
     async fn get_new_address(&self) -> RpcResult<Address>;
