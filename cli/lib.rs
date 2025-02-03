@@ -44,6 +44,8 @@ pub enum Command {
     GetWalletAddresses,
     /// Get wallet UTXOs
     GetWalletUtxos,
+    /// List peers
+    ListPeers,
     /// List all UTXOs
     ListUtxos,
     /// Attempt to mine a sidechain block
@@ -202,6 +204,10 @@ impl Cli {
             Command::GetWalletUtxos => {
                 let utxos = rpc_client.get_wallet_utxos().await?;
                 serde_json::to_string_pretty(&utxos)?
+            }
+            Command::ListPeers => {
+                let peers = rpc_client.list_peers().await?;
+                serde_json::to_string_pretty(&peers)?
             }
             Command::ListUtxos => {
                 let utxos = rpc_client.list_utxos().await?;
