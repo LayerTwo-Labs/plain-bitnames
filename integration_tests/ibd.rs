@@ -15,7 +15,10 @@ use plain_bitnames_app_rpc_api::RpcClient as _;
 use tokio::time::sleep;
 use tracing::Instrument as _;
 
-use crate::{setup::PostSetup, util::BinPaths};
+use crate::{
+    setup::{Init, PostSetup},
+    util::BinPaths,
+};
 
 #[derive(Debug)]
 struct BitNamesNodes {
@@ -38,15 +41,24 @@ async fn setup(
     )
     .await?;
     let sidechain_sender = PostSetup::setup(
-        bin_paths.bitnames.clone(),
+        Init {
+            bitnames_app: bin_paths.bitnames.clone(),
+            data_dir_suffix: Some("sender".to_owned()),
+        },
         &enforcer_post_setup,
         res_tx.clone(),
     )
     .await?;
     tracing::info!("Setup BitNames send node successfully");
-    let sidechain_syncer =
-        PostSetup::setup(bin_paths.bitnames, &enforcer_post_setup, res_tx)
-            .await?;
+    let sidechain_syncer = PostSetup::setup(
+        Init {
+            bitnames_app: bin_paths.bitnames.clone(),
+            data_dir_suffix: Some("syncer".to_owned()),
+        },
+        &enforcer_post_setup,
+        res_tx,
+    )
+    .await?;
     tracing::info!("Setup BitNames sync node successfully");
     let bitnames_nodes = BitNamesNodes {
         sender: sidechain_sender,
