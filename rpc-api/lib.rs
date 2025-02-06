@@ -5,6 +5,7 @@ use std::{collections::HashMap, net::SocketAddr};
 use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use l2l_openapi::open_api;
 use plain_bitnames::{
+    net::{Peer, PeerConnectionStatus},
     types::{
         hashes::BitName, schema as bitnames_schema, Address, Authorization,
         BatchIcannRegistrationData, BitNameData, BitNameDataUpdates,
@@ -33,11 +34,12 @@ pub struct TxInfo {
 #[open_api(ref_schemas[
     bitnames_schema::BitcoinAddr, bitnames_schema::BitcoinBlockHash,
     bitnames_schema::BitcoinOutPoint, bitnames_schema::BitcoinTransaction,
+    bitnames_schema::SocketAddr,
     Address, Authorization, BatchIcannRegistrationData, BitName,
     BitNameDataUpdates, BitNameSeqId, BlockHash, Body, EncryptionPubKey,
     FilledOutput, FilledOutputContent, Header, MerkleRoot, MutableBitNameData,
-    OutPoint, Output, OutputContent, Transaction, TransactionData, Txid, TxIn,
-    VerifyingKey,
+    OutPoint, Output, OutputContent, PeerConnectionStatus, Transaction,
+    TransactionData, Txid, TxIn, VerifyingKey,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -73,7 +75,9 @@ pub trait Rpc {
     #[method(name = "connect_peer")]
     async fn connect_peer(
         &self,
-        #[open_api_method_arg(schema(ToSchema = "schema::SocketAddr"))]
+        #[open_api_method_arg(schema(
+            ToSchema = "bitnames_schema::SocketAddr"
+        ))]
         addr: SocketAddr,
     ) -> RpcResult<()>;
 
@@ -154,10 +158,8 @@ pub trait Rpc {
     ) -> RpcResult<Option<u32>>;
 
     /// List peers
-    /// TODO: Use schema::SocketAddr. Cannot get it to work. Also, add more info about peers
-    #[open_api_method(output_schema(PartialSchema = "schema::SocketAddr"))]
     #[method(name = "list_peers")]
-    async fn list_peers(&self) -> RpcResult<Vec<SocketAddr>>;
+    async fn list_peers(&self) -> RpcResult<Vec<Peer>>;
 
     /// List all UTXOs
     #[open_api_method(output_schema(

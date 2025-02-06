@@ -78,7 +78,13 @@ async fn check_peer_connection(
     bitnames_setup: &PostSetup,
     expected_peer: SocketAddr,
 ) -> anyhow::Result<()> {
-    let peers = bitnames_setup.rpc_client.list_peers().await?;
+    let peers = bitnames_setup
+        .rpc_client
+        .list_peers()
+        .await?
+        .iter()
+        .map(|p| p.address)
+        .collect::<Vec<_>>();
     if peers.contains(&expected_peer) {
         Ok(())
     } else {

@@ -41,12 +41,3 @@ impl PartialSchema for OpenApi {
         RefOr::T(Schema::Object(obj))
     }
 }
-
-pub struct SocketAddr;
-
-impl PartialSchema for SocketAddr {
-    fn schema() -> RefOr<Schema> {
-        let obj = utoipa::openapi::Object::with_type(openapi::Type::String);
-        RefOr::T(Schema::Object(obj))
-    }
-}
