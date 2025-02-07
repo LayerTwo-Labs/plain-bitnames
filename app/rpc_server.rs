@@ -12,7 +12,7 @@ use plain_bitnames::{
     types::{
         hashes::BitName, Address, BitNameData, Block, BlockHash,
         EncryptionPubKey, FilledOutput, OutPoint, PointedOutput, Transaction,
-        Txid, VerifyingKey,
+        Txid, VerifyingKey, WithdrawalBundle,
     },
     wallet::{self, Balance},
 };
@@ -24,26 +24,34 @@ pub struct RpcServerImpl {
     app: App,
 }
 
-fn custom_err(err_msg: impl Into<String>) -> ErrorObject<'static> {
+fn custom_err_msg(err_msg: impl Into<String>) -> ErrorObject<'static> {
     ErrorObject::owned(-1, err_msg.into(), Option::<()>::None)
+}
+
+fn custom_err<Error>(error: Error) -> ErrorObject<'static>
+where
+    anyhow::Error: From<Error>,
+{
+    let error = anyhow::Error::from(error);
+    custom_err_msg(format!("{error:#}"))
 }
 
 fn convert_app_err(err: app::Error) -> ErrorObject<'static> {
     let err = anyhow::anyhow!(err);
     tracing::error!("{err:#}");
-    custom_err(err.to_string())
+    custom_err(err)
 }
 
 fn convert_node_err(err: node::Error) -> ErrorObject<'static> {
     let err = anyhow::anyhow!(err);
     tracing::error!("{err:#}");
-    custom_err(err.to_string())
+    custom_err(err)
 }
 
 fn convert_wallet_err(err: wallet::Error) -> ErrorObject<'static> {
     let err = anyhow::anyhow!(err);
     tracing::error!("{err:#}");
-    custom_err(err.to_string())
+    custom_err(err)
 }
 
 #[async_trait]
@@ -114,6 +122,16 @@ impl RpcServer for RpcServerImpl {
         Ok(block)
     }
 
+    async fn get_bmm_inclusions(
+        &self,
+        block_hash: plain_bitnames::types::BlockHash,
+    ) -> RpcResult<Vec<bitcoin::BlockHash>> {
+        self.app
+            .node
+            .get_bmm_inclusions(block_hash)
+            .map_err(custom_err)
+    }
+
     async fn get_new_address(&self) -> RpcResult<Address> {
         self.app
             .wallet
@@ -163,8 +181,12 @@ impl RpcServer for RpcServerImpl {
         };
         let confirmations = match txin {
             Some(txin) => {
-                let tip_height =
-                    self.app.node.get_tip_height().map_err(convert_node_err)?;
+                let tip_height = self
+                    .app
+                    .node
+                    .try_get_tip_height()
+                    .map_err(convert_node_err)?
+                    .expect("Height should exist for tip");
                 let height = self
                     .app
                     .node
@@ -177,7 +199,7 @@ impl RpcServer for RpcServerImpl {
         let fee_sats = filled_tx
             .transaction
             .fee()
-            .map_err(|err| custom_err(format!("{err:#}")))?
+            .map_err(custom_err)?
             .unwrap()
             .to_sat();
         let res = TxInfo {
@@ -211,7 +233,29 @@ impl RpcServer for RpcServerImpl {
     }
 
     async fn getblockcount(&self) -> RpcResult<u32> {
-        self.app.node.get_tip_height().map_err(convert_node_err)
+        let height = self
+            .app
+            .node
+            .try_get_tip_height()
+            .map_err(convert_node_err)?;
+        let block_count = height.map_or(0, |height| height + 1);
+        Ok(block_count)
+    }
+
+    async fn latest_failed_withdrawal_bundle_height(
+        &self,
+    ) -> RpcResult<Option<u32>> {
+        let height = self
+            .app
+            .node
+            .get_latest_failed_withdrawal_bundle_height()
+            .map_err(convert_node_err)?;
+        Ok(height)
+    }
+
+    async fn list_peers(&self) -> RpcResult<Vec<SocketAddr>> {
+        let peers = self.app.node.get_active_peers();
+        Ok(peers)
     }
 
     async fn list_utxos(&self) -> RpcResult<Vec<PointedOutput<FilledOutput>>> {
@@ -247,6 +291,15 @@ impl RpcServer for RpcServerImpl {
         let res =
             <plain_bitnames_app_rpc_api::RpcDoc as utoipa::OpenApi>::openapi();
         Ok(res)
+    }
+
+    async fn pending_withdrawal_bundle(
+        &self,
+    ) -> RpcResult<Option<WithdrawalBundle>> {
+        self.app
+            .node
+            .get_pending_withdrawal_bundle()
+            .map_err(convert_node_err)
     }
 
     async fn reserve_bitname(&self, plain_name: String) -> RpcResult<Txid> {
@@ -290,8 +343,7 @@ impl RpcServer for RpcServerImpl {
         let memo = match memo {
             None => None,
             Some(memo) => {
-                let hex = hex::decode(memo)
-                    .map_err(|err| custom_err(err.to_string()))?;
+                let hex = hex::decode(memo).map_err(custom_err)?;
                 Some(hex)
             }
         };

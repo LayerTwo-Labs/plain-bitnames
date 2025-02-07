@@ -44,7 +44,7 @@ impl<T> RollBack<HeightStamped<T>> {
     /// Attempt to push a value as the new most recent.
     /// Returns the value if the operation fails.
     pub fn push(&mut self, value: T, height: u32) -> Result<(), T> {
-        if self.0.last().height >= height {
+        if self.0.last().height > height {
             return Err(value);
         }
         let height_stamped = HeightStamped { value, height };

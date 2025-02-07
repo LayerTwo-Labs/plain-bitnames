@@ -7,10 +7,11 @@ use l2l_openapi::open_api;
 use plain_bitnames::{
     types::{
         hashes::BitName, schema as bitnames_schema, Address, Authorization,
-        BatchIcannRegistrationData, BitNameData, BitNameDataUpdates, Block,
-        BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
-        Header, MerkleRoot, OutPoint, Output, OutputContent, PointedOutput,
-        Transaction, TransactionData, TxIn, Txid, VerifyingKey,
+        BatchIcannRegistrationData, BitNameData, BitNameDataUpdates,
+        BitNameSeqId, Block, BlockHash, Body, EncryptionPubKey, FilledOutput,
+        FilledOutputContent, Header, MerkleRoot, MutableBitNameData, OutPoint,
+        Output, OutputContent, PointedOutput, Transaction, TransactionData,
+        TxIn, Txid, VerifyingKey, WithdrawalBundle,
     },
     wallet::Balance,
 };
@@ -31,10 +32,12 @@ pub struct TxInfo {
 
 #[open_api(ref_schemas[
     bitnames_schema::BitcoinAddr, bitnames_schema::BitcoinBlockHash,
-    bitnames_schema::BitcoinOutPoint, Address, Authorization,
-    BatchIcannRegistrationData, BitName, BitNameData, BitNameDataUpdates,
-    BlockHash, Body, FilledOutput, FilledOutputContent, Header, MerkleRoot,
+    bitnames_schema::BitcoinOutPoint, bitnames_schema::BitcoinTransaction,
+    Address, Authorization, BatchIcannRegistrationData, BitName,
+    BitNameDataUpdates, BitNameSeqId, BlockHash, Body, EncryptionPubKey,
+    FilledOutput, FilledOutputContent, Header, MerkleRoot, MutableBitNameData,
     OutPoint, Output, OutputContent, Transaction, TransactionData, Txid, TxIn,
+    VerifyingKey,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -90,6 +93,16 @@ pub trait Rpc {
     #[method(name = "get_block")]
     async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block>;
 
+    /// Get mainchain blocks that commit to a specified block hash
+    #[open_api_method(output_schema(
+        PartialSchema = "bitnames_schema::BitcoinBlockHash"
+    ))]
+    #[method(name = "get_bmm_inclusions")]
+    async fn get_bmm_inclusions(
+        &self,
+        block_hash: plain_bitnames::types::BlockHash,
+    ) -> RpcResult<Vec<bitcoin::BlockHash>>;
+
     /// Get a new address
     #[method(name = "get_new_address")]
     async fn get_new_address(&self) -> RpcResult<Address>;
@@ -134,6 +147,18 @@ pub trait Rpc {
     #[method(name = "getblockcount")]
     async fn getblockcount(&self) -> RpcResult<u32>;
 
+    /// Get the height of the latest failed withdrawal bundle
+    #[method(name = "latest_failed_withdrawal_bundle_height")]
+    async fn latest_failed_withdrawal_bundle_height(
+        &self,
+    ) -> RpcResult<Option<u32>>;
+
+    /// List peers
+    /// TODO: Use schema::SocketAddr. Cannot get it to work. Also, add more info about peers
+    #[open_api_method(output_schema(PartialSchema = "schema::SocketAddr"))]
+    #[method(name = "list_peers")]
+    async fn list_peers(&self) -> RpcResult<Vec<SocketAddr>>;
+
     /// List all UTXOs
     #[open_api_method(output_schema(
         ToSchema = "Vec<PointedOutput<FilledOutputContent>>"
@@ -149,6 +174,13 @@ pub trait Rpc {
     /// List owned UTXOs
     #[method(name = "my_utxos")]
     async fn my_utxos(&self) -> RpcResult<Vec<PointedOutput<FilledOutput>>>;
+
+    /// Get pending withdrawal bundle
+    #[open_api_method(output_schema(ToSchema))]
+    #[method(name = "pending_withdrawal_bundle")]
+    async fn pending_withdrawal_bundle(
+        &self,
+    ) -> RpcResult<Option<WithdrawalBundle>>;
 
     /// Get OpenRPC schema
     #[open_api_method(output_schema(ToSchema = "schema::OpenApi"))]
