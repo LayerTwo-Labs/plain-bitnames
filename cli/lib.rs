@@ -1,13 +1,17 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::LazyLock,
+    time::Duration,
+};
 
 use clap::{Parser, Subcommand};
 use http::HeaderMap;
 use jsonrpsee::core::client::ClientT;
 use jsonrpsee::http_client::HttpClientBuilder;
-use plain_bitnames::types::{Address, BitName, BlockHash};
+use plain_bitnames::types::{Address, BitName, BlockHash, THIS_SIDECHAIN};
 use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
-
 use tracing_subscriber::layer::SubscriberExt as _;
+use url::Url;
 
 #[derive(Clone, Debug, Subcommand)]
 #[command(arg_required_else_help(true))]
@@ -141,6 +145,15 @@ where
     Ok(bitname_commit.remove(&field_name))
 }
 
+const DEFAULT_RPC_ADDR: SocketAddr = SocketAddr::new(
+    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+    6000 + THIS_SIDECHAIN as u16,
+);
+
+static DEFAULT_RPC_URL: LazyLock<Url> = LazyLock::new(|| {
+    Url::parse(&format!("http://{DEFAULT_RPC_ADDR}")).unwrap()
+});
+
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Clone, Debug, Parser)]
@@ -151,9 +164,9 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Command,
-    /// address for use by the RPC server
-    #[arg(default_value = "http://127.0.0.1:6002", long)]
-    pub rpc_url: url::Url,
+    /// Base URL used for requests to the RPC server.
+    #[arg(default_value_t = DEFAULT_RPC_URL.clone(), long)]
+    pub rpc_url: Url,
     /// Timeout for RPC requests in seconds.
     #[arg(default_value_t = DEFAULT_TIMEOUT_SECS, long = "timeout")]
     timeout_secs: u64,
@@ -162,7 +175,7 @@ pub struct Cli {
 impl Cli {
     pub fn new(
         command: Command,
-        rpc_url: url::Url,
+        rpc_url: Url,
         timeout_secs: Option<u64>,
         verbose: bool,
     ) -> Self {
