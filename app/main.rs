@@ -126,16 +126,12 @@ fn main() -> anyhow::Result<()> {
             },
             Some,
         );
+        let rpc_addr = url::Url::parse(&format!("http://{}", config.rpc_addr))?;
         eframe::run_native(
             "Plain Bitnames",
             native_options,
             Box::new(move |cc| {
-                Ok(Box::new(gui::EguiApp::new(
-                    app,
-                    cc,
-                    line_buffer,
-                    config.rpc_addr,
-                )))
+                Ok(Box::new(gui::EguiApp::new(app, cc, line_buffer, rpc_addr)))
             }),
         )
         .map_err(|err| anyhow::anyhow!("failed to launch egui app: {err}"))?
