@@ -1,11 +1,8 @@
-use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
-    time::Duration,
-};
+use std::{net::SocketAddr, time::Duration};
 
 use clap::{Parser, Subcommand};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
-use plain_bitnames::types::{Address, BitName, BlockHash, THIS_SIDECHAIN};
+use plain_bitnames::types::{Address, BitName, BlockHash};
 use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
 
 #[derive(Clone, Debug, Subcommand)]
@@ -102,11 +99,6 @@ pub enum Command {
     },
 }
 
-const DEFAULT_RPC_ADDR: SocketAddr = SocketAddr::new(
-    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-    6000 + THIS_SIDECHAIN as u16,
-);
-
 async fn resolve_commit(
     bitname_id: BitName,
     field_name: String,
@@ -146,8 +138,8 @@ pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
     /// address for use by the RPC server
-    #[arg(default_value_t = DEFAULT_RPC_ADDR, long)]
-    pub rpc_addr: SocketAddr,
+    #[arg(default_value = "http://127.0.0.1:6002", long)]
+    pub rpc_url: url::Url,
     /// Timeout for RPC requests in seconds.
     #[arg(default_value_t = DEFAULT_TIMEOUT_SECS, long = "timeout")]
     timeout_secs: u64,
@@ -156,12 +148,12 @@ pub struct Cli {
 impl Cli {
     pub fn new(
         command: Command,
-        rpc_addr: SocketAddr,
+        rpc_url: url::Url,
         timeout_secs: Option<u64>,
     ) -> Self {
         Self {
             command,
-            rpc_addr,
+            rpc_url,
             timeout_secs: timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
         }
     }
@@ -171,7 +163,7 @@ impl Cli {
     pub async fn run(self) -> anyhow::Result<String> {
         let rpc_client: HttpClient = HttpClientBuilder::default()
             .request_timeout(Duration::from_secs(self.timeout_secs))
-            .build(format!("http://{}", self.rpc_addr))?;
+            .build(&self.rpc_url)?;
         let res = match self.command {
             Command::Balance => {
                 let balance = rpc_client.balance().await?;
