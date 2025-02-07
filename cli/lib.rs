@@ -1,8 +1,8 @@
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::SocketAddr;
 
 use clap::{Parser, Subcommand};
 use jsonrpsee::http_client::{HttpClient, HttpClientBuilder};
-use plain_bitnames::types::{Address, BitName, BlockHash, THIS_SIDECHAIN};
+use plain_bitnames::types::{Address, BitName, BlockHash};
 use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
 
 #[derive(Clone, Debug, Subcommand)]
@@ -89,11 +89,6 @@ pub enum Command {
     },
 }
 
-const DEFAULT_RPC_ADDR: SocketAddr = SocketAddr::new(
-    IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
-    6000 + THIS_SIDECHAIN as u16,
-);
-
 async fn resolve_commit(
     bitname_id: BitName,
     field_name: String,
@@ -129,8 +124,8 @@ async fn resolve_commit(
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
     /// address for use by the RPC server
-    #[arg(default_value_t = DEFAULT_RPC_ADDR, long)]
-    pub rpc_addr: SocketAddr,
+    #[arg(default_value = "http://127.0.0.1:6002", long)]
+    pub rpc_addr: url::Url,
 
     #[command(subcommand)]
     pub command: Command,
