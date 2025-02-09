@@ -1,12 +1,6 @@
 [workspace]
 resolver = "2"
-members = [
-    "app",
-    "cli",
-    "integration_tests",
-    "lib",
-    "rpc-api",
-]
+members = ["app", "cli", "integration_tests", "lib", "rpc-api"]
 
 [workspace.dependencies]
 anyhow = "1.0.72"

@@ -45,7 +45,7 @@ tracing-appender = "0.2.3"
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 url = { workspace = true }
 utoipa = { workspace = true }
-uuid = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
 
 [dependencies.libes]
 version = "0.9.1"
