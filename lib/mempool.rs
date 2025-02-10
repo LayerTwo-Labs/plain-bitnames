@@ -3,10 +3,11 @@ use std::collections::VecDeque;
 use fallible_iterator::FallibleIterator as _;
 use heed::types::SerdeBincode;
 use sneed::{
-    db, env, rwtxn, DatabaseUnique, DbError, EnvError, RoTxn, RwTxn, RwTxnError,
+    db, env, rwtxn, DatabaseUnique, DbError, EnvError, RoTxn, RwTxn,
+    RwTxnError, UnitKey,
 };
 
-use crate::types::{AuthorizedTransaction, OutPoint, Txid};
+use crate::types::{AuthorizedTransaction, OutPoint, Txid, Version, VERSION};
 
 #[derive(thiserror::Error, transitive::Transitive, Debug)]
 #[transitive(from(db::error::Delete))]
@@ -33,10 +34,11 @@ pub struct MemPool {
     pub transactions:
         DatabaseUnique<SerdeBincode<Txid>, SerdeBincode<AuthorizedTransaction>>,
     pub spent_utxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<Txid>>,
+    _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl MemPool {
-    pub const NUM_DBS: u32 = 2;
+    pub const NUM_DBS: u32 = 3;
 
     pub fn new(env: &sneed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
@@ -44,10 +46,16 @@ impl MemPool {
             DatabaseUnique::create(env, &mut rwtxn, "transactions")?;
         let spent_utxos =
             DatabaseUnique::create(env, &mut rwtxn, "spent_utxos")?;
+        let version =
+            DatabaseUnique::create(env, &mut rwtxn, "mempool_version")?;
+        if version.try_get(&rwtxn, &())?.is_none() {
+            version.put(&mut rwtxn, &(), &*VERSION)?;
+        }
         rwtxn.commit()?;
         Ok(Self {
             transactions,
             spent_utxos,
+            _version: version,
         })
     }
 

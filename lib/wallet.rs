@@ -15,7 +15,7 @@ use heed::{
     types::{Bytes, SerdeBincode, Str, U32, U8},
 };
 use serde::{Deserialize, Serialize};
-use sneed::{db, env, rwtxn, DbError, Env, EnvError, RwTxnError};
+use sneed::{db, env, rwtxn, DbError, Env, EnvError, RwTxnError, UnitKey};
 use thiserror::Error;
 use tokio_stream::{wrappers::WatchStream, StreamMap};
 
@@ -26,7 +26,7 @@ use crate::{
         AuthorizedTransaction, BitcoinOutputContent, EncryptionPubKey,
         FilledOutput, GetValue, Hash, InPoint, MutableBitNameData, OutPoint,
         Output, OutputContent, SpentOutput, Transaction, TxData, VerifyingKey,
-        WithdrawalOutputContent,
+        Version, WithdrawalOutputContent, VERSION,
     },
     util::Watchable,
 };
@@ -138,10 +138,11 @@ pub struct Wallet {
     known_bitnames: DatabaseUnique<SerdeBincode<BitName>, Str>,
     /// Map each verifying key to it's index
     vk_to_index: DatabaseUnique<SerdeBincode<VerifyingKey>, U32<BigEndian>>,
+    _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 11;
+    pub const NUM_DBS: u32 = 12;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
@@ -172,6 +173,10 @@ impl Wallet {
             DatabaseUnique::create(&env, &mut rwtxn, "known_bitnames")?;
         let vk_to_index =
             DatabaseUnique::create(&env, &mut rwtxn, "vk_to_index")?;
+        let version = DatabaseUnique::create(&env, &mut rwtxn, "version")?;
+        if version.try_get(&rwtxn, &())?.is_none() {
+            version.put(&mut rwtxn, &(), &*VERSION)?;
+        }
         rwtxn.commit()?;
         Ok(Self {
             env,
@@ -186,6 +191,7 @@ impl Wallet {
             bitname_reservations,
             known_bitnames,
             vk_to_index,
+            _version: version,
         })
     }
 
@@ -830,6 +836,7 @@ impl Watchable<()> for Wallet {
             bitname_reservations,
             known_bitnames,
             vk_to_index,
+            _version: _,
         } = self;
         let watchables = [
             seed.watch().clone(),
