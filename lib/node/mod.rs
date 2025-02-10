@@ -10,6 +10,7 @@ use bitcoin::amount::CheckedSum;
 use fallible_iterator::FallibleIterator;
 use futures::{future::BoxFuture, Stream};
 use hashlink::{linked_hash_map, LinkedHashMap};
+use sneed::{env, DbError, Env, EnvError, RwTxnError};
 use tokio::sync::Mutex;
 use tokio_util::task::LocalPoolHandle;
 use tonic::transport::Channel;
@@ -38,7 +39,10 @@ use net_task::NetTaskHandle;
 #[cfg(feature = "zmq")]
 use net_task::ZmqPubHandler;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error, transitive::Transitive, Debug)]
+#[transitive(from(env::error::OpenEnv))]
+#[transitive(from(env::error::ReadTxn))]
+#[transitive(from(env::error::WriteTxn))]
 pub enum Error {
     #[error("address parse error")]
     AddrParse(#[from] std::net::AddrParseError),
@@ -50,8 +54,12 @@ pub enum Error {
     Archive(#[from] archive::Error),
     #[error("CUSF mainchain proto error")]
     CusfMainchain(#[from] proto::Error),
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
+    #[error(transparent)]
+    Db(#[from] DbError),
+    #[error("Database env error")]
+    DbEnv(#[from] EnvError),
+    #[error("Database write error")]
+    DbWrite(#[from] RwTxnError),
     #[error("I/O error")]
     Io(#[from] std::io::Error),
     #[error("error requesting mainchain ancestors")]
@@ -71,7 +79,7 @@ pub enum Error {
     #[error("Send mainchain task request failed")]
     SendMainchainTaskRequest,
     #[error("state error")]
-    State(#[from] state::Error),
+    State(#[source] Box<state::Error>),
     #[error("Utreexo error: {0}")]
     Utreexo(String),
     #[error("Verify BMM error")]
@@ -81,12 +89,18 @@ pub enum Error {
     Zmq(#[from] zeromq::ZmqError),
 }
 
+impl From<state::Error> for Error {
+    fn from(err: state::Error) -> Self {
+        Self::State(Box::new(err))
+    }
+}
+
 /// Request any missing two way peg data up to the specified block hash.
 /// All ancestor headers must exist in the archive.
 // TODO: deposits only for now
 #[allow(dead_code)]
 async fn request_two_way_peg_data<Transport>(
-    env: &heed::Env,
+    env: &sneed::Env,
     archive: &Archive,
     mainchain: &mut mainchain::ValidatorClient<Transport>,
     block_hash: bitcoin::BlockHash,
@@ -134,7 +148,7 @@ where
         .try_for_each(|(block_hash, deposits)| {
             archive.put_deposits(&mut rwtxn, block_hash, deposits)
         })?;
-    rwtxn.commit()?;
+    rwtxn.commit().map_err(RwTxnError::from)?;
     Ok(())
 }
 
@@ -147,7 +161,7 @@ pub struct Node<MainchainTransport = Channel> {
     cusf_mainchain: Arc<Mutex<mainchain::ValidatorClient<MainchainTransport>>>,
     cusf_mainchain_wallet:
         Option<Arc<Mutex<mainchain::WalletClient<MainchainTransport>>>>,
-    env: heed::Env,
+    env: sneed::Env,
     _local_pool: LocalPoolHandle,
     mainchain_task: MainchainTaskHandle,
     mempool: MemPool,
@@ -184,16 +198,17 @@ where
         let env_path = datadir.join("data.mdb");
         // let _ = std::fs::remove_dir_all(&env_path);
         std::fs::create_dir_all(&env_path)?;
-        let env = unsafe {
-            heed::EnvOpenOptions::new()
+        let env = {
+            let mut env_open_opts = heed::EnvOpenOptions::new();
+            env_open_opts
                 .map_size(1024 * 1024 * 1024) // 1GB
                 .max_dbs(
                     State::NUM_DBS
                         + Archive::NUM_DBS
                         + MemPool::NUM_DBS
                         + Net::NUM_DBS,
-                )
-                .open(env_path)?
+                );
+            unsafe { Env::open(&env_open_opts, &env_path) }?
         };
         let state = State::new(&env)?;
         #[cfg(feature = "zmq")]
@@ -305,14 +320,15 @@ where
         let rotxn = self.env.read_txn()?;
         let res = self
             .state
-            .bitnames
-            .iter(&rotxn)?
-            .map(|res| {
-                res.map(|(bitname, bitname_data)| {
-                    (bitname, bitname_data.current())
-                })
+            .bitnames()
+            .bitnames()
+            .iter(&rotxn)
+            .map_err(state::Error::from)?
+            .map_err(state::Error::from)
+            .map(|(bitname, bitname_data)| {
+                Ok((bitname, bitname_data.current()))
             })
-            .collect::<Result<_, _>>()?;
+            .collect()?;
         Ok(res)
     }
 
@@ -326,7 +342,9 @@ where
         let rotxn = self.env.read_txn()?;
         Ok(self
             .state
-            .get_bitname_data_at_block_height(&rotxn, bitname, height)?)
+            .bitnames()
+            .get_bitname_data_at_block_height(&rotxn, bitname, height)
+            .map_err(state::Error::BitName)?)
     }
 
     /// resolve current bitname data, if it exists
@@ -335,7 +353,11 @@ where
         bitname: &BitName,
     ) -> Result<Option<BitNameData>, Error> {
         let rotxn = self.env.read_txn()?;
-        Ok(self.state.try_get_current_bitname_data(&rotxn, bitname)?)
+        Ok(self
+            .state
+            .bitnames()
+            .try_get_current_bitname_data(&rotxn, bitname)
+            .map_err(state::Error::BitName)?)
     }
 
     /// Resolve current bitname data. Returns an error if it does not exist.
@@ -344,7 +366,11 @@ where
         bitname: &BitName,
     ) -> Result<BitNameData, Error> {
         let rotxn = self.env.read_txn()?;
-        Ok(self.state.get_current_bitname_data(&rotxn, bitname)?)
+        Ok(self
+            .state
+            .bitnames()
+            .get_current_bitname_data(&rotxn, bitname)
+            .map_err(state::Error::BitName)?)
     }
 
     pub fn submit_transaction(
@@ -355,7 +381,7 @@ where
             let mut rotxn = self.env.write_txn()?;
             self.state.validate_transaction(&rotxn, &transaction)?;
             self.mempool.put(&mut rotxn, &transaction)?;
-            rotxn.commit()?;
+            rotxn.commit().map_err(RwTxnError::from)?;
         }
         self.net.push_tx(Default::default(), transaction);
         Ok(())
@@ -374,8 +400,7 @@ where
         let rotxn = self.env.read_txn()?;
         let res = self
             .state
-            .get_latest_failed_withdrawal_bundle(&rotxn)
-            .map_err(Error::from)?
+            .get_latest_failed_withdrawal_bundle(&rotxn)?
             .map(|(height, _)| height);
         Ok(res)
     }
@@ -387,7 +412,12 @@ where
         let rotxn = self.env.read_txn()?;
         let mut spent = vec![];
         for outpoint in outpoints {
-            if let Some(output) = self.state.stxos.get(&rotxn, outpoint)? {
+            if let Some(output) = self
+                .state
+                .stxos()
+                .try_get(&rotxn, outpoint)
+                .map_err(state::Error::from)?
+            {
                 spent.push((*outpoint, output));
             }
         }
@@ -552,7 +582,7 @@ where
             spent_utxos.extend(filled_transaction.transaction.inputs());
             returned_transactions.push(filled_transaction);
         }
-        rwtxn.commit()?;
+        rwtxn.commit().map_err(RwTxnError::from)?;
         Ok((returned_transactions, fee))
     }
 
@@ -570,8 +600,11 @@ where
             let body = self.archive.get_body(&rotxn, *block_hash)?;
             let tx = body.transactions.into_iter().nth(*txin as usize).unwrap();
             Ok(Some(tx))
-        } else if let Some(auth_tx) =
-            self.mempool.transactions.get(&rotxn, &txid)?
+        } else if let Some(auth_tx) = self
+            .mempool
+            .transactions
+            .try_get(&rotxn, &txid)
+            .map_err(mempool::Error::from)?
         {
             Ok(Some(auth_tx.transaction))
         } else {
@@ -613,7 +646,12 @@ where
             let res = (auth_tx, Some(txin));
             return Ok(Some(res));
         }
-        if let Some(auth_tx) = self.mempool.transactions.get(&rotxn, &txid)? {
+        if let Some(auth_tx) = self
+            .mempool
+            .transactions
+            .try_get(&rotxn, &txid)
+            .map_err(mempool::Error::from)?
+        {
             match self.state.fill_authorized_transaction(&rotxn, auth_tx) {
                 Ok(filled_tx) => {
                     let res = (filled_tx, None);
@@ -641,7 +679,7 @@ where
     pub fn remove_from_mempool(&self, txid: Txid) -> Result<(), Error> {
         let mut rwtxn = self.env.write_txn()?;
         let () = self.mempool.delete(&mut rwtxn, txid)?;
-        rwtxn.commit()?;
+        rwtxn.commit().map_err(RwTxnError::from)?;
         Ok(())
     }
 
@@ -717,7 +755,7 @@ where
         {
             let mut rwtxn = self.env.write_txn()?;
             let () = self.archive.put_header(&mut rwtxn, header)?;
-            rwtxn.commit()?;
+            rwtxn.commit().map_err(RwTxnError::from)?;
         }
         tracing::trace!("Stored header: {block_hash}");
         // Check BMM
@@ -734,7 +772,6 @@ where
                 );
                 return Ok(false);
             }
-            rotxn.commit()?;
         }
         // Check that ancestor bodies exist, and store body
         {
@@ -758,11 +795,11 @@ where
                 );
                 return Ok(false);
             }
-            rotxn.commit()?;
+            drop(rotxn);
             if missing_bodies == vec![block_hash] {
                 let mut rwtxn = self.env.write_txn()?;
                 let () = self.archive.put_body(&mut rwtxn, block_hash, body)?;
-                rwtxn.commit()?;
+                rwtxn.commit().map_err(RwTxnError::from)?;
             }
         }
         // Submit new tip

@@ -1,32 +1,29 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
+use fallible_iterator::FallibleIterator;
 use futures::Stream;
-use heed::{types::SerdeBincode, Database, RoTxn, RwTxn};
+use heed::types::SerdeBincode;
 use serde::{Deserialize, Serialize};
+use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey};
 
 use crate::{
     authorization::Authorization,
     types::{
-        self, constants,
-        hashes::{self, BitName},
-        proto::mainchain::TwoWayPegData,
-        Address, AmountOverflowError, Authorized, AuthorizedTransaction,
-        BatchIcannRegistrationData, BitNameDataUpdates, BitNameSeqId,
-        BlockHash, Body, FilledOutput, FilledTransaction, GetAddress as _,
-        GetValue as _, Hash, Header, InPoint, M6id, MerkleRoot, OutPoint,
-        SpentOutput, Transaction, Txid, Verify as _, WithdrawalBundle,
-        WithdrawalBundleStatus,
+        constants, hashes, proto::mainchain::TwoWayPegData, Address,
+        AmountOverflowError, Authorized, AuthorizedTransaction, BlockHash,
+        Body, FilledOutput, FilledTransaction, GetAddress as _, GetValue as _,
+        Header, InPoint, M6id, MerkleRoot, OutPoint, SpentOutput, Transaction,
+        Verify as _, WithdrawalBundle, WithdrawalBundleStatus,
     },
-    util::{EnvExt, UnitKey, Watchable, WatchableDb},
+    util::Watchable,
 };
 
-mod bitname_data;
+mod bitnames;
 mod block;
 pub mod error;
 mod rollback;
 mod two_way_peg_data;
 
-use bitname_data::BitNameData;
 pub use error::Error;
 use rollback::{HeightStamped, RollBack};
 
@@ -55,7 +52,7 @@ impl WithdrawalBundleInfo {
     }
 }
 
-type WithdrawalBundlesDb = Database<
+type WithdrawalBundlesDb = DatabaseUnique<
     SerdeBincode<M6id>,
     SerdeBincode<(
         WithdrawalBundleInfo,
@@ -66,71 +63,67 @@ type WithdrawalBundlesDb = Database<
 #[derive(Clone)]
 pub struct State {
     /// Current tip
-    tip: WatchableDb<SerdeBincode<UnitKey>, SerdeBincode<BlockHash>>,
+    tip: DatabaseUnique<UnitKey, SerdeBincode<BlockHash>>,
     /// Current height
-    height: Database<SerdeBincode<UnitKey>, SerdeBincode<u32>>,
-    /// Associates tx hashes with bitname reservation commitments
-    pub bitname_reservations: Database<SerdeBincode<Txid>, SerdeBincode<Hash>>,
-    /// Associates BitName sequence numbers with BitName IDs (name hashes)
-    pub bitname_seq_to_bitname: Database<BitNameSeqId, SerdeBincode<BitName>>,
-    /// Associates bitname IDs (name hashes) with bitname data
-    pub bitnames: Database<SerdeBincode<BitName>, SerdeBincode<BitNameData>>,
-    pub utxos: Database<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
-    pub stxos: Database<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
+    height: DatabaseUnique<UnitKey, SerdeBincode<u32>>,
+    bitnames: bitnames::Dbs,
+    utxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
+    stxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
     /// Pending withdrawal bundle and block height
-    pub pending_withdrawal_bundle:
-        Database<SerdeBincode<UnitKey>, SerdeBincode<(WithdrawalBundle, u32)>>,
+    pending_withdrawal_bundle:
+        DatabaseUnique<UnitKey, SerdeBincode<(WithdrawalBundle, u32)>>,
     /// Latest failed (known) withdrawal bundle
-    latest_failed_withdrawal_bundle: Database<
-        SerdeBincode<UnitKey>,
-        SerdeBincode<RollBack<HeightStamped<M6id>>>,
-    >,
+    latest_failed_withdrawal_bundle:
+        DatabaseUnique<UnitKey, SerdeBincode<RollBack<HeightStamped<M6id>>>>,
     /// Withdrawal bundles and their status.
     /// Some withdrawal bundles may be unknown.
     /// in which case they are `None`.
     withdrawal_bundles: WithdrawalBundlesDb,
     /// deposit blocks and the height at which they were applied, keyed sequentially
-    pub deposit_blocks:
-        Database<SerdeBincode<u32>, SerdeBincode<(bitcoin::BlockHash, u32)>>,
+    deposit_blocks: DatabaseUnique<
+        SerdeBincode<u32>,
+        SerdeBincode<(bitcoin::BlockHash, u32)>,
+    >,
     /// withdrawal bundle event blocks and the height at which they were applied, keyed sequentially
-    pub withdrawal_bundle_event_blocks:
-        Database<SerdeBincode<u32>, SerdeBincode<(bitcoin::BlockHash, u32)>>,
+    withdrawal_bundle_event_blocks: DatabaseUnique<
+        SerdeBincode<u32>,
+        SerdeBincode<(bitcoin::BlockHash, u32)>,
+    >,
 }
 
 impl State {
-    pub const NUM_DBS: u32 = 12;
+    pub const NUM_DBS: u32 = bitnames::Dbs::NUM_DBS + 9;
 
-    pub fn new(env: &heed::Env) -> Result<Self, Error> {
+    pub fn new(env: &sneed::Env) -> Result<Self, Error> {
         let mut rwtxn = env.write_txn()?;
-        let tip = env.create_watchable_db(&mut rwtxn, "tip")?;
-        let height = env.create_database(&mut rwtxn, Some("height"))?;
-        let bitname_reservations =
-            env.create_database(&mut rwtxn, Some("bitname_reservations"))?;
-        let bitname_seq_to_bitname =
-            env.create_database(&mut rwtxn, Some("bitname_seq_to_bitname"))?;
-        let bitnames = env.create_database(&mut rwtxn, Some("bitnames"))?;
-        let utxos = env.create_database(&mut rwtxn, Some("utxos"))?;
-        let stxos = env.create_database(&mut rwtxn, Some("stxos"))?;
-        let pending_withdrawal_bundle =
-            env.create_database(&mut rwtxn, Some("pending_withdrawal_bundle"))?;
-        let latest_failed_withdrawal_bundle = env.create_database(
+        let tip = DatabaseUnique::create(env, &mut rwtxn, "tip")?;
+        let height = DatabaseUnique::create(env, &mut rwtxn, "height")?;
+        let bitnames = bitnames::Dbs::new(env, &mut rwtxn)?;
+        let utxos = DatabaseUnique::create(env, &mut rwtxn, "utxos")?;
+        let stxos = DatabaseUnique::create(env, &mut rwtxn, "stxos")?;
+        let pending_withdrawal_bundle = DatabaseUnique::create(
+            env,
             &mut rwtxn,
-            Some("latest_failed_withdrawal_bundle"),
+            "pending_withdrawal_bundle",
+        )?;
+        let latest_failed_withdrawal_bundle = DatabaseUnique::create(
+            env,
+            &mut rwtxn,
+            "latest_failed_withdrawal_bundle",
         )?;
         let withdrawal_bundles =
-            env.create_database(&mut rwtxn, Some("withdrawal_bundles"))?;
+            DatabaseUnique::create(env, &mut rwtxn, "withdrawal_bundles")?;
         let deposit_blocks =
-            env.create_database(&mut rwtxn, Some("deposit_blocks"))?;
-        let withdrawal_bundle_event_blocks = env.create_database(
+            DatabaseUnique::create(env, &mut rwtxn, "deposit_blocks")?;
+        let withdrawal_bundle_event_blocks = DatabaseUnique::create(
+            env,
             &mut rwtxn,
-            Some("withdrawal_bundle_event_blocks"),
+            "withdrawal_bundle_event_blocks",
         )?;
         rwtxn.commit()?;
         Ok(Self {
             tip,
             height,
-            bitname_reservations,
-            bitname_seq_to_bitname,
             bitnames,
             utxos,
             stxos,
@@ -142,112 +135,66 @@ impl State {
         })
     }
 
+    pub fn bitnames(&self) -> &bitnames::Dbs {
+        &self.bitnames
+    }
+
+    pub fn deposit_blocks(
+        &self,
+    ) -> &RoDatabaseUnique<
+        SerdeBincode<u32>,
+        SerdeBincode<(bitcoin::BlockHash, u32)>,
+    > {
+        &self.deposit_blocks
+    }
+
+    pub fn stxos(
+        &self,
+    ) -> &RoDatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>
+    {
+        &self.stxos
+    }
+
+    pub fn withdrawal_bundle_event_blocks(
+        &self,
+    ) -> &RoDatabaseUnique<
+        SerdeBincode<u32>,
+        SerdeBincode<(bitcoin::BlockHash, u32)>,
+    > {
+        &self.withdrawal_bundle_event_blocks
+    }
+
     pub fn try_get_tip(
         &self,
         rotxn: &RoTxn,
     ) -> Result<Option<BlockHash>, Error> {
-        let tip = self.tip.try_get(rotxn, &UnitKey)?;
+        let tip = self.tip.try_get(rotxn, &())?;
         Ok(tip)
     }
 
     pub fn try_get_height(&self, rotxn: &RoTxn) -> Result<Option<u32>, Error> {
-        let height = self.height.get(rotxn, &UnitKey)?;
+        let height = self.height.try_get(rotxn, &())?;
         Ok(height)
-    }
-
-    /// Return the Bitname data. Returns an error if it does not exist.
-    fn get_bitname(
-        &self,
-        txn: &RoTxn,
-        bitname: &BitName,
-    ) -> Result<BitNameData, Error> {
-        self.bitnames
-            .get(txn, bitname)?
-            .ok_or(Error::MissingBitName {
-                name_hash: *bitname,
-            })
-    }
-
-    /// Resolve bitname data at the specified block height, if it exists.
-    pub fn try_get_bitname_data_at_block_height(
-        &self,
-        txn: &RoTxn,
-        bitname: &BitName,
-        height: u32,
-    ) -> Result<Option<types::BitNameData>, heed::Error> {
-        let res = self
-            .bitnames
-            .get(txn, bitname)?
-            .and_then(|bitname_data| bitname_data.at_block_height(height));
-        Ok(res)
-    }
-
-    /** Resolve bitname data at the specified block height.
-     * Returns an error if it does not exist. */
-    pub fn get_bitname_data_at_block_height(
-        &self,
-        txn: &RoTxn,
-        bitname: &BitName,
-        height: u32,
-    ) -> Result<types::BitNameData, Error> {
-        self.get_bitname(txn, bitname)?
-            .at_block_height(height)
-            .ok_or(Error::MissingBitNameData {
-                name_hash: *bitname,
-                block_height: height,
-            })
-    }
-
-    /// resolve current bitname data, if it exists
-    pub fn try_get_current_bitname_data(
-        &self,
-        txn: &RoTxn,
-        bitname: &BitName,
-    ) -> Result<Option<types::BitNameData>, heed::Error> {
-        let res = self
-            .bitnames
-            .get(txn, bitname)?
-            .map(|bitname_data| bitname_data.current());
-        Ok(res)
-    }
-
-    /// Resolve current bitname data. Returns an error if it does not exist.
-    pub fn get_current_bitname_data(
-        &self,
-        txn: &RoTxn,
-        bitname: &BitName,
-    ) -> Result<types::BitNameData, Error> {
-        self.try_get_current_bitname_data(txn, bitname)?.ok_or(
-            Error::MissingBitName {
-                name_hash: *bitname,
-            },
-        )
     }
 
     pub fn get_utxos(
         &self,
-        txn: &RoTxn,
+        rotxn: &RoTxn,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let mut utxos = HashMap::new();
-        for item in self.utxos.iter(txn)? {
-            let (outpoint, output) = item?;
-            utxos.insert(outpoint, output);
-        }
+        let utxos = self.utxos.iter(rotxn)?.collect()?;
         Ok(utxos)
     }
 
     pub fn get_utxos_by_addresses(
         &self,
-        txn: &RoTxn,
+        rotxn: &RoTxn,
         addresses: &HashSet<Address>,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let mut utxos = HashMap::new();
-        for item in self.utxos.iter(txn)? {
-            let (outpoint, output) = item?;
-            if addresses.contains(&output.address) {
-                utxos.insert(outpoint, output);
-            }
-        }
+        let utxos = self
+            .utxos
+            .iter(rotxn)?
+            .filter(|(_, output)| Ok(addresses.contains(&output.address)))
+            .collect()?;
         Ok(utxos)
     }
 
@@ -257,12 +204,12 @@ impl State {
         rotxn: &RoTxn,
     ) -> Result<Option<(u32, M6id)>, Error> {
         let Some(latest_failed_m6id) =
-            self.latest_failed_withdrawal_bundle.get(rotxn, &UnitKey)?
+            self.latest_failed_withdrawal_bundle.try_get(rotxn, &())?
         else {
             return Ok(None);
         };
         let latest_failed_m6id = latest_failed_m6id.latest().value;
-        let (_bundle, bundle_status) = self.withdrawal_bundles.get(rotxn, &latest_failed_m6id)?
+        let (_bundle, bundle_status) = self.withdrawal_bundles.try_get(rotxn, &latest_failed_m6id)?
             .expect("Inconsistent DBs: latest failed m6id should exist in withdrawal_bundles");
         let bundle_status = bundle_status.latest();
         assert_eq!(bundle_status.value, WithdrawalBundleStatus::Failed);
@@ -278,7 +225,7 @@ impl State {
         for input in &transaction.inputs {
             let utxo = self
                 .utxos
-                .get(rotxn, input)?
+                .try_get(rotxn, input)?
                 .ok_or(Error::NoUtxo { outpoint: *input })?;
             spent_utxos.push(utxo);
         }
@@ -300,7 +247,7 @@ impl State {
         for (vin, input) in tx.inputs.iter().enumerate().rev() {
             let stxo = self
                 .stxos
-                .get(rotxn, input)?
+                .try_get(rotxn, input)?
                 .ok_or(Error::NoStxo { outpoint: *input })?;
             assert_eq!(
                 stxo.inpoint,
@@ -336,7 +283,7 @@ impl State {
         &self,
         txn: &RoTxn,
     ) -> Result<Option<(WithdrawalBundle, u32)>, Error> {
-        Ok(self.pending_withdrawal_bundle.get(txn, &UnitKey)?)
+        Ok(self.pending_withdrawal_bundle.try_get(txn, &())?)
     }
 
     /// Check that
@@ -392,7 +339,7 @@ impl State {
         let n_bitname_inputs: usize = tx.spent_bitnames().count();
         let n_bitname_outputs: usize = tx.bitname_outputs().count();
         if tx.is_update() && (n_bitname_inputs < 1 || n_bitname_outputs < 1) {
-            return Err(Error::NoBitNamesToUpdate);
+            return Err(error::BitName::NoBitNamesToUpdate.into());
         };
         if let Some(batch_icann_data) = tx.batch_icann_data() {
             if n_bitname_outputs < batch_icann_data.plain_names.len() {
@@ -400,7 +347,7 @@ impl State {
             }
         }
         if let Some(name_hash) = tx.registration_name_hash() {
-            if self.bitnames.get(rotxn, &name_hash)?.is_some() {
+            if self.bitnames.try_get_bitname(rotxn, &name_hash)?.is_some() {
                 return Err(Error::BitNameAlreadyRegistered { name_hash });
             }
             if n_bitname_outputs == n_bitname_inputs + 1 {
@@ -514,255 +461,39 @@ impl State {
         Ok(block_hash)
     }
 
-    // apply bitname registration
-    fn apply_bitname_registration(
-        &self,
-        rwtxn: &mut RwTxn,
-        filled_tx: &FilledTransaction,
-        name_hash: BitName,
-        bitname_data: &types::MutableBitNameData,
-        height: u32,
-    ) -> Result<(), Error> {
-        // Find the reservation to burn
-        let implied_commitment =
-            filled_tx.implied_reservation_commitment().expect(
-                "A BitName registration tx should have an implied commitment",
-            );
-        let burned_reservation_txid =
-            filled_tx.spent_reservations().find_map(|(_, filled_output)| {
-                let (txid, commitment) = filled_output.reservation_data()
-                    .expect("A spent reservation should correspond to a commitment");
-                if *commitment == implied_commitment {
-                    Some(txid)
-                } else {
-                    None
-                }
-            }).expect("A BitName registration tx should correspond to a burned reservation");
-        if !self
-            .bitname_reservations
-            .delete(rwtxn, burned_reservation_txid)?
-        {
-            return Err(Error::MissingReservation {
-                txid: *burned_reservation_txid,
-            });
-        }
-        let next_seq_id = self
-            .bitname_seq_to_bitname
-            .last(rwtxn)?
-            .map(|(seq, _)| seq.next())
-            .unwrap_or(BitNameSeqId::new(0));
-        self.bitname_seq_to_bitname
-            .put(rwtxn, &next_seq_id, &name_hash)?;
-        let bitname_data = BitNameData::init(
-            bitname_data.clone(),
-            filled_tx.txid(),
-            height,
-            next_seq_id,
-        );
-        self.bitnames.put(rwtxn, &name_hash, &bitname_data)?;
-        Ok(())
-    }
-
-    fn revert_bitname_registration(
-        &self,
-        rwtxn: &mut RwTxn,
-        filled_tx: &FilledTransaction,
-        name_hash: BitName,
-    ) -> Result<(), Error> {
-        if !self.bitnames.delete(rwtxn, &name_hash)? {
-            return Err(Error::MissingBitName { name_hash });
-        }
-        let (last_seq_id, latest_registered_bitname) = self
-            .bitname_seq_to_bitname
-            .last(rwtxn)?
-            .expect("A registered bitname should have a seq id");
-        assert_eq!(latest_registered_bitname, name_hash);
-        self.bitname_seq_to_bitname.delete(rwtxn, &last_seq_id)?;
-
-        // Find the reservation to restore
-        let implied_commitment =
-            filled_tx.implied_reservation_commitment().expect(
-                "A BitName registration tx should have an implied commitment",
-            );
-        let burned_reservation_txid =
-            filled_tx.spent_reservations().find_map(|(_, filled_output)| {
-                let (txid, commitment) = filled_output.reservation_data()
-                    .expect("A spent reservation should correspond to a commitment");
-                if *commitment == implied_commitment {
-                    Some(txid)
-                } else {
-                    None
-                }
-            }).expect("A BitName registration tx should correspond to a burned reservation");
-        self.bitname_reservations.put(
-            rwtxn,
-            burned_reservation_txid,
-            &implied_commitment,
-        )?;
-        Ok(())
-    }
-
-    // apply bitname updates
-    fn apply_bitname_updates(
-        &self,
-        rwtxn: &mut RwTxn,
-        filled_tx: &FilledTransaction,
-        bitname_updates: BitNameDataUpdates,
-        height: u32,
-    ) -> Result<(), Error> {
-        // the updated bitname is the BitName that corresponds to the last
-        // bitname output, or equivalently, the BitName corresponding to the
-        // last bitname input
-        let updated_bitname = filled_tx
-            .spent_bitnames()
-            .next_back()
-            .ok_or(Error::NoBitNamesToUpdate)?
-            .1
-            .bitname()
-            .expect("should only contain BitName outputs");
-        let mut bitname_data = self
-            .bitnames
-            .get(rwtxn, updated_bitname)?
-            .ok_or(Error::MissingBitName {
-                name_hash: *updated_bitname,
-            })?;
-        bitname_data.apply_updates(bitname_updates, filled_tx.txid(), height);
-        self.bitnames.put(rwtxn, updated_bitname, &bitname_data)?;
-        Ok(())
-    }
-
-    fn revert_bitname_updates(
-        &self,
-        rwtxn: &mut RwTxn,
-        filled_tx: &FilledTransaction,
-        bitname_updates: BitNameDataUpdates,
-        height: u32,
-    ) -> Result<(), Error> {
-        // the updated bitname is the BitName that corresponds to the last
-        // bitname output, or equivalently, the BitName corresponding to the
-        // last bitname input
-        let updated_bitname = filled_tx
-            .spent_bitnames()
-            .next_back()
-            .ok_or(Error::NoBitNamesToUpdate)?
-            .1
-            .bitname()
-            .expect("should only contain BitName outputs");
-        let mut bitname_data = self
-            .bitnames
-            .get(rwtxn, updated_bitname)?
-            .ok_or(Error::MissingBitName {
-                name_hash: *updated_bitname,
-            })?;
-        bitname_data.revert_updates(bitname_updates, filled_tx.txid(), height);
-        self.bitnames.put(rwtxn, updated_bitname, &bitname_data)?;
-        Ok(())
-    }
-
-    // apply batch icann registration
-    fn apply_batch_icann(
-        &self,
-        rwtxn: &mut RwTxn,
-        filled_tx: &FilledTransaction,
-        batch_icann_data: &BatchIcannRegistrationData,
-    ) -> Result<(), Error> {
-        let name_hashes = batch_icann_data.plain_names.iter().map(|name| {
-            let hash = blake3::hash(name.as_bytes());
-            BitName(Hash::from(hash))
-        });
-        let mut spent_bitnames = filled_tx.spent_bitnames();
-        for name_hash in name_hashes {
-            // search for the bitname to be registered as an ICANN domain
-            // exists in the inputs
-            let found_bitname = spent_bitnames.any(|(_, outpoint)| {
-                let bitname = outpoint.bitname()
-                    .expect("spent bitname input should correspond to a known name hash");
-                *bitname == name_hash
-            });
-            if found_bitname {
-                let mut bitname_data = self
-                    .bitnames
-                    .get(rwtxn, &name_hash)?
-                    .ok_or(Error::MissingBitName { name_hash })?;
-                if bitname_data.is_icann {
-                    return Err(Error::BitNameAlreadyIcann { name_hash });
-                }
-                bitname_data.is_icann = true;
-                self.bitnames.put(rwtxn, &name_hash, &bitname_data)?;
-            } else {
-                return Err(Error::MissingBitNameInput { name_hash });
-            }
-        }
-        Ok(())
-    }
-
-    // revert batch icann registration
-    fn revert_batch_icann(
-        &self,
-        rwtxn: &mut RwTxn,
-        filled_tx: &FilledTransaction,
-        batch_icann_data: &BatchIcannRegistrationData,
-    ) -> Result<(), Error> {
-        let name_hashes = batch_icann_data.plain_names.iter().map(|name| {
-            let hash = blake3::hash(name.as_bytes());
-            BitName(Hash::from(hash))
-        });
-        let mut spent_bitnames = filled_tx.spent_bitnames();
-        for name_hash in name_hashes.into_iter().rev() {
-            // search for the bitname to be registered as an ICANN domain
-            // exists in the inputs
-            let found_bitname = spent_bitnames.any(|(_, outpoint)| {
-                let bitname = outpoint.bitname()
-                    .expect("spent bitname input should correspond to a known name hash");
-                *bitname == name_hash
-            });
-            if found_bitname {
-                let mut bitname_data = self
-                    .bitnames
-                    .get(rwtxn, &name_hash)?
-                    .ok_or(Error::MissingBitName { name_hash })?;
-                assert!(!bitname_data.is_icann);
-                bitname_data.is_icann = false;
-                self.bitnames.put(rwtxn, &name_hash, &bitname_data)?;
-            } else {
-                return Err(Error::MissingBitNameInput { name_hash });
-            }
-        }
-        Ok(())
-    }
-
     /// Get total sidechain wealth in Bitcoin
     pub fn sidechain_wealth(
         &self,
         rotxn: &RoTxn,
     ) -> Result<bitcoin::Amount, Error> {
         let mut total_deposit_utxo_value = bitcoin::Amount::ZERO;
-        self.utxos.iter(rotxn)?.try_for_each(|utxo| {
-            let (outpoint, output) = utxo?;
-            if let OutPoint::Deposit(_) = outpoint {
-                total_deposit_utxo_value = total_deposit_utxo_value
-                    .checked_add(output.get_value())
-                    .ok_or(AmountOverflowError)?;
-            }
-            Ok::<_, Error>(())
-        })?;
+        self.utxos.iter(rotxn)?.map_err(Error::from).for_each(
+            |(outpoint, output)| {
+                if let OutPoint::Deposit(_) = outpoint {
+                    total_deposit_utxo_value = total_deposit_utxo_value
+                        .checked_add(output.get_value())
+                        .ok_or(AmountOverflowError)?;
+                }
+                Ok::<_, Error>(())
+            },
+        )?;
         let mut total_deposit_stxo_value = bitcoin::Amount::ZERO;
         let mut total_withdrawal_stxo_value = bitcoin::Amount::ZERO;
-        self.stxos.iter(rotxn)?.try_for_each(|stxo| {
-            let (outpoint, spent_output) = stxo?;
-            if let OutPoint::Deposit(_) = outpoint {
-                total_deposit_stxo_value = total_deposit_stxo_value
-                    .checked_add(spent_output.output.get_value())
-                    .ok_or(AmountOverflowError)?;
-            }
-            if let InPoint::Withdrawal { .. } = spent_output.inpoint {
-                total_withdrawal_stxo_value = total_deposit_stxo_value
-                    .checked_add(spent_output.output.get_value())
-                    .ok_or(AmountOverflowError)?;
-            }
-            Ok::<_, Error>(())
-        })?;
-
+        self.stxos.iter(rotxn)?.map_err(Error::from).for_each(
+            |(outpoint, spent_output)| {
+                if let OutPoint::Deposit(_) = outpoint {
+                    total_deposit_stxo_value = total_deposit_stxo_value
+                        .checked_add(spent_output.output.get_value())
+                        .ok_or(AmountOverflowError)?;
+                }
+                if let InPoint::Withdrawal { .. } = spent_output.inpoint {
+                    total_withdrawal_stxo_value = total_deposit_stxo_value
+                        .checked_add(spent_output.output.get_value())
+                        .ok_or(AmountOverflowError)?;
+                }
+                Ok::<_, Error>(())
+            },
+        )?;
         let total_wealth: bitcoin::Amount = total_deposit_utxo_value
             .checked_add(total_deposit_stxo_value)
             .ok_or(AmountOverflowError)?
@@ -820,6 +551,6 @@ impl Watchable<()> for State {
 
     /// Get a signal that notifies whenever the tip changes
     fn watch(&self) -> Self::WatchStream {
-        tokio_stream::wrappers::WatchStream::new(self.tip.watch())
+        tokio_stream::wrappers::WatchStream::new(self.tip.watch().clone())
     }
 }

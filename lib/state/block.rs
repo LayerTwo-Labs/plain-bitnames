@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use heed::{RoTxn, RwTxn};
+use sneed::{RoTxn, RwTxn};
 
 use crate::{
     state::{error, Error, State},
@@ -12,7 +12,6 @@ use crate::{
         Header, InPoint, MerkleRoot, OutPoint, OutputContent, SpentOutput,
         TxData, Verify as _,
     },
-    util::UnitKey,
 };
 
 /// Validate a block, returning the merkle root and fees
@@ -130,7 +129,7 @@ pub fn connect(
         for (vin, input) in filled_tx.inputs().iter().enumerate() {
             let spent_output = state
                 .utxos
-                .get(rwtxn, input)?
+                .try_get(rwtxn, input)?
                 .ok_or(Error::NoUtxo { outpoint: *input })?;
             let spent_output = SpentOutput {
                 output: spent_output,
@@ -155,14 +154,14 @@ pub fn connect(
         match &transaction.data {
             None => (),
             Some(TxData::BitNameReservation { commitment }) => {
-                state.bitname_reservations.put(rwtxn, &txid, commitment)?;
+                state.bitnames.put_reservation(rwtxn, &txid, commitment)?;
             }
             Some(TxData::BitNameRegistration {
                 name_hash,
                 revealed_nonce: _,
                 bitname_data,
             }) => {
-                let () = state.apply_bitname_registration(
+                let () = state.bitnames.apply_registration(
                     rwtxn,
                     &filled_tx,
                     *name_hash,
@@ -171,7 +170,7 @@ pub fn connect(
                 )?;
             }
             Some(TxData::BitNameUpdate(bitname_updates)) => {
-                let () = state.apply_bitname_updates(
+                let () = state.bitnames.apply_updates(
                     rwtxn,
                     &filled_tx,
                     (**bitname_updates).clone(),
@@ -179,7 +178,7 @@ pub fn connect(
                 )?;
             }
             Some(TxData::BatchIcann(batch_icann_data)) => {
-                let () = state.apply_batch_icann(
+                let () = state.bitnames.apply_batch_icann(
                     rwtxn,
                     &filled_tx,
                     batch_icann_data,
@@ -201,8 +200,8 @@ pub fn connect(
         return Err(err);
     }
     let block_hash = header.hash();
-    state.tip.put(rwtxn, &UnitKey, &block_hash)?;
-    state.height.put(rwtxn, &UnitKey, &height)?;
+    state.tip.put(rwtxn, &(), &block_hash)?;
+    state.height.put(rwtxn, &(), &height)?;
     Ok(merkle_root)
 }
 
@@ -212,7 +211,7 @@ pub fn disconnect_tip(
     header: &Header,
     body: &Body,
 ) -> Result<(), Error> {
-    let tip_hash = state.tip.try_get(rwtxn, &UnitKey)?.ok_or(Error::NoTip)?;
+    let tip_hash = state.tip.try_get(rwtxn, &())?.ok_or(Error::NoTip)?;
     if tip_hash != header.hash() {
         let err = error::InvalidHeader::BlockHash {
             expected: tip_hash,
@@ -232,8 +231,9 @@ pub fn disconnect_tip(
         match &tx.data {
             None => (),
             Some(TxData::BitNameReservation { .. }) => {
-                if !state.bitname_reservations.delete(rwtxn, &txid)? {
-                    return Err(Error::MissingReservation { txid });
+                if !state.bitnames.delete_reservation(rwtxn, &txid)? {
+                    let err = error::BitName::MissingReservation { txid };
+                    return Err(err.into());
                 }
             }
             Some(TxData::BitNameRegistration {
@@ -241,12 +241,12 @@ pub fn disconnect_tip(
                 revealed_nonce: _,
                 bitname_data: _,
             }) => {
-                let () = state.revert_bitname_registration(
-                    rwtxn, &filled_tx, *name_hash,
-                )?;
+                let () = state
+                    .bitnames
+                    .revert_registration(rwtxn, &filled_tx, *name_hash)?;
             }
             Some(TxData::BitNameUpdate(bitname_updates)) => {
-                let () = state.revert_bitname_updates(
+                let () = state.bitnames.revert_updates(
                     rwtxn,
                     &filled_tx,
                     (**bitname_updates).clone(),
@@ -254,7 +254,7 @@ pub fn disconnect_tip(
                 )?;
             }
             Some(TxData::BatchIcann(batch_icann_data)) => {
-                let () = state.revert_batch_icann(
+                let () = state.bitnames.revert_batch_icann(
                     rwtxn,
                     &filled_tx,
                     batch_icann_data,
@@ -278,7 +278,7 @@ pub fn disconnect_tip(
         )?;
         // unspend STXOs, last-to-first
         tx.inputs.iter().rev().try_for_each(|outpoint| {
-            if let Some(spent_output) = state.stxos.get(rwtxn, outpoint)? {
+            if let Some(spent_output) = state.stxos.try_get(rwtxn, outpoint)? {
                 state.stxos.delete(rwtxn, outpoint)?;
                 state.utxos.put(rwtxn, outpoint, &spent_output.output)?;
                 Ok(())
@@ -318,13 +318,13 @@ pub fn disconnect_tip(
     }
     match (header.prev_side_hash, height) {
         (None, 0) => {
-            state.tip.delete(rwtxn, &UnitKey)?;
-            state.height.delete(rwtxn, &UnitKey)?;
+            state.tip.delete(rwtxn, &())?;
+            state.height.delete(rwtxn, &())?;
         }
         (None, _) | (_, 0) => return Err(Error::NoTip),
         (Some(prev_side_hash), height) => {
-            state.tip.put(rwtxn, &UnitKey, &prev_side_hash)?;
-            state.height.put(rwtxn, &UnitKey, &(height - 1))?;
+            state.tip.put(rwtxn, &(), &prev_side_hash)?;
+            state.height.put(rwtxn, &(), &(height - 1))?;
         }
     }
     Ok(())

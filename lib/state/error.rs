@@ -1,7 +1,41 @@
+//! State errors
+
+use sneed::{db::error as db, env::error as env, rwtxn::error as rwtxn};
+use thiserror::Error;
+use transitive::Transitive;
+
 use crate::types::{
-    AmountOverflowError, AmountUnderflowError, BitName, BlockHash, M6id,
-    MerkleRoot, OutPoint, Txid, WithdrawalBundleError,
+    AmountOverflowError, AmountUnderflowError, BitName as BitNameId, BlockHash,
+    M6id, MerkleRoot, OutPoint, Txid, WithdrawalBundleError,
 };
+
+/// Errors related to BitNames
+#[derive(Debug, Error, Transitive)]
+#[transitive(from(db::Delete))]
+#[transitive(from(db::Last))]
+#[transitive(from(db::Put))]
+#[transitive(from(db::TryGet))]
+pub enum BitName {
+    #[error("Bitname {bitname} already registered as an ICANN name")]
+    AlreadyIcann { bitname: BitNameId },
+    #[error(transparent)]
+    Db(#[from] db::Error),
+    #[error("Missing BitName {bitname}")]
+    Missing { bitname: BitNameId },
+    #[error("Missing BitName input {bitname}")]
+    MissingBitNameInput { bitname: BitNameId },
+    #[error(
+        "Missing BitName data for {bitname} at block height {block_height}"
+    )]
+    MissingData {
+        bitname: BitNameId,
+        block_height: u32,
+    },
+    #[error("missing BitName reservation {txid}")]
+    MissingReservation { txid: Txid },
+    #[error("no BitNames to update")]
+    NoBitNamesToUpdate,
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum InvalidHeader {
@@ -17,7 +51,17 @@ pub enum InvalidHeader {
     },
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error, Transitive)]
+#[transitive(from(db::Clear))]
+#[transitive(from(db::Delete))]
+#[transitive(from(db::IterInit))]
+#[transitive(from(db::IterItem))]
+#[transitive(from(db::Last))]
+#[transitive(from(db::Put))]
+#[transitive(from(db::TryGet))]
+#[transitive(from(env::CreateDb))]
+#[transitive(from(env::WriteTxn))]
+#[transitive(from(rwtxn::Commit))]
 pub enum Error {
     #[error(transparent)]
     AmountOverflow(#[from] AmountOverflowError),
@@ -27,10 +71,10 @@ pub enum Error {
     AuthorizationError,
     #[error("bad coinbase output content")]
     BadCoinbaseOutputContent,
+    #[error(transparent)]
+    BitName(#[from] BitName),
     #[error("bitname {name_hash} already registered")]
-    BitNameAlreadyRegistered { name_hash: BitName },
-    #[error("bitname {name_hash} already registered as an ICANN name")]
-    BitNameAlreadyIcann { name_hash: BitName },
+    BitNameAlreadyRegistered { name_hash: BitNameId },
     #[error("bundle too heavy {weight} > {max_weight}")]
     BundleTooHeavy { weight: u64, max_weight: u64 },
     #[error(transparent)]
@@ -50,21 +94,6 @@ pub enum Error {
     InvalidHeader(#[from] InvalidHeader),
     #[error("failed to compute merkle root")]
     MerkleRoot,
-    #[error("missing BitName {name_hash}")]
-    MissingBitName { name_hash: BitName },
-    #[error(
-        "Missing BitName data for {name_hash} at block height {block_height}"
-    )]
-    MissingBitNameData {
-        name_hash: BitName,
-        block_height: u32,
-    },
-    #[error("missing BitName input {name_hash}")]
-    MissingBitNameInput { name_hash: BitName },
-    #[error("missing BitName reservation {txid}")]
-    MissingReservation { txid: Txid },
-    #[error("no BitNames to update")]
-    NoBitNamesToUpdate,
     #[error("deposit block doesn't exist")]
     NoDepositBlock,
     #[error("total fees less than coinbase value")]
