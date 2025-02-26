@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey};
 
 use crate::{
-    authorization::Authorization,
+    authorization::{self, Authorization},
     types::{
         constants, hashes, proto::mainchain::TwoWayPegData, Address,
         AmountOverflowError, Authorized, AuthorizedTransaction, BlockHash,
@@ -403,9 +403,14 @@ impl State {
                 &tx.transaction.outputs,
                 &batch_icann_data.plain_names,
             ));
-            constants::BATCH_ICANN_VERIFYING_KEY
-                .0
-                .verify_strict(&msg_hash, &batch_icann_data.signature)?;
+            if !authorization::verify(
+                batch_icann_data.signature,
+                &constants::BATCH_ICANN_VERIFYING_KEY,
+                authorization::Dst::Arbitrary,
+                &msg_hash,
+            ) {
+                return Err(Error::InvalidBatchIcannRegistrationSignature);
+            }
         }
         Ok(())
     }

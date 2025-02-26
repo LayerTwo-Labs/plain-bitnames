@@ -18,7 +18,7 @@ pub enum Bech32mDecodeError {
     #[error("Invalid bytes: {}", hex::encode(.bytes))]
     InvalidBytes {
         bytes: [u8; 32],
-        source: Box<dyn std::error::Error>,
+        source: Box<ed25519_dalek::SignatureError>,
     },
     #[error(transparent)]
     WrongHrp(#[from] Box<WrongHrpError>),

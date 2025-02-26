@@ -85,6 +85,8 @@ pub enum Error {
     Heed(#[from] heed::Error),
     #[error("invalid ICANN name: {plain_name}")]
     IcannNameInvalid { plain_name: String },
+    #[error("Invalid Batch ICANN registration signature")]
+    InvalidBatchIcannRegistrationSignature,
     #[error("invalid body: expected merkle root {expected}, but computed {computed}")]
     InvalidBody {
         expected: MerkleRoot,
@@ -108,8 +110,6 @@ pub enum Error {
     NoUtxo { outpoint: OutPoint },
     #[error("Withdrawal bundle event block doesn't exist")]
     NoWithdrawalBundleEventBlock,
-    #[error(transparent)]
-    SignatureError(#[from] ed25519_dalek::SignatureError),
     #[error("Too few BitName outputs")]
     TooFewBitNameOutputs,
     #[error("unbalanced BitNames: {n_bitname_inputs} BitName inputs, {n_bitname_outputs} BitName outputs")]

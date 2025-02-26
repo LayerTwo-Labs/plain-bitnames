@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr};
+use std::{borrow::Cow, collections::HashMap, net::SocketAddr};
 
 use bitcoin::Amount;
 use jsonrpsee::{
@@ -8,11 +8,12 @@ use jsonrpsee::{
 };
 
 use plain_bitnames::{
+    authorization::{self, Dst, Signature},
     net::Peer,
     types::{
-        hashes::BitName, Address, BitNameData, Block, BlockHash,
-        EncryptionPubKey, FilledOutput, OutPoint, PointedOutput, Transaction,
-        Txid, VerifyingKey, WithdrawalBundle,
+        hashes::BitName, Address, Authorization, BitNameData, Block, BlockHash,
+        EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
+        PointedOutput, Transaction, Txid, VerifyingKey, WithdrawalBundle,
     },
     wallet::Balance,
 };
@@ -297,6 +298,26 @@ impl RpcServer for RpcServerImpl {
             .map_err(custom_err)
     }
 
+    async fn register_bitname(
+        &self,
+        plain_name: String,
+        bitname_data: Option<MutableBitNameData>,
+    ) -> RpcResult<Txid> {
+        let mut tx = Transaction::default();
+        let bitname_data = Cow::Owned(bitname_data.unwrap_or_default());
+        let () = match self.app.wallet.register_bitname(
+            &mut tx,
+            &plain_name,
+            bitname_data,
+        ) {
+            Ok(()) => (),
+            Err(err) => return Err(custom_err(err)),
+        };
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(custom_err)?;
+        Ok(txid)
+    }
+
     async fn reserve_bitname(&self, plain_name: String) -> RpcResult<Txid> {
         let mut tx = Transaction::default();
         let () = match self.app.wallet.reserve_bitname(&mut tx, &plain_name) {
@@ -319,6 +340,28 @@ impl RpcServer for RpcServerImpl {
         let sidechain_wealth =
             self.app.node.get_sidechain_wealth().map_err(custom_err)?;
         Ok(sidechain_wealth.to_sat())
+    }
+
+    async fn sign_arbitrary_msg(
+        &self,
+        verifying_key: VerifyingKey,
+        msg: String,
+    ) -> RpcResult<Signature> {
+        self.app
+            .wallet
+            .sign_arbitrary_msg(&verifying_key, &msg)
+            .map_err(custom_err)
+    }
+
+    async fn sign_arbitrary_msg_as_addr(
+        &self,
+        address: Address,
+        msg: String,
+    ) -> RpcResult<Authorization> {
+        self.app
+            .wallet
+            .sign_arbitrary_msg_as_addr(&address, &msg)
+            .map_err(custom_err)
     }
 
     async fn stop(&self) {
@@ -352,6 +395,22 @@ impl RpcServer for RpcServerImpl {
         let txid = tx.txid();
         self.app.sign_and_send(tx).map_err(custom_err)?;
         Ok(txid)
+    }
+
+    async fn verify_signature(
+        &self,
+        signature: Signature,
+        verifying_key: VerifyingKey,
+        dst: Dst,
+        msg: String,
+    ) -> RpcResult<bool> {
+        let res = authorization::verify(
+            signature,
+            &verifying_key,
+            dst,
+            msg.as_bytes(),
+        );
+        Ok(res)
     }
 
     async fn withdraw(

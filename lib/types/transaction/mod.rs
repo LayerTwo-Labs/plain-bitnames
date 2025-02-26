@@ -151,23 +151,12 @@ pub type TxInputs = Vec<OutPoint>;
 
 pub type TxOutputs = Vec<Output>;
 
-fn borsh_serialize_signature<W>(
-    sig: &Signature,
-    writer: &mut W,
-) -> borsh::io::Result<()>
-where
-    W: borsh::io::Write,
-{
-    borsh::BorshSerialize::serialize(&sig.to_bytes(), writer)
-}
-
 /// batch icann registration tx payload
 #[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct BatchIcannRegistrationData {
     /// Plaintext names of the bitnames to be registered as ICANN domains
     pub plain_names: Vec<String>,
     /// Signature over the batch icann registration tx
-    #[borsh(serialize_with = "borsh_serialize_signature")]
     #[schema(schema_with = <String as utoipa::PartialSchema>::schema)]
     pub signature: Signature,
 }
