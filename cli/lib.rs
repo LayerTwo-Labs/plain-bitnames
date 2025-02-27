@@ -32,6 +32,10 @@ pub enum Command {
     FormatDepositAddress { address: Address },
     /// Generate a mnemonic seed phrase
     GenerateMnemonic,
+    /// Get the best mainchain block hash
+    GetBestMainchainBlockHash,
+    /// Get the best sidechain block hash
+    GetBestSidechainBlockHash,
     /// Get block data
     GetBlock { block_hash: BlockHash },
     /// Get mainchain blocks that commit to a specified block hash
@@ -216,6 +220,14 @@ where
         Command::GetBlockcount => {
             let blockcount = rpc_client.getblockcount().await?;
             format!("{blockcount}")
+        }
+        Command::GetBestMainchainBlockHash => {
+            let block_hash = rpc_client.get_best_mainchain_block_hash().await?;
+            serde_json::to_string_pretty(&block_hash)?
+        }
+        Command::GetBestSidechainBlockHash => {
+            let block_hash = rpc_client.get_best_sidechain_block_hash().await?;
+            serde_json::to_string_pretty(&block_hash)?
         }
         Command::GetBmmInclusions { block_hash } => {
             let bmm_inclusions =
