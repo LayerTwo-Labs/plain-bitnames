@@ -41,3 +41,21 @@ impl PartialSchema for OpenApi {
         RefOr::T(Schema::Object(obj))
     }
 }
+
+/// Optional `T`
+pub struct Optional<T>(PhantomData<T>);
+
+impl<T> PartialSchema for Optional<T>
+where
+    T: PartialSchema,
+{
+    fn schema() -> openapi::RefOr<openapi::schema::Schema> {
+        openapi::schema::OneOf::builder()
+            .item(
+                openapi::schema::Object::builder()
+                    .schema_type(openapi::schema::Type::Null),
+            )
+            .item(T::schema())
+            .into()
+    }
+}
