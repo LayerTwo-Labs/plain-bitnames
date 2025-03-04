@@ -4817,6 +4817,7 @@ dependencies = [
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
+ "url",
  "utoipa",
 ]
 
@@ -4834,6 +4835,7 @@ dependencies = [
  "serde_json",
  "serde_json_canonicalizer",
  "tokio",
+ "url",
  "utoipa",
 ]
 
