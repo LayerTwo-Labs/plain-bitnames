@@ -6,8 +6,7 @@ use std::{
 
 use clap::{Parser, Subcommand};
 use http::HeaderMap;
-use jsonrpsee::core::client::ClientT;
-use jsonrpsee::http_client::HttpClientBuilder;
+use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
 use plain_bitnames::types::{Address, BitName, BlockHash, THIS_SIDECHAIN};
 use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
 use tracing_subscriber::layer::SubscriberExt as _;
@@ -159,9 +158,6 @@ const DEFAULT_TIMEOUT_SECS: u64 = 60;
 #[derive(Clone, Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 pub struct Cli {
-    #[arg(short, long, help = "Enable verbose HTTP output")]
-    pub verbose: bool,
-
     #[command(subcommand)]
     pub command: Command,
     /// Base URL used for requests to the RPC server.
@@ -170,6 +166,8 @@ pub struct Cli {
     /// Timeout for RPC requests in seconds.
     #[arg(default_value_t = DEFAULT_TIMEOUT_SECS, long = "timeout")]
     timeout_secs: u64,
+    #[arg(short, long, help = "Enable verbose HTTP output")]
+    pub verbose: bool,
 }
 
 impl Cli {
@@ -177,13 +175,13 @@ impl Cli {
         command: Command,
         rpc_url: Url,
         timeout_secs: Option<u64>,
-        verbose: bool,
+        verbose: Option<bool>,
     ) -> Self {
         Self {
             command,
             rpc_url,
             timeout_secs: timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS),
-            verbose,
+            verbose: verbose.unwrap_or(false),
         }
     }
 }
@@ -371,11 +369,8 @@ impl Cli {
         if self.verbose {
             set_tracing_subscriber()?;
         }
-
         let request_id = uuid::Uuid::new_v4().as_simple().to_string();
-
-        tracing::info!("request ID: {}", request_id);
-
+        tracing::info!(%request_id);
         let builder = HttpClientBuilder::default()
             .request_timeout(Duration::from_secs(self.timeout_secs))
             .set_max_logging_length(1024)
@@ -383,7 +378,6 @@ impl Cli {
                 http::header::HeaderName::from_static("x-request-id"),
                 http::header::HeaderValue::from_str(&request_id)?,
             )]));
-
         let client = builder.build(self.rpc_url)?;
         let result = handle_command(&client, self.command).await?;
         Ok(result)

@@ -8,14 +8,14 @@ use bitcoin::{
     bip32::{ChildNumber, DerivationPath, Xpriv},
     Amount,
 };
-use fallible_iterator::{FallibleIterator as _, IteratorExt as _};
+use fallible_iterator::FallibleIterator as _;
 use futures::{Stream, StreamExt};
 use heed::{
     byteorder::BigEndian,
     types::{Bytes, SerdeBincode, Str, U32, U8},
-    RoTxn,
 };
 use serde::{Deserialize, Serialize};
+use sneed::{db, env, rwtxn, DbError, Env, EnvError, RwTxnError, UnitKey};
 use thiserror::Error;
 use tokio_stream::{wrappers::WatchStream, StreamMap};
 
@@ -26,9 +26,9 @@ use crate::{
         AuthorizedTransaction, BitcoinOutputContent, EncryptionPubKey,
         FilledOutput, GetValue, Hash, InPoint, MutableBitNameData, OutPoint,
         Output, OutputContent, SpentOutput, Transaction, TxData, VerifyingKey,
-        WithdrawalOutputContent,
+        Version, WithdrawalOutputContent, VERSION,
     },
-    util::{EnvExt, Watchable, WatchableDb},
+    util::Watchable,
 };
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
@@ -50,7 +50,20 @@ pub struct VkDoesNotExistError {
     vk: VerifyingKey,
 }
 
-#[derive(Debug, Error)]
+#[derive(transitive::Transitive, Debug, Error)]
+#[transitive(from(db::error::Clear))]
+#[transitive(from(db::error::Delete))]
+#[transitive(from(db::error::IterInit))]
+#[transitive(from(db::error::IterItem))]
+#[transitive(from(db::error::Last))]
+#[transitive(from(db::error::Len))]
+#[transitive(from(db::error::Put))]
+#[transitive(from(db::error::TryGet))]
+#[transitive(from(env::error::CreateDb))]
+#[transitive(from(env::error::OpenEnv))]
+#[transitive(from(env::error::ReadTxn))]
+#[transitive(from(env::error::WriteTxn))]
+#[transitive(from(rwtxn::error::Commit))]
 pub enum Error {
     #[error("address {address} does not exist")]
     AddressDoesNotExist { address: crate::types::Address },
@@ -62,10 +75,14 @@ pub enum Error {
     Authorization(#[from] crate::authorization::Error),
     #[error("bip32 error")]
     Bip32(#[from] bitcoin::bip32::Error),
+    #[error(transparent)]
+    Db(#[from] DbError),
+    #[error("Database env error")]
+    DbEnv(#[from] EnvError),
+    #[error("Database write error")]
+    DbWrite(#[from] RwTxnError),
     #[error("Encryption pubkey {epk} does not exist")]
     EpkDoesNotExist { epk: EncryptionPubKey },
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
     #[error("io error")]
     Io(#[from] std::io::Error),
     #[error("no index for address {address}")]
@@ -88,62 +105,78 @@ pub enum Error {
     VkDoesNotExist(#[from] Box<VkDoesNotExistError>),
 }
 
+/// Marker type for Wallet Env
+struct WalletEnv;
+
+type DatabaseUnique<KC, DC> = sneed::DatabaseUnique<KC, DC, WalletEnv>;
+type RoTxn<'a> = sneed::RoTxn<'a, WalletEnv>;
+
 #[derive(Clone)]
 pub struct Wallet {
-    env: heed::Env,
+    env: sneed::Env<WalletEnv>,
     // Seed is always [u8; 64], but due to serde not implementing serialize
     // for [T; 64], use heed's `Bytes`
     // TODO: Don't store the seed in plaintext.
-    seed: WatchableDb<U8, Bytes>,
+    seed: DatabaseUnique<U8, Bytes>,
     /// Map each address to it's index
-    address_to_index: WatchableDb<SerdeBincode<Address>, U32<BigEndian>>,
+    address_to_index: DatabaseUnique<SerdeBincode<Address>, U32<BigEndian>>,
     /// Map each encryption pubkey to it's index
-    epk_to_index: WatchableDb<SerdeBincode<EncryptionPubKey>, U32<BigEndian>>,
+    epk_to_index:
+        DatabaseUnique<SerdeBincode<EncryptionPubKey>, U32<BigEndian>>,
     /// Map each address index to an address
-    index_to_address: WatchableDb<U32<BigEndian>, SerdeBincode<Address>>,
+    index_to_address: DatabaseUnique<U32<BigEndian>, SerdeBincode<Address>>,
     /// Map each encryption key index to an encryption pubkey
-    index_to_epk: WatchableDb<U32<BigEndian>, SerdeBincode<EncryptionPubKey>>,
+    index_to_epk:
+        DatabaseUnique<U32<BigEndian>, SerdeBincode<EncryptionPubKey>>,
     /// Map each signing key index to a verifying key
-    index_to_vk: WatchableDb<U32<BigEndian>, SerdeBincode<VerifyingKey>>,
-    utxos: WatchableDb<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
-    stxos: WatchableDb<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
+    index_to_vk: DatabaseUnique<U32<BigEndian>, SerdeBincode<VerifyingKey>>,
+    utxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
+    stxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
     /// Associates reservation commitments with plaintext BitNames
-    bitname_reservations: WatchableDb<SerdeBincode<[u8; 32]>, Str>,
+    bitname_reservations: DatabaseUnique<SerdeBincode<[u8; 32]>, Str>,
     /// Associates BitNames with plaintext names
-    known_bitnames: WatchableDb<SerdeBincode<BitName>, Str>,
+    known_bitnames: DatabaseUnique<SerdeBincode<BitName>, Str>,
     /// Map each verifying key to it's index
-    vk_to_index: WatchableDb<SerdeBincode<VerifyingKey>, U32<BigEndian>>,
+    vk_to_index: DatabaseUnique<SerdeBincode<VerifyingKey>, U32<BigEndian>>,
+    _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 11;
+    pub const NUM_DBS: u32 = 12;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
-        let env = unsafe {
-            heed::EnvOpenOptions::new()
+        let env = {
+            let mut env_open_options = heed::EnvOpenOptions::new();
+            env_open_options
                 .map_size(10 * 1024 * 1024) // 10MB
-                .max_dbs(Self::NUM_DBS)
-                .open(path)?
+                .max_dbs(Self::NUM_DBS);
+            unsafe { Env::open(&env_open_options, path) }?
         };
         let mut rwtxn = env.write_txn()?;
-        let seed_db = env.create_watchable_db(&mut rwtxn, "seed")?;
+        let seed_db = DatabaseUnique::create(&env, &mut rwtxn, "seed")?;
         let address_to_index =
-            env.create_watchable_db(&mut rwtxn, "address_to_index")?;
+            DatabaseUnique::create(&env, &mut rwtxn, "address_to_index")?;
         let epk_to_index =
-            env.create_watchable_db(&mut rwtxn, "epk_to_index")?;
+            DatabaseUnique::create(&env, &mut rwtxn, "epk_to_index")?;
         let index_to_address =
-            env.create_watchable_db(&mut rwtxn, "index_to_address")?;
+            DatabaseUnique::create(&env, &mut rwtxn, "index_to_address")?;
         let index_to_epk =
-            env.create_watchable_db(&mut rwtxn, "index_to_epk")?;
-        let index_to_vk = env.create_watchable_db(&mut rwtxn, "index_to_vk")?;
-        let utxos = env.create_watchable_db(&mut rwtxn, "utxos")?;
-        let stxos = env.create_watchable_db(&mut rwtxn, "stxos")?;
+            DatabaseUnique::create(&env, &mut rwtxn, "index_to_epk")?;
+        let index_to_vk =
+            DatabaseUnique::create(&env, &mut rwtxn, "index_to_vk")?;
+        let utxos = DatabaseUnique::create(&env, &mut rwtxn, "utxos")?;
+        let stxos = DatabaseUnique::create(&env, &mut rwtxn, "stxos")?;
         let bitname_reservations =
-            env.create_watchable_db(&mut rwtxn, "bitname_reservations")?;
+            DatabaseUnique::create(&env, &mut rwtxn, "bitname_reservations")?;
         let known_bitnames =
-            env.create_watchable_db(&mut rwtxn, "known_bitnames")?;
-        let vk_to_index = env.create_watchable_db(&mut rwtxn, "vk_to_index")?;
+            DatabaseUnique::create(&env, &mut rwtxn, "known_bitnames")?;
+        let vk_to_index =
+            DatabaseUnique::create(&env, &mut rwtxn, "vk_to_index")?;
+        let version = DatabaseUnique::create(&env, &mut rwtxn, "version")?;
+        if version.try_get(&rwtxn, &())?.is_none() {
+            version.put(&mut rwtxn, &(), &*VERSION)?;
+        }
         rwtxn.commit()?;
         Ok(Self {
             env,
@@ -158,6 +191,7 @@ impl Wallet {
             bitname_reservations,
             known_bitnames,
             vk_to_index,
+            _version: version,
         })
     }
 
@@ -322,10 +356,19 @@ impl Wallet {
         Ok(())
     }
 
+    pub fn has_seed(&self) -> Result<bool, Error> {
+        let rotxn = self.env.read_txn()?;
+        Ok(self
+            .seed
+            .try_get(&rotxn, &0)
+            .map_err(DbError::from)?
+            .is_some())
+    }
+
     /// Set the seed, if it does not already exist
     pub fn set_seed(&self, seed: &[u8; 64]) -> Result<(), Error> {
         let rotxn = self.env.read_txn()?;
-        match self.seed.try_get(&rotxn, &0)? {
+        match self.seed.try_get(&rotxn, &0).map_err(DbError::from)? {
             Some(current_seed) => {
                 if current_seed == seed {
                     Ok(())
@@ -349,11 +392,6 @@ impl Wallet {
         let seed = bip39::Seed::new(&mnemonic, "");
         let seed_bytes: [u8; 64] = seed.as_bytes().try_into().unwrap();
         self.set_seed(&seed_bytes)
-    }
-
-    pub fn has_seed(&self) -> Result<bool, Error> {
-        let rotxn = self.env.read_txn()?;
-        Ok(self.seed.try_get(&rotxn, &0)?.is_some())
     }
 
     /// Create a transaction with a fee only.
@@ -585,10 +623,7 @@ impl Wallet {
         value: bitcoin::Amount,
     ) -> Result<(bitcoin::Amount, HashMap<OutPoint, FilledOutput>), Error> {
         let rotxn = self.env.read_txn()?;
-        let mut utxos = vec![];
-        for item in self.utxos.iter(&rotxn)? {
-            utxos.push(item?);
-        }
+        let mut utxos: Vec<_> = self.utxos.iter(&rotxn)?.collect()?;
         utxos.sort_unstable_by_key(|(_, output)| output.get_value());
 
         let mut selected = HashMap::new();
@@ -619,19 +654,22 @@ impl Wallet {
         &self,
         spent: &[(OutPoint, InPoint)],
     ) -> Result<(), Error> {
-        let mut txn = self.env.write_txn()?;
+        let mut rwtxn = self.env.write_txn()?;
         for (outpoint, inpoint) in spent {
-            let output = self.utxos.try_get(&txn, outpoint)?;
-            if let Some(output) = output {
-                self.utxos.delete(&mut txn, outpoint)?;
+            if let Some(output) = self
+                .utxos
+                .try_get(&rwtxn, outpoint)
+                .map_err(DbError::from)?
+            {
+                self.utxos.delete(&mut rwtxn, outpoint)?;
                 let spent_output = SpentOutput {
                     output,
                     inpoint: *inpoint,
                 };
-                self.stxos.put(&mut txn, outpoint, &spent_output)?;
+                self.stxos.put(&mut rwtxn, outpoint, &spent_output)?;
             }
         }
-        txn.commit()?;
+        rwtxn.commit()?;
         Ok(())
     }
 
@@ -639,11 +677,13 @@ impl Wallet {
         &self,
         utxos: &HashMap<OutPoint, FilledOutput>,
     ) -> Result<(), Error> {
-        let mut txn = self.env.write_txn()?;
+        let mut rwtxn = self.env.write_txn()?;
         for (outpoint, output) in utxos {
-            self.utxos.put(&mut txn, outpoint, output)?;
+            self.utxos
+                .put(&mut rwtxn, outpoint, output)
+                .map_err(DbError::from)?;
         }
-        txn.commit()?;
+        rwtxn.commit()?;
         Ok(())
     }
 
@@ -652,9 +692,9 @@ impl Wallet {
         let rotxn = self.env.read_txn()?;
         let () = self
             .utxos
-            .iter(&rotxn)?
-            .transpose_into_fallible()
-            .map_err(Error::from)
+            .iter(&rotxn)
+            .map_err(DbError::from)?
+            .map_err(|err| DbError::from(err).into())
             .for_each(|(_, utxo)| {
                 let value = utxo.get_value();
                 balance.total = balance
@@ -667,7 +707,7 @@ impl Wallet {
                         .checked_add(value)
                         .ok_or(AmountOverflowError)?;
                 }
-                Ok(())
+                Ok::<_, Error>(())
             })?;
         Ok(balance)
     }
@@ -696,21 +736,18 @@ impl Wallet {
 
     pub fn get_utxos(&self) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let rotxn = self.env.read_txn()?;
-        let mut utxos = HashMap::new();
-        for item in self.utxos.iter(&rotxn)? {
-            let (outpoint, output) = item?;
-            utxos.insert(outpoint, output);
-        }
+        let utxos: HashMap<_, _> = self
+            .utxos
+            .iter(&rotxn)
+            .map_err(DbError::from)?
+            .collect()
+            .map_err(DbError::from)?;
         Ok(utxos)
     }
 
     pub fn get_stxos(&self) -> Result<HashMap<OutPoint, SpentOutput>, Error> {
         let rotxn = self.env.read_txn()?;
-        let mut stxos = HashMap::new();
-        for item in self.stxos.iter(&rotxn)? {
-            let (outpoint, spent_output) = item?;
-            stxos.insert(outpoint, spent_output);
-        }
+        let stxos = self.stxos.iter(&rotxn)?.collect()?;
         Ok(stxos)
     }
 
@@ -734,11 +771,13 @@ impl Wallet {
 
     pub fn get_addresses(&self) -> Result<HashSet<Address>, Error> {
         let rotxn = self.env.read_txn()?;
-        let mut addresses = HashSet::new();
-        for item in self.index_to_address.iter(&rotxn)? {
-            let (_, address) = item?;
-            addresses.insert(address);
-        }
+        let addresses: HashSet<_> = self
+            .index_to_address
+            .iter(&rotxn)
+            .map_err(DbError::from)?
+            .map(|(_, address)| Ok(address))
+            .collect()
+            .map_err(DbError::from)?;
         Ok(addresses)
     }
 
@@ -753,7 +792,8 @@ impl Wallet {
                 self.utxos.try_get(&rotxn, input)?.ok_or(Error::NoUtxo)?;
             let index = self
                 .address_to_index
-                .try_get(&rotxn, &spent_utxo.address)?
+                .try_get(&rotxn, &spent_utxo.address)
+                .map_err(DbError::from)?
                 .ok_or(Error::NoIndex {
                     address: spent_utxo.address,
                 })?;
@@ -796,19 +836,20 @@ impl Watchable<()> for Wallet {
             bitname_reservations,
             known_bitnames,
             vk_to_index,
+            _version: _,
         } = self;
         let watchables = [
-            seed.watch(),
-            address_to_index.watch(),
-            epk_to_index.watch(),
-            index_to_address.watch(),
-            index_to_epk.watch(),
-            index_to_vk.watch(),
-            utxos.watch(),
-            stxos.watch(),
-            bitname_reservations.watch(),
-            known_bitnames.watch(),
-            vk_to_index.watch(),
+            seed.watch().clone(),
+            address_to_index.watch().clone(),
+            epk_to_index.watch().clone(),
+            index_to_address.watch().clone(),
+            index_to_epk.watch().clone(),
+            index_to_vk.watch().clone(),
+            utxos.watch().clone(),
+            stxos.watch().clone(),
+            bitname_reservations.watch().clone(),
+            known_bitnames.watch().clone(),
+            vk_to_index.watch().clone(),
         ];
         let streams = StreamMap::from_iter(
             watchables.into_iter().map(WatchStream::new).enumerate(),

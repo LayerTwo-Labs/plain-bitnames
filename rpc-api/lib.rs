@@ -108,7 +108,7 @@ pub trait Rpc {
         block_hash: plain_bitnames::types::BlockHash,
     ) -> RpcResult<Vec<bitcoin::BlockHash>>;
 
-    /// Get the best mainchain block hash known by Thunder
+    /// Get the best known mainchain block hash
     #[open_api_method(output_schema(
         PartialSchema = "schema::Optional<bitnames_schema::BitcoinBlockHash>"
     ))]

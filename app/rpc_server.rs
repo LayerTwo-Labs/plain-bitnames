@@ -26,10 +26,6 @@ use tower_http::{
 
 use crate::app::App;
 
-pub struct RpcServerImpl {
-    app: App,
-}
-
 fn custom_err_msg(err_msg: impl Into<String>) -> ErrorObject<'static> {
     ErrorObject::owned(-1, err_msg.into(), Option::<()>::None)
 }
@@ -40,6 +36,10 @@ where
 {
     let error = anyhow::Error::from(error);
     custom_err_msg(format!("{error:#}"))
+}
+
+pub struct RpcServerImpl {
+    app: App,
 }
 
 #[async_trait]
