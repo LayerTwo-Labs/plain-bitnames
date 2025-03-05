@@ -9,10 +9,11 @@ use plain_bitnames::{
     types::{
         hashes::BitName, schema as bitnames_schema, Address, Authorization,
         BatchIcannRegistrationData, BitNameData, BitNameDataUpdates,
-        BitNameSeqId, Block, BlockHash, Body, EncryptionPubKey, FilledOutput,
-        FilledOutputContent, Header, MerkleRoot, MutableBitNameData, OutPoint,
-        Output, OutputContent, PointedOutput, Transaction, TransactionData,
-        TxIn, Txid, VerifyingKey, WithdrawalBundle,
+        BitNameSeqId, BitcoinOutputContent, Block, BlockHash, Body,
+        EncryptionPubKey, FilledOutput, FilledOutputContent, Header,
+        MerkleRoot, MutableBitNameData, OutPoint, Output, OutputContent,
+        PointedOutput, Transaction, TransactionData, TxIn, Txid, VerifyingKey,
+        WithdrawalBundle, WithdrawalOutputContent,
     },
     wallet::Balance,
 };
@@ -34,12 +35,12 @@ pub struct TxInfo {
 #[open_api(ref_schemas[
     bitnames_schema::BitcoinAddr, bitnames_schema::BitcoinBlockHash,
     bitnames_schema::BitcoinOutPoint, bitnames_schema::BitcoinTransaction,
-    bitnames_schema::SocketAddr,
-    Address, Authorization, BatchIcannRegistrationData, BitName,
+    bitnames_schema::SocketAddr, Address, Authorization,
+    BatchIcannRegistrationData, BitcoinOutputContent, BitName,
     BitNameDataUpdates, BitNameSeqId, BlockHash, Body, EncryptionPubKey,
     FilledOutput, FilledOutputContent, Header, MerkleRoot, MutableBitNameData,
     OutPoint, Output, OutputContent, PeerConnectionStatus, Transaction,
-    TransactionData, Txid, TxIn, VerifyingKey,
+    TransactionData, Txid, TxIn, VerifyingKey, WithdrawalOutputContent,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {

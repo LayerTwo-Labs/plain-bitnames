@@ -109,15 +109,9 @@ pub fn connect(
             OutputContent::Bitcoin(value) => {
                 FilledOutputContent::Bitcoin(value)
             }
-            OutputContent::Withdrawal {
-                value,
-                main_fee,
-                main_address,
-            } => FilledOutputContent::BitcoinWithdrawal {
-                value,
-                main_fee,
-                main_address,
-            },
+            OutputContent::Withdrawal(withdrawal) => {
+                FilledOutputContent::BitcoinWithdrawal(withdrawal)
+            }
             OutputContent::BitName | OutputContent::BitNameReservation => {
                 return Err(Error::BadCoinbaseOutputContent);
             }

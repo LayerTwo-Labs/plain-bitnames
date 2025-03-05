@@ -16,8 +16,8 @@ use plain_bitnames::{
             self,
             generated::{validator_service_server, wallet_service_server},
         },
-        Address, AmountOverflowError, Body, FilledOutput, GetValue, InPoint,
-        OutPoint, Transaction,
+        Address, AmountOverflowError, BitcoinOutputContent, Body, FilledOutput,
+        GetValue, InPoint, OutPoint, Transaction,
     },
     wallet::{self, Wallet},
 };
@@ -455,7 +455,7 @@ impl App {
             bitcoin::Amount::ZERO => vec![],
             _ => vec![types::Output::new(
                 self.wallet.get_new_address()?,
-                types::OutputContent::Bitcoin(tx_fees),
+                types::OutputContent::Bitcoin(BitcoinOutputContent(tx_fees)),
             )],
         };
         let merkle_root = {

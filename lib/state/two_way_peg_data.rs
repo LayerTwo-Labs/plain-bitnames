@@ -14,6 +14,7 @@ use crate::{
         AggregatedWithdrawal, AmountOverflowError, FilledOutput,
         FilledOutputContent, InPoint, M6id, OutPoint, SpentOutput,
         WithdrawalBundle, WithdrawalBundleEvent, WithdrawalBundleStatus,
+        WithdrawalOutputContent,
     },
     util::UnitKey,
 };
@@ -40,11 +41,13 @@ fn collect_withdrawal_bundle(
     >::new();
     for item in state.utxos.iter(txn)? {
         let (outpoint, output) = item?;
-        if let FilledOutputContent::BitcoinWithdrawal {
-            value,
-            ref main_address,
-            main_fee,
-        } = output.content
+        if let FilledOutputContent::BitcoinWithdrawal(
+            WithdrawalOutputContent {
+                value,
+                ref main_address,
+                main_fee,
+            },
+        ) = output.content
         {
             let aggregated = address_to_aggregated_withdrawal
                 .entry(main_address.clone())

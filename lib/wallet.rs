@@ -23,9 +23,10 @@ use crate::{
     authorization::{get_address, Authorization},
     types::{
         hashes::BitName, Address, AmountOverflowError, AmountUnderflowError,
-        AuthorizedTransaction, EncryptionPubKey, FilledOutput, GetValue, Hash,
-        InPoint, MutableBitNameData, OutPoint, Output, OutputContent,
-        SpentOutput, Transaction, TxData, VerifyingKey,
+        AuthorizedTransaction, BitcoinOutputContent, EncryptionPubKey,
+        FilledOutput, GetValue, Hash, InPoint, MutableBitNameData, OutPoint,
+        Output, OutputContent, SpentOutput, Transaction, TxData, VerifyingKey,
+        WithdrawalOutputContent,
     },
     util::{EnvExt, Watchable, WatchableDb},
 };
@@ -363,7 +364,7 @@ impl Wallet {
         let inputs = coins.into_keys().collect();
         let outputs = vec![Output::new(
             self.get_new_address()?,
-            OutputContent::Bitcoin(change),
+            OutputContent::Bitcoin(BitcoinOutputContent(change)),
         )];
         Ok(Transaction::new(inputs, outputs))
     }
@@ -394,15 +395,15 @@ impl Wallet {
         let outputs = vec![
             Output::new(
                 self.get_new_address()?,
-                OutputContent::Withdrawal {
+                OutputContent::Withdrawal(WithdrawalOutputContent {
                     value,
                     main_fee,
                     main_address,
-                },
+                }),
             ),
             Output::new(
                 self.get_new_address()?,
-                OutputContent::Bitcoin(change),
+                OutputContent::Bitcoin(BitcoinOutputContent(change)),
             ),
         ];
         Ok(Transaction::new(inputs, outputs))
@@ -422,12 +423,12 @@ impl Wallet {
         let outputs = vec![
             Output {
                 address,
-                content: OutputContent::Bitcoin(value),
+                content: OutputContent::Bitcoin(BitcoinOutputContent(value)),
                 memo: memo.unwrap_or_default(),
             },
             Output::new(
                 self.get_new_address()?,
-                OutputContent::Bitcoin(change),
+                OutputContent::Bitcoin(BitcoinOutputContent(change)),
             ),
         ];
         Ok(Transaction::new(inputs, outputs))

@@ -1,6 +1,9 @@
 use eframe::egui::{self, Button};
 
-use plain_bitnames::types::{self, Output, OutputContent, Transaction};
+use plain_bitnames::types::{
+    self, BitcoinOutputContent, Output, OutputContent, Transaction,
+    WithdrawalOutputContent,
+};
 
 use crate::{app::App, gui::util::InnerResponseExt};
 
@@ -256,7 +259,9 @@ impl UtxoCreator {
                         let utxo = Output {
                             address: address.expect("should not happen"),
                             content: OutputContent::Bitcoin(
-                                value.expect("should not happen"),
+                                BitcoinOutputContent(
+                                    value.expect("should not happen"),
+                                ),
                             ),
                             memo,
                         };
@@ -293,12 +298,15 @@ impl UtxoCreator {
                     {
                         let utxo = Output {
                             address: address.expect("invalid address"),
-                            content: OutputContent::Withdrawal {
-                                value: value.expect("invalid value"),
-                                main_address: main_address
-                                    .expect("invalid main_address"),
-                                main_fee: main_fee.expect("invalid main_fee"),
-                            },
+                            content: OutputContent::Withdrawal(
+                                WithdrawalOutputContent {
+                                    value: value.expect("invalid value"),
+                                    main_address: main_address
+                                        .expect("invalid main_address"),
+                                    main_fee: main_fee
+                                        .expect("invalid main_fee"),
+                                },
+                            ),
                             memo: Vec::new(),
                         };
                         tx.outputs.push(utxo);

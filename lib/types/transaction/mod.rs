@@ -15,7 +15,10 @@ use crate::{
 };
 
 mod output_content;
-pub use output_content::{Content, Filled as FilledContent};
+pub use output_content::{
+    BitcoinContent as BitcoinOutputContent, Content, Filled as FilledContent,
+    WithdrawalContent as WithdrawalOutputContent,
+};
 
 fn borsh_serialize_bitcoin_outpoint<W>(
     block_hash: &bitcoin::OutPoint,
@@ -641,15 +644,9 @@ impl FilledTransaction {
                         filled_reservation_output_content.next()?.clone()
                     }
                     Content::Bitcoin(value) => FilledContent::Bitcoin(value),
-                    Content::Withdrawal {
-                        value,
-                        main_fee,
-                        main_address,
-                    } => FilledContent::BitcoinWithdrawal {
-                        value,
-                        main_fee,
-                        main_address,
-                    },
+                    Content::Withdrawal(withdrawal) => {
+                        FilledContent::BitcoinWithdrawal(withdrawal)
+                    }
                 };
                 Some(FilledOutput {
                     address: output.address,

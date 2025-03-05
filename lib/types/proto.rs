@@ -248,7 +248,8 @@ pub mod mainchain {
 
     use super::common::{ConsensusHex, ReverseHex};
     use crate::types::{
-        FilledOutput, FilledOutputContent, M6id, THIS_SIDECHAIN,
+        BitcoinOutputContent, FilledOutput, FilledOutputContent, M6id,
+        THIS_SIDECHAIN,
     };
 
     pub mod generated {
@@ -422,7 +423,9 @@ pub mod mainchain {
             Ok(Self {
                 address,
                 memo: Vec::new(),
-                content: FilledOutputContent::Bitcoin(value),
+                content: FilledOutputContent::Bitcoin(BitcoinOutputContent(
+                    value,
+                )),
             })
         }
     }

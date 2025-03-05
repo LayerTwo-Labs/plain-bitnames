@@ -32,10 +32,10 @@ pub use hashes::{BitName, BlockHash, Hash, M6id, MerkleRoot, Txid};
 pub use keys::{EncryptionPubKey, VerifyingKey};
 pub use transaction::{
     Authorized, AuthorizedTransaction, BatchIcannRegistrationData,
-    Content as OutputContent, FilledContent as FilledOutputContent,
-    FilledOutput, FilledTransaction, InPoint, OutPoint, Output,
-    Pointed as PointedOutput, SpentOutput, Transaction, TransactionData,
-    TxData,
+    BitcoinOutputContent, Content as OutputContent,
+    FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
+    InPoint, OutPoint, Output, Pointed as PointedOutput, SpentOutput,
+    Transaction, TransactionData, TxData, WithdrawalOutputContent,
 };
 
 pub const THIS_SIDECHAIN: u8 = 2;

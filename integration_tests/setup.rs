@@ -214,7 +214,7 @@ impl Sidechain for PostSetup {
             utxo.output.address.to_string() == address
                 && match utxo.output.content {
                     FilledOutputContent::Bitcoin(utxo_value) => {
-                        utxo_value == value
+                        utxo_value.0 == value
                     }
                     FilledOutputContent::BitcoinWithdrawal { .. }
                     | FilledOutputContent::BitName(_)
