@@ -3,6 +3,7 @@ use tracing_subscriber::{filter as tracing_filter, layer::SubscriberExt};
 
 mod ibd;
 mod integration_test;
+mod register_bitname;
 mod setup;
 mod unknown_withdrawal;
 mod util;

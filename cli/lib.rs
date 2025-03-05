@@ -7,7 +7,13 @@ use std::{
 use clap::{Parser, Subcommand};
 use http::HeaderMap;
 use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
-use plain_bitnames::types::{Address, BitName, BlockHash, THIS_SIDECHAIN};
+use plain_bitnames::{
+    authorization::{Dst, Signature},
+    types::{
+        Address, BitName, BlockHash, MutableBitNameData, VerifyingKey,
+        THIS_SIDECHAIN,
+    },
+};
 use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::Url;
@@ -77,6 +83,12 @@ pub enum Command {
     OpenApiSchema,
     /// Get pending withdrawal bundle
     PendingWithdrawalBundle,
+    /// Register a BitName
+    RegisterBitname {
+        plaintext_name: String,
+        #[command(flatten)]
+        bitname_data: Box<MutableBitNameData>,
+    },
     /// Reserve a BitName
     ReserveBitname { plaintext_name: String },
     /// Resolve a commitment from a BitName
@@ -88,6 +100,20 @@ pub enum Command {
     SetSeedFromMnemonic { mnemonic: String },
     /// Get total sidechain wealth
     SidechainWealth,
+    /// Sign an arbitrary message with the specified verifying key
+    SignArbitraryMsg {
+        #[arg(long)]
+        verifying_key: VerifyingKey,
+        #[arg(long)]
+        msg: String,
+    },
+    /// Sign an arbitrary message with the secret key for the specified address
+    SignArbitraryMsgAsAddr {
+        #[arg(long)]
+        address: Address,
+        #[arg(long)]
+        msg: String,
+    },
     /// Stop the node
     Stop,
     /// Transfer funds to the specified address
@@ -97,6 +123,18 @@ pub enum Command {
         value_sats: u64,
         #[arg(long)]
         fee_sats: u64,
+    },
+    /// Verify a signature on a message against the specified verifying key.
+    /// Returns `true` if the signature is valid
+    VerifySignature {
+        #[arg(long)]
+        signature: Signature,
+        #[arg(long)]
+        verifying_key: VerifyingKey,
+        #[arg(long)]
+        dst: Dst,
+        #[arg(long)]
+        msg: String,
     },
     /// Initiate a withdrawal to the specified mainchain address
     Withdraw {
@@ -300,6 +338,15 @@ where
                 rpc_client.pending_withdrawal_bundle().await?;
             serde_json::to_string_pretty(&withdrawal_bundle)?
         }
+        Command::RegisterBitname {
+            plaintext_name,
+            bitname_data,
+        } => {
+            let txid = rpc_client
+                .register_bitname(plaintext_name, Some(*bitname_data))
+                .await?;
+            format!("{txid}")
+        }
         Command::ReserveBitname { plaintext_name } => {
             let txid = rpc_client.reserve_bitname(plaintext_name).await?;
             format!("{txid}")
@@ -320,6 +367,15 @@ where
             let sidechain_wealth = rpc_client.sidechain_wealth_sats().await?;
             format!("{sidechain_wealth}")
         }
+        Command::SignArbitraryMsg { verifying_key, msg } => {
+            let sig = rpc_client.sign_arbitrary_msg(verifying_key, msg).await?;
+            format!("{sig}")
+        }
+        Command::SignArbitraryMsgAsAddr { address, msg } => {
+            let authorization =
+                rpc_client.sign_arbitrary_msg_as_addr(address, msg).await?;
+            serde_json::to_string_pretty(&authorization)?
+        }
         Command::Stop => {
             let () = rpc_client.stop().await?;
             String::default()
@@ -333,6 +389,17 @@ where
                 .transfer(dest, value_sats, fee_sats, None)
                 .await?;
             format!("{txid}")
+        }
+        Command::VerifySignature {
+            signature,
+            verifying_key,
+            dst,
+            msg,
+        } => {
+            let res = rpc_client
+                .verify_signature(signature, verifying_key, dst, msg)
+                .await?;
+            format!("{res}")
         }
         Command::Withdraw {
             mainchain_address,

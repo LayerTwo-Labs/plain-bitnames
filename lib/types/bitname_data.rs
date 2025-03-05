@@ -22,21 +22,32 @@ use crate::types::{BitNameSeqId, EncryptionPubKey, Hash, VerifyingKey};
     Serialize,
     ToSchema,
 )]
+#[cfg_attr(feature = "clap", derive(clap::Args))]
+#[cfg_attr(feature = "clap", group(required = false, multiple = true))]
 pub struct MutableBitNameData {
-    /// commitment to arbitrary data
+    /// Commitment to arbitrary data
+    #[cfg_attr(feature = "clap", arg(
+        long,
+        value_parser = |s: &str| <Hash as hex::FromHex>::from_hex(s)
+    ))]
     #[schema(value_type = Option<String>)]
     pub commitment: Option<Hash>,
-    /// optional ipv4 addr
+    /// Optional ipv4 addr
+    #[cfg_attr(feature = "clap", arg(long))]
     #[schema(value_type = Option<String>)]
     pub socket_addr_v4: Option<SocketAddrV4>,
-    /// optional ipv6 addr
+    /// Optional ipv6 addr
+    #[cfg_attr(feature = "clap", arg(long))]
     #[schema(value_type = Option<String>)]
     pub socket_addr_v6: Option<SocketAddrV6>,
-    /// optional pubkey used for encryption
+    /// Optional pubkey used for encryption
+    #[cfg_attr(feature = "clap", arg(long))]
     pub encryption_pubkey: Option<EncryptionPubKey>,
-    /// optional pubkey used for signing messages
+    /// Optional pubkey used for signing messages
+    #[cfg_attr(feature = "clap", arg(long))]
     pub signing_pubkey: Option<VerifyingKey>,
     /// optional minimum paymail fee, in sats
+    #[cfg_attr(feature = "clap", arg(long))]
     pub paymail_fee_sats: Option<u64>,
 }
 
