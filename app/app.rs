@@ -38,23 +38,29 @@ pub enum Error {
     CusfMainchain(#[from] plain_bitnames::types::proto::Error),
     #[error("io error")]
     Io(#[from] std::io::Error),
+    #[error("Failed to compute merkle root")]
+    MerkleRoot,
     #[error("miner error: {0}")]
     Miner(#[from] miner::Error),
     #[error("node error")]
-    Node(#[from] node::Error),
+    Node(#[source] Box<node::Error>),
     #[error("No CUSF mainchain wallet client")]
     NoCusfMainchainWalletClient,
-    #[error(transparent)]
-    Other(#[from] anyhow::Error),
     #[error(
         "Unable to verify existence of CUSF mainchain service(s) at {url}"
     )]
     VerifyMainchainServices {
-        url: url::Url,
-        source: tonic::Status,
+        url: Box<url::Url>,
+        source: Box<tonic::Status>,
     },
     #[error("wallet error")]
     Wallet(#[from] wallet::Error),
+}
+
+impl From<node::Error> for Error {
+    fn from(err: node::Error) -> Self {
+        Self::Node(Box::new(err))
+    }
 }
 
 fn update_wallet(node: &Node, wallet: &Wallet) -> Result<(), Error> {
@@ -212,8 +218,8 @@ impl App {
         let (cusf_mainchain, cusf_mainchain_wallet) = if runtime
             .block_on(Self::check_proto_support(transport.clone()))
             .map_err(|err| Error::VerifyMainchainServices {
-                url: config.mainchain_grpc_url.clone(),
-                source: err,
+                url: Box::new(config.mainchain_grpc_url.clone()),
+                source: Box::new(err),
             })? {
             (
                 mainchain::ValidatorClient::new(transport.clone()),
@@ -466,9 +472,7 @@ impl App {
                 .iter()
                 .map(|authorized_tx| authorized_tx.transaction.clone())
                 .collect::<Vec<_>>();
-            Body::compute_merkle_root(&coinbase, &txs)?.ok_or(Error::Other(
-                anyhow::anyhow!("Failed to compute merkle root"),
-            ))
+            Body::compute_merkle_root(&coinbase, &txs)?.ok_or(Error::MerkleRoot)
         }?;
         let body = {
             let txs = txs.into_iter().map(|tx| tx.into()).collect();
