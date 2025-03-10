@@ -11,9 +11,10 @@ use plain_bitnames::{
     authorization::{self, Dst, Signature},
     net::Peer,
     types::{
-        hashes::BitName, Address, Authorization, BitNameData, Block, BlockHash,
-        EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
-        PointedOutput, Transaction, Txid, VerifyingKey, WithdrawalBundle,
+        keys::Ecies, Address, Authorization, BitName, BitNameData, Block,
+        BlockHash, EncryptionPubKey, FilledOutput, MutableBitNameData,
+        OutPoint, PointedOutput, Transaction, Txid, VerifyingKey,
+        WithdrawalBundle,
     },
     wallet::Balance,
 };
@@ -84,6 +85,30 @@ impl RpcServer for RpcServerImpl {
         })
         .await
         .unwrap()
+    }
+
+    async fn decrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        msg: String,
+    ) -> RpcResult<String> {
+        let ciphertext = hex::decode(msg).map_err(custom_err)?;
+        self.app
+            .wallet
+            .decrypt_msg(&encryption_pubkey, &ciphertext)
+            .map(hex::encode)
+            .map_err(custom_err)
+    }
+
+    async fn encrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        msg: String,
+    ) -> RpcResult<String> {
+        Ecies::new(encryption_pubkey.0)
+            .encrypt(msg.as_bytes())
+            .map(hex::encode)
+            .map_err(|err| custom_err(anyhow::anyhow!("{err:?}")))
     }
 
     async fn format_deposit_address(

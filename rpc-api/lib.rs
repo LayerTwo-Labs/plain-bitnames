@@ -84,6 +84,25 @@ pub trait Rpc {
         addr: SocketAddr,
     ) -> RpcResult<()>;
 
+    /// Decrypt a message with the specified encryption key corresponding to
+    /// the specified encryption pubkey.
+    /// Returns a decrypted hex string.
+    #[method(name = "decrypt_msg")]
+    async fn decrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        ciphertext: String,
+    ) -> RpcResult<String>;
+
+    /// Encrypt a message to the specified encryption pubkey
+    /// Returns the ciphertext as a hex string.
+    #[method(name = "encrypt_msg")]
+    async fn encrypt_msg(
+        &self,
+        encryption_pubkey: EncryptionPubKey,
+        msg: String,
+    ) -> RpcResult<String>;
+
     /// Format a deposit address
     #[method(name = "format_deposit_address")]
     async fn format_deposit_address(

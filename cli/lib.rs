@@ -10,8 +10,8 @@ use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
 use plain_bitnames::{
     authorization::{Dst, Signature},
     types::{
-        Address, BitName, BlockHash, MutableBitNameData, VerifyingKey,
-        THIS_SIDECHAIN,
+        Address, BitName, BlockHash, EncryptionPubKey, MutableBitNameData,
+        VerifyingKey, THIS_SIDECHAIN,
     },
 };
 use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
@@ -36,6 +36,25 @@ pub enum Command {
         value_sats: u64,
         #[arg(long)]
         fee_sats: u64,
+    },
+    /// Decrypt a message with the specified encryption key corresponding to
+    /// the specified encryption pubkey
+    DecryptMsg {
+        #[arg(long)]
+        encryption_pubkey: EncryptionPubKey,
+        #[arg(long)]
+        msg: String,
+        /// If set, decode as UTF-8
+        #[arg(long)]
+        utf8: bool,
+    },
+    /// Encrypt a message to the specified encryption pubkey.
+    /// Returns the ciphertext as a hex string.
+    EncryptMsg {
+        #[arg(long)]
+        encryption_pubkey: EncryptionPubKey,
+        #[arg(long)]
+        msg: String,
     },
     /// Format a deposit address
     FormatDepositAddress { address: Address },
@@ -258,6 +277,24 @@ where
                 .await?;
             format!("{txid}")
         }
+        Command::DecryptMsg {
+            encryption_pubkey,
+            msg,
+            utf8,
+        } => {
+            let msg_hex =
+                rpc_client.decrypt_msg(encryption_pubkey, msg).await?;
+            if utf8 {
+                let msg_bytes: Vec<u8> = hex::decode(msg_hex)?;
+                String::from_utf8(msg_bytes)?
+            } else {
+                msg_hex
+            }
+        }
+        Command::EncryptMsg {
+            encryption_pubkey,
+            msg,
+        } => rpc_client.encrypt_msg(encryption_pubkey, msg).await?,
         Command::FormatDepositAddress { address } => {
             rpc_client.format_deposit_address(address).await?
         }
