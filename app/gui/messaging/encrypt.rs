@@ -1,10 +1,12 @@
 use eframe::egui;
 
 use libes::key::conversion::PublicKeyFrom;
-use plain_bitnames::types::EncryptionPubKey;
+use plain_bitnames::types::{keys::Ecies, EncryptionPubKey};
 
-use super::util::{borsh_deserialize_hex, Ecies, InnerResponseExt, UiExt};
-use crate::app::App;
+use crate::{
+    app::App,
+    gui::util::{borsh_deserialize_hex, InnerResponseExt, UiExt},
+};
 
 #[derive(Debug)]
 pub struct EncryptMessage {
