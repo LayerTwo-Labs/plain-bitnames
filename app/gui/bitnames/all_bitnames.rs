@@ -164,7 +164,8 @@ impl AllBitNames {
             };
             match app.node.bitnames() {
                 Err(node_err) => {
-                    ui.monospace_selectable_multiline(node_err.to_string());
+                    let err = anyhow::Error::from(node_err);
+                    ui.monospace_selectable_multiline(format!("{err:#}"));
                 }
                 Ok(bitnames) => self.show_bitnames(ui, bitnames),
             }
