@@ -11,10 +11,10 @@ use crate::types::{
 
 /// Errors related to BitNames
 #[derive(Debug, Error, Transitive)]
-#[transitive(from(db::Delete))]
-#[transitive(from(db::Last))]
-#[transitive(from(db::Put))]
-#[transitive(from(db::TryGet))]
+#[transitive(from(db::Delete, db::Error))]
+#[transitive(from(db::Last, db::Error))]
+#[transitive(from(db::Put, db::Error))]
+#[transitive(from(db::TryGet, db::Error))]
 pub enum BitName {
     #[error("Bitname {bitname} already registered as an ICANN name")]
     AlreadyIcann { bitname: BitNameId },
@@ -52,16 +52,19 @@ pub enum InvalidHeader {
 }
 
 #[derive(Debug, Error, Transitive)]
-#[transitive(from(db::Clear))]
-#[transitive(from(db::Delete))]
-#[transitive(from(db::IterInit))]
-#[transitive(from(db::IterItem))]
-#[transitive(from(db::Last))]
-#[transitive(from(db::Put))]
-#[transitive(from(db::TryGet))]
-#[transitive(from(env::CreateDb))]
-#[transitive(from(env::WriteTxn))]
-#[transitive(from(rwtxn::Commit))]
+#[transitive(from(db::Clear, db::Error))]
+#[transitive(from(db::Delete, db::Error))]
+#[transitive(from(db::Error, sneed::Error))]
+#[transitive(from(db::IterInit, db::Error))]
+#[transitive(from(db::IterItem, db::Error))]
+#[transitive(from(db::Last, db::Error))]
+#[transitive(from(db::Put, db::Error))]
+#[transitive(from(db::TryGet, db::Error))]
+#[transitive(from(env::CreateDb, env::Error))]
+#[transitive(from(env::Error, sneed::Error))]
+#[transitive(from(env::WriteTxn, env::Error))]
+#[transitive(from(rwtxn::Commit, rwtxn::Error))]
+#[transitive(from(rwtxn::Error, sneed::Error))]
 pub enum Error {
     #[error(transparent)]
     AmountOverflow(#[from] AmountOverflowError),
@@ -79,10 +82,10 @@ pub enum Error {
     BundleTooHeavy { weight: u64, max_weight: u64 },
     #[error(transparent)]
     BorshSerialize(borsh::io::Error),
+    #[error(transparent)]
+    Db(#[from] sneed::Error),
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
-    #[error("heed error")]
-    Heed(#[from] heed::Error),
     #[error("invalid ICANN name: {plain_name}")]
     IcannNameInvalid { plain_name: String },
     #[error("Invalid Batch ICANN registration signature")]
