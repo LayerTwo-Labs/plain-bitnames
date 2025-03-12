@@ -8,13 +8,13 @@ use plain_bitnames::{
     authorization::{Dst, Signature},
     net::{Peer, PeerConnectionStatus},
     types::{
-        hashes::BitName, schema as bitnames_schema, Address, Authorization,
-        BatchIcannRegistrationData, BitNameData, BitNameDataUpdates,
-        BitNameSeqId, BitcoinOutputContent, Block, BlockHash, Body,
-        EncryptionPubKey, FilledOutput, FilledOutputContent, Header,
-        MerkleRoot, MutableBitNameData, OutPoint, Output, OutputContent,
-        PointedOutput, Transaction, TransactionData, TxIn, Txid, VerifyingKey,
-        WithdrawalBundle, WithdrawalOutputContent,
+        Address, Authorization, BatchIcannRegistrationData, BitNameData,
+        BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent, Block,
+        BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
+        Header, MerkleRoot, MutableBitNameData, OutPoint, Output,
+        OutputContent, PointedOutput, Transaction, TransactionData, TxIn, Txid,
+        VerifyingKey, WithdrawalBundle, WithdrawalOutputContent,
+        hashes::BitName, schema as bitnames_schema,
     },
     wallet::Balance,
 };
@@ -54,7 +54,7 @@ pub trait Rpc {
     /// Retrieve data for a single BitName
     #[method(name = "bitname_data")]
     async fn bitname_data(&self, bitname_id: BitName)
-        -> RpcResult<BitNameData>;
+    -> RpcResult<BitNameData>;
 
     /// List all BitNames
     #[open_api_method(output_schema(

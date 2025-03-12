@@ -2,7 +2,7 @@ use std::{borrow::Cow, collections::HashMap, net::SocketAddr};
 
 use bitcoin::Amount;
 use jsonrpsee::{
-    core::{async_trait, RpcResult},
+    core::{RpcResult, async_trait},
     server::{RpcServiceBuilder, Server},
     types::ErrorObject,
 };
@@ -11,10 +11,10 @@ use plain_bitnames::{
     authorization::{self, Dst, Signature},
     net::Peer,
     types::{
-        keys::Ecies, Address, Authorization, BitName, BitNameData, Block,
-        BlockHash, EncryptionPubKey, FilledOutput, MutableBitNameData,
-        OutPoint, PointedOutput, Transaction, Txid, VerifyingKey,
-        WithdrawalBundle,
+        Address, Authorization, BitName, BitNameData, Block, BlockHash,
+        EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
+        PointedOutput, Transaction, Txid, VerifyingKey, WithdrawalBundle,
+        keys::Ecies,
     },
     wallet::Balance,
 };

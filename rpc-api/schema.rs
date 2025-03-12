@@ -3,8 +3,8 @@
 use std::marker::PhantomData;
 
 use utoipa::{
-    openapi::{self, RefOr, Schema},
     PartialSchema, ToSchema,
+    openapi::{self, RefOr, Schema},
 };
 
 /// Utoipa does not support tuples at all, so these are represented as an

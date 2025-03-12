@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use eframe::egui;
 use hex::FromHex;
-use plain_bitnames::types::{hashes::BitName, Hash};
+use plain_bitnames::types::{Hash, hashes::BitName};
 
 #[derive(Debug, Default)]
 struct BitnameInboxesState {

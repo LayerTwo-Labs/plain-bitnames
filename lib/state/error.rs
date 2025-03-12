@@ -44,7 +44,9 @@ pub enum InvalidHeader {
         expected: BlockHash,
         computed: BlockHash,
     },
-    #[error("expected previous sidechain block hash {expected:?}, but received {received:?}")]
+    #[error(
+        "expected previous sidechain block hash {expected:?}, but received {received:?}"
+    )]
     PrevSideHash {
         expected: Option<BlockHash>,
         received: Option<BlockHash>,
@@ -90,7 +92,9 @@ pub enum Error {
     IcannNameInvalid { plain_name: String },
     #[error("Invalid Batch ICANN registration signature")]
     InvalidBatchIcannRegistrationSignature,
-    #[error("invalid body: expected merkle root {expected}, but computed {computed}")]
+    #[error(
+        "invalid body: expected merkle root {expected}, but computed {computed}"
+    )]
     InvalidBody {
         expected: MerkleRoot,
         computed: MerkleRoot,
@@ -115,12 +119,16 @@ pub enum Error {
     NoWithdrawalBundleEventBlock,
     #[error("Too few BitName outputs")]
     TooFewBitNameOutputs,
-    #[error("unbalanced BitNames: {n_bitname_inputs} BitName inputs, {n_bitname_outputs} BitName outputs")]
+    #[error(
+        "unbalanced BitNames: {n_bitname_inputs} BitName inputs, {n_bitname_outputs} BitName outputs"
+    )]
     UnbalancedBitNames {
         n_bitname_inputs: usize,
         n_bitname_outputs: usize,
     },
-    #[error("unbalanced reservations: {n_reservation_inputs} reservation inputs, {n_reservation_outputs} reservation outputs")]
+    #[error(
+        "unbalanced reservations: {n_reservation_inputs} reservation inputs, {n_reservation_outputs} reservation outputs"
+    )]
     UnbalancedReservations {
         n_reservation_inputs: usize,
         n_reservation_outputs: usize,

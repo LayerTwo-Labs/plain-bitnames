@@ -1,4 +1,4 @@
-use serde_with::{serde_as, DeserializeAs, IfIsHumanReadable, SerializeAs};
+use serde_with::{DeserializeAs, IfIsHumanReadable, SerializeAs, serde_as};
 
 /// Serialize [`bitcoin::Amount`] as sats
 struct BitcoinAmountSats;
