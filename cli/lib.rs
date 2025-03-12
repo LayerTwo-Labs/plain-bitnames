@@ -11,7 +11,7 @@ use plain_bitnames::{
     authorization::{Dst, Signature},
     types::{
         Address, BitName, BlockHash, EncryptionPubKey, MutableBitNameData,
-        VerifyingKey, THIS_SIDECHAIN,
+        THIS_SIDECHAIN, VerifyingKey,
     },
 };
 use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};

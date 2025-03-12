@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 use utoipa::{PartialSchema, ToSchema};
 
 use super::{
+    AmountOverflowError, GetValue,
     address::Address,
     hashes::{self, BitName, Hash, M6id, MerkleRoot, Txid},
     serde_display_fromstr_human_readable, serde_hexstr_human_readable,
-    AmountOverflowError, GetValue,
 };
 use crate::{
     authorization::{Authorization, Signature},

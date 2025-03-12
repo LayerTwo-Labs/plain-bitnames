@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use sneed::{RoTxn, RwTxn};
 
 use crate::{
-    state::{error, Error, State},
+    state::{Error, State, error},
     types::{
         AmountOverflowError, Authorization, Body, FilledOutput,
         FilledOutputContent, FilledTransaction, GetAddress as _, GetValue as _,

@@ -10,22 +10,21 @@ use plain_bitnames::{
     miner::{self, Miner},
     node::{self, Node},
     types::{
-        self,
+        self, Address, AmountOverflowError, BitcoinOutputContent, Body,
+        FilledOutput, GetValue, InPoint, OutPoint, Transaction,
         hashes::BitName,
         proto::mainchain::{
             self,
             generated::{validator_service_server, wallet_service_server},
         },
-        Address, AmountOverflowError, BitcoinOutputContent, Body, FilledOutput,
-        GetValue, InPoint, OutPoint, Transaction,
     },
     wallet::{self, Wallet},
 };
 use tokio::{spawn, sync::RwLock as TokioRwLock, task::JoinHandle};
 use tokio_util::task::LocalPoolHandle;
 use tonic_health::{
-    pb::{health_client::HealthClient, HealthCheckRequest},
     ServingStatus,
+    pb::{HealthCheckRequest, health_client::HealthClient},
 };
 
 use crate::cli::Config;
@@ -46,9 +45,7 @@ pub enum Error {
     Node(#[source] Box<node::Error>),
     #[error("No CUSF mainchain wallet client")]
     NoCusfMainchainWalletClient,
-    #[error(
-        "Unable to verify existence of CUSF mainchain service(s) at {url}"
-    )]
+    #[error("Unable to verify existence of CUSF mainchain service(s) at {url}")]
     VerifyMainchainServices {
         url: Box<url::Url>,
         source: Box<tonic::Status>,

@@ -1,11 +1,11 @@
 use eframe::egui;
 
 use libes::key::conversion::PublicKeyFrom;
-use plain_bitnames::types::{keys::Ecies, EncryptionPubKey};
+use plain_bitnames::types::{EncryptionPubKey, keys::Ecies};
 
 use crate::{
     app::App,
-    gui::util::{borsh_deserialize_hex, InnerResponseExt, UiExt},
+    gui::util::{InnerResponseExt, UiExt, borsh_deserialize_hex},
 };
 
 #[derive(Debug)]

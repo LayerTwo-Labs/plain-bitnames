@@ -3,11 +3,11 @@ use std::collections::VecDeque;
 use fallible_iterator::FallibleIterator as _;
 use heed::types::SerdeBincode;
 use sneed::{
-    db, env, rwtxn, DatabaseUnique, DbError, EnvError, RoTxn, RwTxn,
-    RwTxnError, UnitKey,
+    DatabaseUnique, DbError, EnvError, RoTxn, RwTxn, RwTxnError, UnitKey, db,
+    env, rwtxn,
 };
 
-use crate::types::{AuthorizedTransaction, OutPoint, Txid, Version, VERSION};
+use crate::types::{AuthorizedTransaction, OutPoint, Txid, VERSION, Version};
 
 #[allow(clippy::duplicated_attributes)]
 #[derive(thiserror::Error, transitive::Transitive, Debug)]

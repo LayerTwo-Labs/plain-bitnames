@@ -28,7 +28,7 @@ use miner::Miner;
 use parent_chain::ParentChain;
 use paymail::Paymail;
 use seed::SetSeed;
-use util::{show_btc_amount, UiExt, BITCOIN_LOGO_FA, BITCOIN_ORANGE};
+use util::{BITCOIN_LOGO_FA, BITCOIN_ORANGE, UiExt, show_btc_amount};
 
 /// Bottom panel, if initialized
 struct BottomPanelInitialized {

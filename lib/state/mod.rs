@@ -9,12 +9,12 @@ use sneed::{DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey};
 use crate::{
     authorization::{self, Authorization},
     types::{
-        constants, hashes, proto::mainchain::TwoWayPegData, Address,
-        AmountOverflowError, Authorized, AuthorizedTransaction, BlockHash,
-        Body, FilledOutput, FilledTransaction, GetAddress as _, GetValue as _,
-        Header, InPoint, M6id, MerkleRoot, OutPoint, SpentOutput, Transaction,
-        Verify as _, Version, WithdrawalBundle, WithdrawalBundleStatus,
-        VERSION,
+        Address, AmountOverflowError, Authorized, AuthorizedTransaction,
+        BlockHash, Body, FilledOutput, FilledTransaction, GetAddress as _,
+        GetValue as _, Header, InPoint, M6id, MerkleRoot, OutPoint,
+        SpentOutput, Transaction, VERSION, Verify as _, Version,
+        WithdrawalBundle, WithdrawalBundleStatus, constants, hashes,
+        proto::mainchain::TwoWayPegData,
     },
     util::Watchable,
 };

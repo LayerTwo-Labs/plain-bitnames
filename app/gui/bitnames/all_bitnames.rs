@@ -6,7 +6,7 @@ use std::{
 use eframe::egui;
 use hex::FromHex;
 use plain_bitnames::types::{
-    hashes::BitName, BitNameData, BitNameSeqId, MutableBitNameData,
+    BitNameData, BitNameSeqId, MutableBitNameData, hashes::BitName,
 };
 
 use crate::{

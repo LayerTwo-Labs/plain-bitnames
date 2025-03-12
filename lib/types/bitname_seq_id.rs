@@ -1,7 +1,7 @@
 use borsh::BorshSerialize;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use utoipa::{openapi, PartialSchema, ToSchema};
+use utoipa::{PartialSchema, ToSchema, openapi};
 
 #[derive(Debug, Error)]
 pub enum ParseBitNameSeqIdError {
@@ -13,7 +13,9 @@ pub enum ParseBitNameSeqIdError {
     EmptySegment,
     #[error("Invalid char; must contain only ASCII digits and `-`: `{char}`")]
     InvalidChar { char: char },
-    #[error("Invalid segment; must contain exactly 4 ASCII digits: `{invalid_segment}`")]
+    #[error(
+        "Invalid segment; must contain exactly 4 ASCII digits: `{invalid_segment}`"
+    )]
     InvalidSegment { invalid_segment: String },
     #[error(
         "Value overflow: BitName seq ID encodes a number greater than u32::MAX"
