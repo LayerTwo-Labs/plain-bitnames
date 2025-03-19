@@ -37,17 +37,12 @@ impl EncryptMessage {
     }
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        ui.heading("Encrypt Message");
         let Some(app) = app else {
             return;
         };
-        let receiver_input_response = ui
-            .horizontal(|ui| {
-                ui.monospace(
-                    "Receiver's BitName or Encryption Pubkey (Bech32m): ",
-                ) | ui.add(egui::TextEdit::singleline(&mut self.receiver_input))
-            })
-            .join();
+        ui.monospace("Receiver's BitName or Encryption Pubkey (Bech32m):");
+        let receiver_input_response =
+            ui.add(egui::TextEdit::singleline(&mut self.receiver_input));
         if receiver_input_response.changed() {
             let receiver_pubkey: anyhow::Result<EncryptionPubKey> = {
                 if let Ok(bitname) = borsh_deserialize_hex(&self.receiver_input)
@@ -73,10 +68,15 @@ impl EncryptMessage {
             };
             self.receiver_pubkey = Some(receiver_pubkey);
         }
-        let plaintext_response = ui
-            .horizontal_wrapped(|ui| {
-                ui.monospace("Plaintext message:\n")
-                    | ui.add(egui::TextEdit::multiline(&mut self.plaintext))
+        let plaintext_response = egui::SidePanel::left("plaintext message")
+            .exact_width(ui.available_width() / 2.)
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.monospace("Plaintext message:");
+                    ui.add(egui::TextEdit::multiline(&mut self.plaintext))
+                })
+                .join()
             })
             .join();
         let receiver_pubkey = match &self.receiver_pubkey {
@@ -114,17 +114,18 @@ impl EncryptMessage {
             }
             Some(Ok(ciphertext)) => ciphertext,
         };
-        // show ciphertext if possible
-        let _resp = ui.horizontal_wrapped(|ui| {
-            ui.monospace_selectable_multiline(format!(
-                "Encrypted message: \n{ciphertext}"
-            ));
-            if ui.button("📋").on_hover_text("Click to copy").clicked() {
-                ui.output_mut(|po| {
-                    po.commands
-                        .push(egui::OutputCommand::CopyText(ciphertext.clone()))
-                });
-            };
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.monospace("Encrypted message:");
+                ui.monospace_selectable_multiline(ciphertext.as_str());
+                if ui.button("📋").on_hover_text("Click to copy").clicked() {
+                    ui.output_mut(|po| {
+                        po.commands.push(egui::OutputCommand::CopyText(
+                            ciphertext.clone(),
+                        ))
+                    })
+                }
+            })
         });
     }
 }
