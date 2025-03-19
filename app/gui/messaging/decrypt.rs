@@ -36,17 +36,12 @@ impl DecryptMessage {
     }
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        ui.heading("Decrypt Message");
         let Some(app) = app else {
             return;
         };
-        let receiver_input_response = ui
-            .horizontal(|ui| {
-                ui.monospace(
-                    "Receiver's BitName or Encryption Pubkey (Bech32m): ",
-                ) | ui.add(egui::TextEdit::singleline(&mut self.receiver_input))
-            })
-            .join();
+        ui.monospace("Receiver's BitName or Encryption Pubkey (Bech32m): ");
+        let receiver_input_response =
+            ui.add(egui::TextEdit::singleline(&mut self.receiver_input));
         if receiver_input_response.changed() {
             let receiver_pubkey: anyhow::Result<EncryptionPubKey> = {
                 if let Ok(bitname) = borsh_deserialize_hex(&self.receiver_input)
@@ -72,10 +67,15 @@ impl DecryptMessage {
             };
             self.receiver_pubkey = Some(receiver_pubkey);
         }
-        let ciphertext_response = ui
-            .horizontal_wrapped(|ui| {
-                ui.monospace("Ciphertext message (hex):\n")
-                    | ui.add(egui::TextEdit::multiline(&mut self.ciphertext))
+        let ciphertext_response = egui::SidePanel::left("ciphertext message")
+            .exact_width(ui.available_width() / 2.)
+            .resizable(false)
+            .show_inside(ui, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.monospace("Ciphertext message (hex):");
+                    ui.add(egui::TextEdit::multiline(&mut self.ciphertext))
+                })
+                .join()
             })
             .join();
         let receiver_pubkey = match &self.receiver_pubkey {
@@ -115,33 +115,32 @@ impl DecryptMessage {
             Some(Ok(plaintext_bytes)) => plaintext_bytes,
         };
         // show plaintext if possible
-        let _resp = ui.horizontal_wrapped(|ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             let plaintext_hex = hex::encode(plaintext_bytes);
-            ui.monospace_selectable_multiline(format!(
-                "Decrypted message: \n{plaintext_hex}",
-            ));
-            if ui.button("📋").on_hover_text("Click to copy").clicked() {
-                ui.output_mut(|po| {
-                    po.commands.push(egui::OutputCommand::CopyText(
-                        plaintext_hex.clone(),
-                    ))
-                });
-            };
-        });
-        // show UTF8-decoded plaintext if possible
-        if let Ok(plaintext) = str::from_utf8(plaintext_bytes) {
-            let _resp = ui.horizontal_wrapped(|ui| {
-                ui.monospace_selectable_multiline(format!(
-                    "Decrypted message (UTF-8): \n{plaintext}",
-                ));
+            ui.vertical_centered(|ui| {
+                ui.monospace("Decrypted message:");
+                ui.monospace_selectable_multiline(plaintext_hex.as_str());
                 if ui.button("📋").on_hover_text("Click to copy").clicked() {
                     ui.output_mut(|po| {
                         po.commands.push(egui::OutputCommand::CopyText(
-                            plaintext.to_owned(),
+                            plaintext_hex.clone(),
                         ))
                     });
                 };
+                // show UTF8-decoded plaintext if possible
+                if let Ok(plaintext) = str::from_utf8(plaintext_bytes) {
+                    ui.monospace("Decrypted message (UTF-8):");
+                    ui.monospace_selectable_multiline(plaintext);
+                    if ui.button("📋").on_hover_text("Click to copy").clicked()
+                    {
+                        ui.output_mut(|po| {
+                            po.commands.push(egui::OutputCommand::CopyText(
+                                plaintext.to_owned(),
+                            ))
+                        });
+                    };
+                }
             });
-        }
+        });
     }
 }
