@@ -140,19 +140,15 @@ impl AllBitNames {
             if let Some(bitname_data) = bitnames.get(&name_hash_pattern) {
                 show_bitname_with_data(ui, &name_hash_pattern, bitname_data);
             };
-            if let Ok(bitname_id_pattern) = BitName::from_hex(&self.query) {
-                if let Some(bitname_data) = bitnames.get(&bitname_id_pattern) {
-                    show_bitname_with_data(
-                        ui,
-                        &bitname_id_pattern,
-                        bitname_data,
-                    );
-                }
+            if let Ok(bitname_id_pattern) = BitName::from_hex(&self.query)
+                && let Some(bitname_data) = bitnames.get(&bitname_id_pattern)
+            {
+                show_bitname_with_data(ui, &bitname_id_pattern, bitname_data);
             };
-            if let Ok(seq_id_pattern) = BitNameSeqId::from_str(&self.query) {
-                if let Some(bitname) = seq_id_to_bitname.get(&seq_id_pattern) {
-                    show_bitname_with_data(ui, bitname, &bitnames[bitname]);
-                }
+            if let Ok(seq_id_pattern) = BitNameSeqId::from_str(&self.query)
+                && let Some(bitname) = seq_id_to_bitname.get(&seq_id_pattern)
+            {
+                show_bitname_with_data(ui, bitname, &bitnames[bitname]);
             }
         }
     }

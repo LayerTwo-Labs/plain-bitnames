@@ -348,10 +348,10 @@ impl State {
         if tx.is_update() && (n_bitname_inputs < 1 || n_bitname_outputs < 1) {
             return Err(error::BitName::NoBitNamesToUpdate.into());
         };
-        if let Some(batch_icann_data) = tx.batch_icann_data() {
-            if n_bitname_outputs < batch_icann_data.plain_names.len() {
-                return Err(Error::TooFewBitNameOutputs);
-            }
+        if let Some(batch_icann_data) = tx.batch_icann_data()
+            && n_bitname_outputs < batch_icann_data.plain_names.len()
+        {
+            return Err(Error::TooFewBitNameOutputs);
         }
         if let Some(name_hash) = tx.registration_name_hash() {
             if self.bitnames.try_get_bitname(rotxn, &name_hash)?.is_some() {

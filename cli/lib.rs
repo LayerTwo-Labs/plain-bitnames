@@ -191,8 +191,8 @@ where
         .mutable_data
         .commitment
         .ok_or_else(|| anyhow::anyhow!("No commitment resolved"))?;
-    let http_client = HttpClientBuilder::default()
-        .build(format!("http://{}", socket_addr))?;
+    let http_client =
+        HttpClientBuilder::default().build(format!("http://{socket_addr}"))?;
     let mut bitname_commit = http_client.bitname_commit(None).await?;
     let canonical_bytes = serde_json_canonicalizer::to_vec(&bitname_commit)?;
     let canonical_hash: plain_bitnames::types::Hash =
