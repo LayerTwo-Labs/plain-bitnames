@@ -5023,6 +5023,7 @@ dependencies = [
  "ed25519-dalek",
  "educe",
  "fallible-iterator",
+ "fatality",
  "futures",
  "governor",
  "hashlink 0.10.0",
