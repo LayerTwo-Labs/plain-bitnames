@@ -24,7 +24,6 @@ itertools = "0.14.0"
 include_path = "0.1.1"
 jsonrpsee = { workspace = true, features = ["server"] }
 parking_lot = { workspace = true }
-plain_bitnames = { path = "../lib", features = ["clap"] }
 plain_bitnames_app_cli = { path = "../cli" }
 plain_bitnames_app_rpc_api = { path = "../rpc-api" }
 poll-promise = { version = "0.3.0", features = ["tokio"] }
@@ -43,6 +42,7 @@ tower-http = { version = "0.6.2", features = ["request-id", "trace"] }
 tracing = { workspace = true }
 tracing-appender = "0.2.3"
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+uhid_virt = "0.0.8"
 url = { workspace = true }
 utoipa = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
@@ -51,8 +51,15 @@ uuid = { workspace = true, features = ["v4"] }
 version = "0.9.1"
 features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
 
+[dependencies.plain_bitnames]
+path = "../lib"
+default-features = false
+features = ["clap"]
+
 [features]
-default = ["zmq"]
+# FIXME: remove passkey
+default = ["passkey", "zmq"]
+passkey = ["dep:uhid_virt", "plain_bitnames/passkey"]
 zmq = ["plain_bitnames/zmq"]
 
 [lints]

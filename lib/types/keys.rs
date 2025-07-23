@@ -150,7 +150,7 @@ impl VerifyingKey {
     /// HRP for Bech32m encoding
     const BECH32M_HRP: bech32::Hrp = bech32::Hrp::parse_unchecked("bn-svk");
 
-    const BYTE_LEN: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
+    pub const BYTE_LEN: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
 
     /// Encode to Bech32m format
     pub fn bech32m_encode(&self) -> String {

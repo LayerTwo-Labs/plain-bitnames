@@ -16,6 +16,7 @@ tonic-build = "0.12.3"
 addr = "0.15.6"
 anyhow = { workspace = true, features = ["backtrace"] }
 async-lock = "3.4.0"
+async-trait = { version = "0.1.88", optional = true }
 bech32 = "0.11.0"
 bincode = { workspace = true }
 bitcoin = { workspace = true, features = ["serde"] }
@@ -24,7 +25,8 @@ borsh = { workspace = true, features = ["derive"] }
 byteorder = "1.4.3"
 bytes = "1.9.0"
 clap = { workspace = true, features = ["derive"], optional = true }
-ed25519-dalek = { version = "2.1.1", features = ["batch", "serde"] }
+coset = { version = "0.3.8",  optional = true }
+ed25519-bip32 = "0.4.1"
 fallible-iterator = "0.3.0"
 fatality = "0.1.1"
 futures = { workspace = true }
@@ -37,6 +39,7 @@ libes = { workspace = true }
 merkle-cbt = "0.3.2"
 nonempty = { version = "0.11.0", features = ["serialize"] }
 parking_lot = { workspace = true }
+passkey = { version = "0.4.0", optional = true }
 prost = { workspace = true }
 prost-types = "0.13.3"
 quinn = "0.11.6"
@@ -62,14 +65,20 @@ x25519-dalek = { version = "2.0.0", features = ["serde", "static_secrets"] }
 zeromq = { version = "0.4.1", optional = true }
 
 [features]
+# FIXME: remove
+default = ["passkey"]
 clap = ["dep:clap"]
+passkey = ["dep:async-trait", "dep:coset", "dep:passkey"]
 zmq = ["dep:zeromq"]
+
+[dependencies.ed25519-dalek]
+version = "2.1.1"
+features = ["batch", "digest", "hazmat", "serde"]
 
 [dependencies.educe]
 version = "0.6.0"
 default-features = false
 features = ["Clone", "Debug"]
-
 
 [dependencies.governor]
 version = "0.8.1"
