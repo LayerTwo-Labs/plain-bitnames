@@ -42,7 +42,6 @@ tower-http = { version = "0.6.2", features = ["request-id", "trace"] }
 tracing = { workspace = true }
 tracing-appender = "0.2.3"
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
-uhid_virt = "0.0.8"
 url = { workspace = true }
 utoipa = { workspace = true }
 uuid = { workspace = true, features = ["v4"] }
@@ -57,9 +56,7 @@ default-features = false
 features = ["clap"]
 
 [features]
-# FIXME: remove passkey
-default = ["passkey", "zmq"]
-passkey = ["dep:uhid_virt", "plain_bitnames/passkey"]
+default = ["zmq"]
 zmq = ["plain_bitnames/zmq"]
 
 [lints]

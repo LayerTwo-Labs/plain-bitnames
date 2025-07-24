@@ -94,6 +94,12 @@ where
     }
 }
 
+impl From<EncryptionPubKey> for crypto_box::PublicKey {
+    fn from(epk: EncryptionPubKey) -> Self {
+        Self::from_bytes(epk.0.to_bytes())
+    }
+}
+
 impl std::str::FromStr for EncryptionPubKey {
     type Err = Bech32mDecodeError;
 

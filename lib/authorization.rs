@@ -271,10 +271,16 @@ pub fn sign(signing_key: &SigningKey, dst: Dst, msg: &[u8]) -> Signature {
 }
 
 /// Sign a message with DST prefix, using an expanded secret key
-pub fn sign_esk(esk: &ed25519_dalek::hazmat::ExpandedSecretKey, dst: Dst, msg: &[u8]) -> Signature {
+pub fn sign_esk(
+    esk: &ed25519_dalek::hazmat::ExpandedSecretKey,
+    dst: Dst,
+    msg: &[u8],
+) -> Signature {
     let msg_buf = [&[dst as u8], msg].concat();
     let vk = ed25519_dalek::VerifyingKey::from(esk);
-    let sig = ed25519_dalek::hazmat::raw_sign::<ed25519_dalek::Sha512>(esk, &msg_buf, &vk);
+    let sig = ed25519_dalek::hazmat::raw_sign::<ed25519_dalek::Sha512>(
+        esk, &msg_buf, &vk,
+    );
     Signature(sig)
 }
 
