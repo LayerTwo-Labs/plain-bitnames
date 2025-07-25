@@ -89,18 +89,24 @@ fn secret_scalar_from_xprv(xprv: &XPrv) -> curve25519_dalek::Scalar {
     curve25519_dalek::Scalar::from_bytes_mod_order(*secret_from_xprv(xprv))
 }
 
-fn edwards_to_ristretto(
+fn ristretto_from_edwards(
     point: curve25519_dalek::EdwardsPoint,
 ) -> RistrettoPoint {
     // SAFETY: RistrettoPoint is just a wrapper around EdwardsPoint
     unsafe { std::mem::transmute(point) }
 }
 
-fn ristretto_to_edwards(
+fn edwards_from_ristretto(
     point: RistrettoPoint,
 ) -> curve25519_dalek::EdwardsPoint {
     // SAFETY: RistrettoPoint is just a wrapper around EdwardsPoint
     unsafe { std::mem::transmute(point) }
+}
+
+fn x25519_pk_from_edwards(
+    point: &curve25519_dalek::EdwardsPoint,
+) -> x25519_dalek::PublicKey {
+    point.to_montgomery().to_bytes().into()
 }
 
 fn ristretto_point_from_curve25519_edwards_compressed(
@@ -114,7 +120,21 @@ fn ristretto_point_from_curve25519_edwards_compressed(
                 hex::encode(compressed_edwards)
             )
         })
-        .map(edwards_to_ristretto)
+        .map(ristretto_from_edwards)
+}
+
+fn x25519_pk_from_curve25519_edwards_compressed(
+    compressed_edwards: [u8; 32],
+) -> anyhow::Result<x25519_dalek::PublicKey> {
+    curve25519_dalek::edwards::CompressedEdwardsY(compressed_edwards)
+        .decompress()
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "Failed to decompress edwards point (`{}`)",
+                hex::encode(compressed_edwards)
+            )
+        })
+        .map(|edwards| x25519_pk_from_edwards(&edwards))
 }
 
 fn ristretto_point_from_ed25519_xpub(
@@ -123,10 +143,14 @@ fn ristretto_point_from_ed25519_xpub(
     ristretto_point_from_curve25519_edwards_compressed(xpub.public_key())
 }
 
-fn ristretto_point_to_x25519_pk(
-    point: RistrettoPoint,
-) -> x25519_dalek::PublicKey {
-    ristretto_to_edwards(point)
+fn x25519_pk_from_ed25519_xpub(
+    xpub: &XPub,
+) -> anyhow::Result<x25519_dalek::PublicKey> {
+    x25519_pk_from_curve25519_edwards_compressed(xpub.public_key())
+}
+
+fn x25519_pk_from_ristretto(point: RistrettoPoint) -> x25519_dalek::PublicKey {
+    edwards_from_ristretto(point)
         .to_montgomery()
         .to_bytes()
         .into()
@@ -644,7 +668,7 @@ impl AuthenticationResponse {
             // x25519 DH
             let shared_secret = {
                 let authentication_pk_x25519 =
-                    ristretto_point_to_x25519_pk(authentication_pk);
+                    x25519_pk_from_ristretto(authentication_pk);
                 encryption_secret.diffie_hellman(&authentication_pk_x25519)
             };
             // Use shared secret as signing key for ed25519 signature
@@ -832,17 +856,15 @@ mod tests {
         Ok(())
     }
 
-    fn curve25519_scalar_from_ed25519_xprv(xprv: &XPrv) -> Scalar {
-        let (secret_bytes, _): (&[u8; 32], _) = xprv
-            .extended_secret_key_bytes()
-            .split_first_chunk()
-            .unwrap();
-        curve25519_dalek::Scalar::from_bytes_mod_order(*secret_bytes)
+    fn ristretto_pk_from_ed25519_xprv(xprv: &XPrv) -> RistrettoPoint {
+        let scalar = super::secret_scalar_from_xprv(xprv);
+        RistrettoPoint::mul_base(&scalar)
     }
 
-    fn ristretto_pk_from_ed25519_xprv(xprv: &XPrv) -> RistrettoPoint {
-        let scalar = curve25519_scalar_from_ed25519_xprv(xprv);
-        RistrettoPoint::mul_base(&scalar)
+    fn x25519_pk_from_ed25519_xprv(xprv: &XPrv) -> x25519_dalek::PublicKey {
+        let secret =
+            x25519_dalek::StaticSecret::from(*super::secret_from_xprv(xprv));
+        x25519_dalek::PublicKey::from(&secret)
     }
 
     #[test]
@@ -863,6 +885,53 @@ mod tests {
             // Check that secret still corresponds to pub key
             let pk_from_secret = ristretto_pk_from_ed25519_xprv(&child_xprv);
             anyhow::ensure!(private_derived_ristretto_pk == pk_from_secret);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_hardened_derivation_x25519() -> anyhow::Result<()> {
+        let master_xprv =
+            master_xprv(b"Test non-hardened derivation x25519 master secret")?;
+        for index in (69_420..).take(16) {
+            let (child_xprv, child_xpub) =
+                non_hardened_derivation(&master_xprv, index)?;
+            let private_derived_x25519_pk =
+                super::x25519_pk_from_ed25519_xpub(&child_xprv.public())?;
+            let public_derived_x25519_pk =
+                super::x25519_pk_from_ed25519_xpub(&child_xpub)?;
+            anyhow::ensure!(
+                private_derived_x25519_pk == public_derived_x25519_pk
+            );
+            // Check that secret still corresponds to pub key
+            let pk_from_secret = x25519_pk_from_ed25519_xprv(&child_xprv);
+            anyhow::ensure!(private_derived_x25519_pk == pk_from_secret);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_hardened_derivation_ristretto_x25519() -> anyhow::Result<()> {
+        let master_xprv = master_xprv(
+            b"Test non-hardened derivation ristretto-x25519 master secret",
+        )?;
+        for index in (69_420..).take(16) {
+            let (child_xprv, child_xpub) =
+                non_hardened_derivation(&master_xprv, index)?;
+            let private_derived_ristretto_pk =
+                super::ristretto_point_from_ed25519_xpub(&child_xprv.public())?;
+            let private_derived_x25519_pk =
+                super::x25519_pk_from_ristretto(private_derived_ristretto_pk);
+            let public_derived_ristretto_pk =
+                super::ristretto_point_from_ed25519_xpub(&child_xpub)?;
+            let public_derived_x25519_pk =
+                super::x25519_pk_from_ristretto(public_derived_ristretto_pk);
+            anyhow::ensure!(
+                private_derived_x25519_pk == public_derived_x25519_pk
+            );
+            // Check that secret still corresponds to pub key
+            let pk_from_secret = x25519_pk_from_ed25519_xprv(&child_xprv);
+            anyhow::ensure!(private_derived_x25519_pk == pk_from_secret);
         }
         Ok(())
     }
