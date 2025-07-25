@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use borsh::BorshSerialize;
+use borsh::{BorshDeserialize, BorshSerialize};
 use hex::FromHex;
 use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 use serde::{Deserialize, Serialize};
@@ -17,6 +17,16 @@ pub use ed25519_dalek::{SignatureError, Signer, SigningKey, Verifier};
 #[repr(transparent)]
 #[schema(value_type = String)]
 pub struct Signature(pub ed25519_dalek::Signature);
+
+impl BorshDeserialize for Signature {
+    fn deserialize_reader<R>(reader: &mut R) -> borsh::io::Result<Self>
+    where
+        R: borsh::io::Read,
+    {
+        let bytes: [u8; 64] = BorshDeserialize::deserialize_reader(reader)?;
+        Ok(Self(ed25519_dalek::Signature::from_bytes(&bytes)))
+    }
+}
 
 impl BorshSerialize for Signature {
     fn serialize<W: std::io::Write>(

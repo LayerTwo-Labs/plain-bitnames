@@ -1,5 +1,7 @@
 //! Sign in with BitNames
 
+use std::marker::PhantomData;
+
 use bitcoin::bip32::DerivationPath;
 use borsh::{BorshDeserialize, BorshSerialize};
 use crypto_box::{
@@ -10,10 +12,11 @@ use curve25519_dalek::{
     RistrettoPoint, Scalar, ristretto::CompressedRistretto,
 };
 use ed25519_bip32::{XPrv, XPub};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
+    authorization::Signature,
     types::{BitName, EncryptionPubKey},
     wallet::{self, RoTxn, Wallet},
 };
@@ -93,18 +96,40 @@ fn edwards_to_ristretto(
     unsafe { std::mem::transmute(point) }
 }
 
-fn ristretto_point_from_ed25519_xpub(
-    xpub: &XPub,
+fn ristretto_to_edwards(
+    point: RistrettoPoint,
+) -> curve25519_dalek::EdwardsPoint {
+    // SAFETY: RistrettoPoint is just a wrapper around EdwardsPoint
+    unsafe { std::mem::transmute(point) }
+}
+
+fn ristretto_point_from_curve25519_edwards_compressed(
+    compressed_edwards: [u8; 32],
 ) -> anyhow::Result<RistrettoPoint> {
-    curve25519_dalek::edwards::CompressedEdwardsY(xpub.public_key())
+    curve25519_dalek::edwards::CompressedEdwardsY(compressed_edwards)
         .decompress()
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "Failed to decompress edwards point (`{}`)",
-                hex::encode(xpub.public_key_bytes())
+                hex::encode(compressed_edwards)
             )
         })
         .map(edwards_to_ristretto)
+}
+
+fn ristretto_point_from_ed25519_xpub(
+    xpub: &XPub,
+) -> anyhow::Result<RistrettoPoint> {
+    ristretto_point_from_curve25519_edwards_compressed(xpub.public_key())
+}
+
+fn ristretto_point_to_x25519_pk(
+    point: RistrettoPoint,
+) -> x25519_dalek::PublicKey {
+    ristretto_to_edwards(point)
+        .to_montgomery()
+        .to_bytes()
+        .into()
 }
 
 fn borsh_deserialize_compressed_ristretto<R>(
@@ -211,7 +236,7 @@ impl Registration {
         )?;
         let registration_plaintext: RegistrationPlaintext = {
             let chacha_box = crypto_box::ChaChaBox::new(
-                &register_as_xpub.public_key().into(),
+                &siwb_xpub.public_key().into(),
                 &encryption_secret.to_bytes().into(),
             );
             let payload = crypto_box::aead::Payload {
@@ -381,7 +406,7 @@ impl EpkRotation {
     /// Verify an EPK rotation, obtaining an authentication pubkey if successful
     fn verify(
         &self,
-        register_as_xpub: XPub,
+        siwb_xpub: &XPub,
         service_bitname: &BitName,
         register_as_xpub_old: XPub,
         authentication_pk_old: &RistrettoPoint,
@@ -394,13 +419,7 @@ impl EpkRotation {
         )?;
         let siwb_pubkey_old =
             ristretto_point_from_ed25519_xpub(&siwb_xpub_old)?;
-        let siwb_xpub = derive_xpub(
-            register_as_xpub,
-            &sign_in_with_bitnames_non_hardened_derivation_path(
-                service_bitname,
-            ),
-        )?;
-        let siwb_pubkey = ristretto_point_from_ed25519_xpub(&siwb_xpub)?;
+        let siwb_pubkey = ristretto_point_from_ed25519_xpub(siwb_xpub)?;
         let challenge = Self::challenge(
             &siwb_pubkey_old.compress(),
             &authentication_pk_old.compress(),
@@ -486,6 +505,276 @@ fn rotate_epk(
         randomized_point_0,
         randomized_point_1,
         challenge_response,
+    })
+}
+
+#[derive(BorshSerialize, Debug)]
+struct AuthenticationChallengePlaintextRef<'a, C> {
+    challenge: &'a C,
+    #[borsh(
+        deserialize_with = "borsh_deserialize_compressed_ristretto",
+        serialize_with = "borsh_serialize_compressed_ristretto"
+    )]
+    registered_authentication_cpk: &'a CompressedRistretto,
+}
+
+#[derive(BorshDeserialize, Debug)]
+pub struct AuthenticationChallengePlaintext<C> {
+    pub challenge: C,
+    #[borsh(
+        deserialize_with = "borsh_deserialize_compressed_ristretto",
+        serialize_with = "borsh_serialize_compressed_ristretto"
+    )]
+    pub registered_authentication_cpk: CompressedRistretto,
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
+pub struct AuthenticationChallenge<C> {
+    /// The user bitname that the sign-in is for
+    pub bitname: BitName,
+    pub ciphertext: Vec<u8>,
+    pub encryption_nonce: [u8; 24],
+    #[borsh(skip)]
+    _marker: PhantomData<C>,
+}
+
+impl<C> AuthenticationChallenge<C> {
+    /// Generate an authentication challenge for a user.
+    /// The user's encryption xpub should be resolved via BitNames.
+    pub fn new(
+        user_bitname: BitName,
+        user_encryption_xpub_resolved: XPub,
+        authentication_pubkey: &RistrettoPoint,
+        service_bitname: &BitName,
+        encryption_secret: x25519_dalek::StaticSecret,
+        challenge: &C,
+    ) -> anyhow::Result<Self>
+    where
+        C: BorshDeserialize + BorshSerialize,
+    {
+        let siwb_xpub = derive_xpub(
+            user_encryption_xpub_resolved,
+            &sign_in_with_bitnames_non_hardened_derivation_path(
+                service_bitname,
+            ),
+        )?;
+        let (encryption_nonce, ciphertext) = {
+            let chacha_box = crypto_box::ChaChaBox::new(
+                &siwb_xpub.public_key().into(),
+                &encryption_secret.to_bytes().into(),
+            );
+            let nonce = ChaChaBox::generate_nonce(&mut OsRng);
+            let challenge_plaintext = AuthenticationChallengePlaintextRef {
+                challenge,
+                registered_authentication_cpk: &authentication_pubkey
+                    .compress(),
+            };
+            let challenge_plaintext = borsh::to_vec(&challenge_plaintext)?;
+            let payload = crypto_box::aead::Payload {
+                msg: challenge_plaintext.as_slice(),
+                aad: &user_bitname.0,
+            };
+            (nonce.into(), chacha_box.encrypt(&nonce, payload)?)
+        };
+        Ok(Self {
+            bitname: user_bitname,
+            ciphertext,
+            encryption_nonce,
+            _marker: PhantomData,
+        })
+    }
+}
+
+#[derive(BorshDeserialize, BorshSerialize, Debug)]
+struct AuthenticationResponsePlaintext {
+    signature: Signature,
+    epk_rotation: Option<EpkRotation>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct AuthenticationResponse {
+    pub ciphertext: Vec<u8>,
+    pub encryption_nonce: [u8; 24],
+}
+
+impl AuthenticationResponse {
+    /// Validate authentication response,
+    /// returning the new authentication pubkey
+    fn validate<C>(
+        &self,
+        register_as_xpub: XPub,
+        register_as_xpub_old: XPub,
+        mut authentication_pk: RistrettoPoint,
+        challenge: C,
+        service_bitname: &BitName,
+        encryption_secret: x25519_dalek::StaticSecret,
+    ) -> anyhow::Result<RistrettoPoint>
+    where
+        C: BorshSerialize,
+    {
+        let siwb_xpub = derive_xpub(
+            register_as_xpub,
+            &sign_in_with_bitnames_non_hardened_derivation_path(
+                service_bitname,
+            ),
+        )?;
+        let response_plaintext: AuthenticationResponsePlaintext = {
+            let chacha_box = crypto_box::ChaChaBox::new(
+                &siwb_xpub.public_key().into(),
+                &encryption_secret.to_bytes().into(),
+            );
+            let payload = crypto_box::aead::Payload {
+                msg: self.ciphertext.as_slice(),
+                aad: &[],
+            };
+            let decrypted_bytes =
+                chacha_box.decrypt(&self.encryption_nonce.into(), payload)?;
+            borsh::from_slice(&decrypted_bytes)?
+        };
+        if let Some(epk_rotation) = response_plaintext.epk_rotation {
+            authentication_pk = epk_rotation.verify(
+                &siwb_xpub,
+                service_bitname,
+                register_as_xpub_old,
+                &authentication_pk,
+            )?;
+        }
+        // Verify signature
+        {
+            // x25519 DH
+            let shared_secret = {
+                let authentication_pk_x25519 =
+                    ristretto_point_to_x25519_pk(authentication_pk);
+                encryption_secret.diffie_hellman(&authentication_pk_x25519)
+            };
+            // Use shared secret as signing key for ed25519 signature
+            let shared_signing_key = ed25519_dalek::SigningKey::from_bytes(
+                &shared_secret.to_bytes(),
+            );
+            // TODO: use blake3 XOF,
+            // keyed by `secret_from_xprv(siwb_encryption_xprv)`,
+            // once digest 0.11.0 is available
+            use sha3::{Digest as _, Sha3_512};
+            let mut hasher = Sha3_512::new();
+            hasher.update(service_bitname.0);
+            borsh::to_writer(&mut hasher, &challenge)?;
+            let () = shared_signing_key.verify_prehashed(
+                hasher,
+                None,
+                &response_plaintext.signature.0,
+            )?;
+        }
+        Ok(authentication_pk)
+    }
+}
+
+/// Authenticate to a service.
+/// The challenge validation function must return `Some(_)` to sign the
+/// challenge, and `None` to reject it.
+fn authenticate<C, F, T>(
+    wallet: &Wallet,
+    rotxn: &RoTxn,
+    auth_as_epk: &EncryptionPubKey,
+    service_bitname: &BitName,
+    service_epk: EncryptionPubKey,
+    challenge: &AuthenticationChallenge<C>,
+    validate_challenge: F,
+) -> anyhow::Result<AuthenticationResponse>
+where
+    C: BorshDeserialize + BorshSerialize,
+    F: FnOnce(&C) -> anyhow::Result<Option<T>>,
+{
+    let auth_as_epk_xprv =
+        wallet.get_encryption_xprv_for_epk(rotxn, auth_as_epk)?;
+    let siwb_encryption_xprv = wallet::derive_xprv(
+        auth_as_epk_xprv,
+        &sign_in_with_bitnames_non_hardened_derivation_path(service_bitname),
+    );
+    let siwb_pk_secret = secret_from_xprv(&siwb_encryption_xprv);
+    let siwb_pk_secret =
+        curve25519_dalek::Scalar::from_bytes_mod_order(*siwb_pk_secret);
+    let challenge_plaintext: AuthenticationChallengePlaintext<C> = {
+        let chacha_box = crypto_box::ChaChaBox::new(
+            &service_epk.into(),
+            &siwb_pk_secret.into(),
+        );
+        let payload = crypto_box::aead::Payload {
+            msg: challenge.ciphertext.as_slice(),
+            aad: &challenge.bitname.0,
+        };
+        let decrypted_bytes =
+            chacha_box.decrypt(&challenge.encryption_nonce.into(), payload)?;
+        borsh::from_slice(&decrypted_bytes)?
+    };
+    let Some(value) = validate_challenge(&challenge_plaintext.challenge)?
+    else {
+        anyhow::bail!("Challenge validation was not successful")
+    };
+    // FIXME: implement
+    let authentication_xprv: XPrv = todo!();
+    // Sign challenge
+    let signature = {
+        let authentication_secret = secret_from_xprv(&authentication_xprv);
+        // x25519 DH
+        let shared_secret =
+            x25519_dalek::StaticSecret::from(*authentication_secret)
+                .diffie_hellman(&service_epk.0);
+        // Use shared secret as signing key for ed25519 signature
+        let shared_signing_key =
+            ed25519_dalek::SigningKey::from_bytes(&shared_secret.to_bytes());
+        // TODO: use blake3 XOF,
+        // keyed by `secret_from_xprv(siwb_encryption_xprv)`,
+        // once digest 0.11.0 is available
+        use sha3::{Digest as _, Sha3_512};
+        let mut hasher = Sha3_512::new();
+        hasher.update(service_bitname.0);
+        borsh::to_writer(&mut hasher, &challenge_plaintext.challenge)?;
+        shared_signing_key
+            .sign_prehashed(hasher, None)
+            .map(Signature)?
+    };
+    let authentication_pubkey =
+        ristretto_point_from_ed25519_xpub(&authentication_xprv.public())?;
+    let epk_rotation = if challenge_plaintext.registered_authentication_cpk
+        != authentication_pubkey.compress()
+    {
+        let Some(authentication_pubkey_old) = challenge_plaintext
+            .registered_authentication_cpk
+            .decompress()
+        else {
+            anyhow::bail!("Failed to decompress authentication cpk")
+        };
+        Some(rotate_epk(
+            wallet,
+            rotxn,
+            challenge.bitname,
+            auth_as_epk_xprv.public(),
+            service_bitname,
+            &authentication_pubkey_old,
+        )?)
+    } else {
+        None
+    };
+    let (encryption_nonce, ciphertext) = {
+        let chacha_box = crypto_box::ChaChaBox::new(
+            &service_epk.into(),
+            &siwb_pk_secret.to_bytes().into(),
+        );
+        let nonce = ChaChaBox::generate_nonce(&mut OsRng);
+        let response_plaintext = AuthenticationResponsePlaintext {
+            signature,
+            epk_rotation,
+        };
+        let response_plaintext = borsh::to_vec(&response_plaintext)?;
+        let payload = crypto_box::aead::Payload {
+            msg: response_plaintext.as_slice(),
+            aad: &[],
+        };
+        (nonce.into(), chacha_box.encrypt(&nonce, payload)?)
+    };
+    Ok(AuthenticationResponse {
+        ciphertext,
+        encryption_nonce,
     })
 }
 
