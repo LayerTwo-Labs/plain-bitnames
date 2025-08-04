@@ -10,6 +10,7 @@ use crate::types::{
 };
 
 /// Errors related to BitNames
+#[allow(clippy::duplicated_attributes)]
 #[derive(Debug, Error, Transitive)]
 #[transitive(from(db::Delete, db::Error))]
 #[transitive(from(db::Last, db::Error))]
@@ -53,6 +54,7 @@ pub enum InvalidHeader {
     },
 }
 
+#[allow(clippy::duplicated_attributes)]
 #[derive(Debug, Error, Transitive)]
 #[transitive(from(db::Clear, db::Error))]
 #[transitive(from(db::Delete, db::Error))]
