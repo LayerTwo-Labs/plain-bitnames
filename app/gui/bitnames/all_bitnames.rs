@@ -44,8 +44,18 @@ fn show_bitname_data(
         .map_or("Not set".to_owned(), |socket_addr_v6| {
             socket_addr_v6.to_string()
         });
-    let encryption_pubkey =
-        encryption_pubkey.map_or("Not set".to_owned(), |epk| epk.to_string());
+    let (encryption_pubkey, encryption_xpub_chain_code) = {
+        const NOT_SET: &str = "Not set";
+        match encryption_pubkey {
+            None => (NOT_SET.to_owned(), NOT_SET.to_owned()),
+            Some(epk) => match epk.chain_code {
+                None => (epk.pubkey.to_string(), NOT_SET.to_owned()),
+                Some(chain_code) => {
+                    (epk.pubkey.to_string(), chain_code.to_string())
+                }
+            },
+        }
+    };
     let signing_pubkey =
         signing_pubkey.map_or("Not set".to_owned(), |svk| svk.to_string());
     let paymail_fee_sats = paymail_fee_sats
@@ -79,6 +89,15 @@ fn show_bitname_data(
             ui.monospace_selectable_singleline(
                 true,
                 format!("Encryption Pubkey: {encryption_pubkey}"),
+            )
+        })
+        .join()
+        | ui.horizontal(|ui| {
+            ui.monospace_selectable_singleline(
+                true,
+                format!(
+                    "Encryption XPub chain code: {encryption_xpub_chain_code}"
+                ),
             )
         })
         .join()

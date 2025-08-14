@@ -5,6 +5,8 @@ use serde_with::{DeserializeAs, DisplayFromStr, FromInto, SerializeAs};
 use thiserror::Error;
 use utoipa::ToSchema;
 
+use crate::types::serde_hexstr_human_readable;
+
 #[derive(Debug, Error)]
 #[error("Wrong Bech32 HRP. Expected {expected} but decoded {decoded}")]
 pub struct WrongHrpError {
@@ -94,12 +96,6 @@ where
     }
 }
 
-impl From<EncryptionPubKey> for crypto_box::PublicKey {
-    fn from(epk: EncryptionPubKey) -> Self {
-        Self::from_bytes(epk.0.to_bytes())
-    }
-}
-
 impl std::str::FromStr for EncryptionPubKey {
     type Err = Bech32mDecodeError;
 
@@ -130,6 +126,39 @@ impl Serialize for EncryptionPubKey {
         } else {
             self.0.serialize(serializer)
         }
+    }
+}
+
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+    ToSchema,
+)]
+#[repr(transparent)]
+#[schema(value_type = String)]
+pub struct Bip32ChainCode(
+    #[serde(with = "serde_hexstr_human_readable")] pub [u8; 32],
+);
+
+impl std::fmt::Display for Bip32ChainCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        hex::encode(self.0).fmt(f)
+    }
+}
+
+impl std::str::FromStr for Bip32ChainCode {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        hex::FromHex::from_hex(s).map(Self)
     }
 }
 

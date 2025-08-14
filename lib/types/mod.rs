@@ -83,7 +83,7 @@ mod serde_display_fromstr_human_readable {
 
 /// (de)serialize as hex strings for human-readable forms like json,
 /// and default serialization for non human-readable formats like bincode
-mod serde_hexstr_human_readable {
+pub(crate) mod serde_hexstr_human_readable {
     use hex::{FromHex, ToHex};
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

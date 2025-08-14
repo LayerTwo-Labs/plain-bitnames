@@ -13,7 +13,8 @@ use crate::{
     },
     types::{
         BatchIcannRegistrationData, BitName, BitNameDataUpdates, BitNameSeqId,
-        EncryptionPubKey, FilledTransaction, Hash, Txid, Update, VerifyingKey,
+        FilledTransaction, Hash, Txid, Update, VerifyingKey,
+        bitname_data::EncryptionPubKey,
     },
 };
 

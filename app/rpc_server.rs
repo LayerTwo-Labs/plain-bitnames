@@ -14,9 +14,9 @@ use plain_bitnames::{
         Address, Authorization, BitName, BitNameData, Block, BlockHash,
         EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
         PointedOutput, Transaction, Txid, VerifyingKey, WithdrawalBundle,
-        keys::Ecies,
+        keys::{Bip32ChainCode, Ecies},
     },
-    wallet::Balance,
+    wallet::{self, Balance},
 };
 use plain_bitnames_app_rpc_api::{RpcServer, TxInfo};
 use tower_http::{
@@ -387,6 +387,222 @@ impl RpcServer for RpcServerImpl {
             .wallet
             .sign_arbitrary_msg_as_addr(&address, &msg)
             .map_err(custom_err)
+    }
+
+    async fn siwb_authenticate(
+        &self,
+        service_bitname: BitName,
+        challenge: wallet::sign_in_with_bitnames::AuthenticationChallenge<()>,
+    ) -> RpcResult<wallet::sign_in_with_bitnames::AuthenticationResponse> {
+        let bitname = &challenge.bitname;
+        let bitname_data = self
+            .app
+            .node
+            .get_current_bitname_data(bitname)
+            .map_err(custom_err)?;
+        let service_bitname_data = self
+            .app
+            .node
+            .get_current_bitname_data(&service_bitname)
+            .map_err(custom_err)?;
+        let auth_as_epk = bitname_data
+            .mutable_data
+            .encryption_pubkey
+            .ok_or_else(|| {
+                custom_err_msg(format!(
+                    "No registered encryption pubkey for BitName (`{bitname}`)"
+                ))
+            })?
+            .pubkey;
+        let service_epk = service_bitname_data
+            .mutable_data
+            .encryption_pubkey
+            .ok_or_else(|| {
+                custom_err_msg(format!(
+                    "No registered encryption pubkey for BitName (`{bitname}`)"
+                ))
+            })?
+            .pubkey;
+        let validate_challenge =
+            |_: &()| Ok::<_, std::convert::Infallible>(Some(()));
+        // FIXME: set nonce properly
+        let nonce = 0;
+        match self.app.wallet.siwb_authenticate_as(
+            &auth_as_epk,
+            service_bitname,
+            nonce,
+            service_epk,
+            &challenge,
+            validate_challenge,
+        ) {
+            Ok((resp, ())) => Ok(resp),
+            Err(err) => Err(custom_err(err)),
+        }
+    }
+
+    async fn siwb_register_as(
+        &self,
+        bitname: BitName,
+        service_bitname: BitName,
+    ) -> RpcResult<wallet::sign_in_with_bitnames::Registration> {
+        let bitname_data = self
+            .app
+            .node
+            .get_current_bitname_data(&bitname)
+            .map_err(custom_err)?;
+        let service_bitname_data = self
+            .app
+            .node
+            .get_current_bitname_data(&service_bitname)
+            .map_err(custom_err)?;
+        let register_as_epk = bitname_data
+            .mutable_data
+            .encryption_pubkey
+            .ok_or_else(|| {
+                custom_err_msg(format!(
+                    "No registered encryption pubkey for BitName (`{bitname}`)"
+                ))
+            })?
+            .pubkey;
+        let service_epk = service_bitname_data
+            .mutable_data
+            .encryption_pubkey
+            .ok_or_else(|| {
+                custom_err_msg(format!(
+                    "No registered encryption pubkey for BitName (`{bitname}`)"
+                ))
+            })?
+            .pubkey;
+        // FIXME: set nonce properly
+        let nonce = 0;
+        self.app
+            .wallet
+            .siwb_register_as(
+                bitname,
+                &register_as_epk,
+                service_bitname,
+                nonce,
+                &service_epk,
+            )
+            .map_err(custom_err)
+    }
+
+    async fn siwb_verify_registration(
+        &self,
+        service_bitname: BitName,
+        registration: wallet::sign_in_with_bitnames::Registration,
+    ) -> RpcResult<wallet::sign_in_with_bitnames::CompressedAuthenticationPubkey>
+    {
+        let bitname = &registration.bitname;
+        let bitname_data = self
+            .app
+            .node
+            .get_current_bitname_data(bitname)
+            .map_err(custom_err)?;
+        let register_as_epk =
+            bitname_data.mutable_data.encryption_pubkey.ok_or_else(|| {
+                custom_err_msg(format!(
+                    "No registered encryption pubkey for BitName (`{bitname}`)"
+                ))
+            })?;
+        let register_as_epk_chain_code =
+            register_as_epk.chain_code.ok_or_else(||
+                custom_err_msg(format!("No registered encryption pubkey chaincode for BitName (`{bitname}`)"))
+            )?;
+        let service_bitname_data = self
+            .app
+            .node
+            .get_current_bitname_data(&service_bitname)
+            .map_err(custom_err)?;
+        let service_epk = service_bitname_data
+            .mutable_data
+            .encryption_pubkey
+            .ok_or_else(|| {
+                custom_err_msg(format!(
+                    "No registered encryption pubkey for BitName (`{bitname}`)"
+                ))
+            })?
+            .pubkey;
+
+        match self.app.wallet.siwb_verify_registration(
+            service_bitname,
+            &service_epk,
+            &register_as_epk.pubkey,
+            &register_as_epk_chain_code,
+            registration,
+        ) {
+            Ok(auth_pubkey) => {
+                let auth_cpk =
+                    wallet::sign_in_with_bitnames::CompressedAuthenticationPubkey(auth_pubkey.compress());
+                Ok(auth_cpk)
+            }
+            Err(err) => Err(custom_err(err)),
+        }
+    }
+
+    async fn siwb_verify_auth(
+        &self,
+        bitname: BitName,
+        registered_auth_pk: wallet::sign_in_with_bitnames::CompressedAuthenticationPubkey,
+        registered_epk_old: EncryptionPubKey,
+        registered_encryption_xpub_chain_code_old: Bip32ChainCode,
+        service_bitname: BitName,
+        challenge: wallet::sign_in_with_bitnames::AuthenticationChallenge<()>,
+        response: wallet::sign_in_with_bitnames::AuthenticationResponse,
+    ) -> RpcResult<wallet::sign_in_with_bitnames::CompressedAuthenticationPubkey>
+    {
+        let registered_auth_pk =
+            registered_auth_pk.0.decompress().ok_or_else(|| {
+                custom_err_msg("failed to decompress ristretto point")
+            })?;
+        let bitname_data = self
+            .app
+            .node
+            .get_current_bitname_data(&bitname)
+            .map_err(custom_err)?;
+        let register_as_epk =
+            bitname_data.mutable_data.encryption_pubkey.ok_or_else(|| {
+                custom_err_msg(format!(
+                    "No registered encryption pubkey for BitName (`{bitname}`)"
+                ))
+            })?;
+        let register_as_epk_chain_code =
+            register_as_epk.chain_code.ok_or_else(||
+                custom_err_msg(format!("No registered encryption pubkey chaincode for BitName (`{bitname}`)"))
+            )?;
+        let service_bitname_data = self
+            .app
+            .node
+            .get_current_bitname_data(&service_bitname)
+            .map_err(custom_err)?;
+        let service_epk = service_bitname_data
+            .mutable_data
+            .encryption_pubkey
+            .ok_or_else(|| {
+                custom_err_msg(format!(
+                    "No registered encryption pubkey for BitName (`{bitname}`)"
+                ))
+            })?
+            .pubkey;
+
+        match self.app.wallet.siwb_verify_authentication(
+            service_bitname,
+            &service_epk,
+            &challenge,
+            registered_auth_pk,
+            &register_as_epk.pubkey,
+            &register_as_epk_chain_code,
+            &registered_epk_old,
+            &registered_encryption_xpub_chain_code_old,
+            response,
+        ) {
+            Ok(auth_pubkey) => {
+                let auth_cpk =
+                    wallet::sign_in_with_bitnames::CompressedAuthenticationPubkey(auth_pubkey.compress());
+                Ok(auth_cpk)
+            }
+            Err(err) => Err(custom_err(err)),
+        }
     }
 
     async fn stop(&self) {

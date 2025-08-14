@@ -11,8 +11,9 @@ use plain_bitnames::{
     authorization::{Dst, Signature},
     types::{
         Address, BitName, BlockHash, EncryptionPubKey, MutableBitNameData,
-        THIS_SIDECHAIN, VerifyingKey,
+        THIS_SIDECHAIN, VerifyingKey, keys::Bip32ChainCode,
     },
+    wallet,
 };
 use plain_bitnames_app_rpc_api::{BitNameCommitRpcClient, RpcClient};
 use tracing_subscriber::layer::SubscriberExt as _;
@@ -132,6 +133,47 @@ pub enum Command {
         address: Address,
         #[arg(long)]
         msg: String,
+    },
+    /// Sign in with BitNames authentication
+    SiwbAuthenticate {
+        #[arg(long)]
+        service_bitname: BitName,
+        #[command(flatten)]
+        challenge: wallet::sign_in_with_bitnames::AuthenticationChallenge<()>,
+    },
+    /// Sign in with BitNames registration
+    SiwbRegisterAs {
+        #[arg(long)]
+        bitname: BitName,
+        #[arg(long)]
+        service_bitname: BitName,
+    },
+    /// Verify sign in with BitNames authentication as service,
+    /// returning the new authentication pubkey
+    SiwbVerifyAuth {
+        #[arg(long)]
+        bitname: BitName,
+        #[arg(long)]
+        service_bitname: BitName,
+        #[arg(long)]
+        registered_auth_pk:
+            wallet::sign_in_with_bitnames::CompressedAuthenticationPubkey,
+        #[arg(long)]
+        registered_epk_old: EncryptionPubKey,
+        #[arg(long)]
+        registered_encryption_xpub_chain_code_old: Bip32ChainCode,
+        #[command(flatten)]
+        challenge: wallet::sign_in_with_bitnames::AuthenticationChallenge<()>,
+        #[command(flatten)]
+        response: wallet::sign_in_with_bitnames::AuthenticationResponse,
+    },
+    /// Verify sign in with BitNames registration as service,
+    /// obtaining an authentication pubkey if successful
+    SiwbVerifyRegistration {
+        #[arg(long)]
+        service_bitname: BitName,
+        #[command(flatten)]
+        registration: wallet::sign_in_with_bitnames::Registration,
     },
     /// Stop the node
     Stop,
@@ -412,6 +454,55 @@ where
             let authorization =
                 rpc_client.sign_arbitrary_msg_as_addr(address, msg).await?;
             serde_json::to_string_pretty(&authorization)?
+        }
+        Command::SiwbAuthenticate {
+            service_bitname,
+            challenge,
+        } => {
+            let auth_response = rpc_client
+                .siwb_authenticate(service_bitname, challenge)
+                .await?;
+            serde_json::to_string_pretty(&auth_response)?
+        }
+        Command::SiwbRegisterAs {
+            bitname,
+            service_bitname,
+        } => {
+            let registration = rpc_client
+                .siwb_register_as(bitname, service_bitname)
+                .await?;
+            serde_json::to_string_pretty(&registration)?
+        }
+        Command::SiwbVerifyAuth {
+            bitname,
+            service_bitname,
+            registered_auth_pk,
+            registered_epk_old,
+            registered_encryption_xpub_chain_code_old,
+            challenge,
+            response,
+        } => {
+            let auth_cpk = rpc_client
+                .siwb_verify_auth(
+                    bitname,
+                    registered_auth_pk,
+                    registered_epk_old,
+                    registered_encryption_xpub_chain_code_old,
+                    service_bitname,
+                    challenge,
+                    response,
+                )
+                .await?;
+            serde_json::to_string_pretty(&auth_cpk)?
+        }
+        Command::SiwbVerifyRegistration {
+            service_bitname,
+            registration,
+        } => {
+            let auth_cpk = rpc_client
+                .siwb_verify_registration(service_bitname, registration)
+                .await?;
+            serde_json::to_string_pretty(&auth_cpk)?
         }
         Command::Stop => {
             let () = rpc_client.stop().await?;

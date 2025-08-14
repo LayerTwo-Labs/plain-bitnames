@@ -4,10 +4,8 @@ use std::{
     path::Path,
 };
 
-use bitcoin::{
-    Amount,
-    bip32::{ChildNumber, DerivationPath},
-};
+use bitcoin::Amount;
+use borsh::{BorshDeserialize, BorshSerialize};
 use ed25519_bip32::XPrv;
 use fallible_iterator::FallibleIterator as _;
 use futures::{Stream, StreamExt};
@@ -15,33 +13,30 @@ use heed::{
     byteorder::BigEndian,
     types::{Bytes, SerdeBincode, Str, U8, U32},
 };
-use libes::EciesError;
 use serde::{Deserialize, Serialize};
-use sneed::{DbError, Env, EnvError, RwTxnError, UnitKey, db, env, rwtxn};
-use thiserror::Error;
+use sneed::{DbError, Env, UnitKey};
 use tokio_stream::{StreamMap, wrappers::WatchStream};
 
 use crate::{
     authorization::{self, Authorization, Signature, get_address},
     types::{
-        Address, AmountOverflowError, AmountUnderflowError,
-        AuthorizedTransaction, BitcoinOutputContent, EncryptionPubKey,
-        FilledOutput, GetValue, Hash, InPoint, MutableBitNameData, OutPoint,
-        Output, OutputContent, SpentOutput, Transaction, TxData, VERSION,
-        VerifyingKey, Version, WithdrawalOutputContent, hashes::BitName,
-        keys::Ecies,
+        Address, AmountOverflowError, AuthorizedTransaction,
+        BitcoinOutputContent, EncryptionPubKey, FilledOutput, GetValue, Hash,
+        InPoint, MutableBitNameData, OutPoint, Output, OutputContent,
+        SpentOutput, Transaction, TxData, VERSION, VerifyingKey, Version,
+        WithdrawalOutputContent,
+        hashes::BitName,
+        keys::{Bip32ChainCode, Ecies},
     },
     util::Watchable,
+    wallet::util::KnownBip32Path,
 };
 
-/// Derive an XPrv using a derivation path
-fn derive_xprv(xprv: XPrv, path: &DerivationPath) -> XPrv {
-    path.into_iter().fold(xprv, |xprv, child_number| {
-        xprv.derive(ed25519_bip32::DerivationScheme::V2, (*child_number).into())
-    })
-}
+pub mod error;
+pub mod sign_in_with_bitnames;
+mod util;
 
-mod sign_in_with_bitnames;
+pub use error::Error;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, utoipa::ToSchema)]
 pub struct Balance {
@@ -54,76 +49,6 @@ pub struct Balance {
     )]
     #[schema(value_type = u64)]
     pub available: Amount,
-}
-
-#[derive(Debug, Error)]
-#[error("Message signature verification key {vk} does not exist")]
-pub struct VkDoesNotExistError {
-    vk: VerifyingKey,
-}
-
-#[allow(clippy::duplicated_attributes)]
-#[derive(transitive::Transitive, Debug, Error)]
-#[transitive(from(db::error::Clear, DbError))]
-#[transitive(from(db::error::Delete, DbError))]
-#[transitive(from(db::error::IterInit, DbError))]
-#[transitive(from(db::error::IterItem, DbError))]
-#[transitive(from(db::error::Last, DbError))]
-#[transitive(from(db::error::Len, DbError))]
-#[transitive(from(db::error::Put, DbError))]
-#[transitive(from(db::error::TryGet, DbError))]
-#[transitive(from(env::error::CreateDb, EnvError))]
-#[transitive(from(env::error::OpenEnv, EnvError))]
-#[transitive(from(env::error::ReadTxn, EnvError))]
-#[transitive(from(env::error::WriteTxn, EnvError))]
-#[transitive(from(rwtxn::error::Commit, RwTxnError))]
-pub enum Error {
-    #[error("address {address} does not exist")]
-    AddressDoesNotExist { address: crate::types::Address },
-    #[error(transparent)]
-    AmountOverflow(#[from] AmountOverflowError),
-    #[error(transparent)]
-    AmountUnderflow(#[from] AmountUnderflowError),
-    #[error("authorization error")]
-    Authorization(#[from] crate::authorization::Error),
-    #[error("bip32 error")]
-    Bip32(#[from] bitcoin::bip32::Error),
-    #[error(transparent)]
-    Db(#[from] DbError),
-    #[error("Database env error")]
-    DbEnv(#[from] EnvError),
-    #[error("Database write error")]
-    DbWrite(#[from] RwTxnError),
-    #[error("ECIES error: {:?}", .0)]
-    Ecies(EciesError),
-    #[error("Encryption pubkey {epk} does not exist")]
-    EpkDoesNotExist { epk: EncryptionPubKey },
-    #[error("io error")]
-    Io(#[from] std::io::Error),
-    #[error("no index for address {address}")]
-    NoIndex { address: Address },
-    #[error(
-        "wallet does not have a seed (set with RPC `set-seed-from-mnemonic`)"
-    )]
-    NoSeed,
-    #[error("could not find bitname reservation for `{plain_name}`")]
-    NoBitnameReservation { plain_name: String },
-    #[error("not enough funds")]
-    NotEnoughFunds,
-    #[error("utxo does not exist")]
-    NoUtxo,
-    #[error("failed to parse mnemonic seed phrase")]
-    ParseMnemonic(#[from] bip39::ErrorKind),
-    #[error("seed has already been set")]
-    SeedAlreadyExists,
-    #[error(transparent)]
-    VkDoesNotExist(Box<VkDoesNotExistError>),
-}
-
-impl From<VkDoesNotExistError> for Error {
-    fn from(err: VkDoesNotExistError) -> Self {
-        Self::VkDoesNotExist(Box::new(err))
-    }
 }
 
 /// Marker type for Wallet Env
@@ -217,9 +142,12 @@ impl Wallet {
     }
 
     // Adapted from https://input-output-hk.github.io/adrestia/static/Ed25519_BIP.pdf
-    fn get_master_xprv(&self, rotxn: &RoTxn) -> Result<XPrv, Error> {
+    fn get_master_xprv(
+        &self,
+        rotxn: &RoTxn,
+    ) -> Result<XPrv, error::GetMasterXprv> {
         use bitcoin::hashes::{Hash as _, HashEngine as _, sha256};
-        let seed_bytes = self.seed.try_get(rotxn, &0)?.ok_or(Error::NoSeed)?;
+        let seed_bytes = self.seed.try_get(rotxn, &0)?.ok_or(error::NoSeed)?;
         // Master secret must be 256 bits, see
         // https://input-output-hk.github.io/adrestia/static/Ed25519_BIP.pdf
         let mut master_secret: [u8; 32] =
@@ -248,16 +176,26 @@ impl Wallet {
         }
     }
 
+    fn get_epk_index(
+        &self,
+        rotxn: &RoTxn,
+        epk: &EncryptionPubKey,
+    ) -> Result<u32, error::GetEpkIndex> {
+        let epk_idx = self
+            .epk_to_index
+            .try_get(rotxn, epk)?
+            .ok_or(error::EpkDoesNotExist { epk: *epk })?;
+        Ok(epk_idx)
+    }
+
     fn get_encryption_xprv(
         &self,
         rotxn: &RoTxn,
         index: u32,
-    ) -> Result<ed25519_bip32::XPrv, Error> {
+    ) -> Result<ed25519_bip32::XPrv, error::GetMasterXprv> {
         let master_xprv = self.get_master_xprv(rotxn)?;
-        let derivation_path = DerivationPath::master()
-            .child(ChildNumber::Hardened { index: 1 })
-            .child(ChildNumber::Normal { index });
-        let xprv = derive_xprv(master_xprv, &derivation_path);
+        let derivation_path = KnownBip32Path::Encryption { index }.into();
+        let xprv = util::derive_xprv(master_xprv, &derivation_path);
         Ok(xprv)
     }
 
@@ -265,7 +203,7 @@ impl Wallet {
         &self,
         rotxn: &RoTxn,
         index: u32,
-    ) -> Result<x25519_dalek::StaticSecret, Error> {
+    ) -> Result<x25519_dalek::StaticSecret, error::GetMasterXprv> {
         let xprv = self.get_encryption_xprv(rotxn, index)?;
         // This is safe since the signing scalar is already clamped
         let (secret_bytes, _): (&[u8; 32], _) = xprv
@@ -280,11 +218,8 @@ impl Wallet {
         &self,
         rotxn: &RoTxn,
         epk: &EncryptionPubKey,
-    ) -> Result<ed25519_bip32::XPrv, Error> {
-        let epk_idx = self
-            .epk_to_index
-            .try_get(rotxn, epk)?
-            .ok_or(Error::EpkDoesNotExist { epk: *epk })?;
+    ) -> Result<ed25519_bip32::XPrv, error::GetEncryptionXprvForEpk> {
+        let epk_idx = self.get_epk_index(rotxn, epk)?;
         let xprv = self.get_encryption_xprv(rotxn, epk_idx)?;
         // sanity check that encryption secret corresponds to epk
         {
@@ -305,11 +240,9 @@ impl Wallet {
         &self,
         rotxn: &RoTxn,
         epk: &EncryptionPubKey,
-    ) -> Result<x25519_dalek::StaticSecret, Error> {
-        let epk_idx = self
-            .epk_to_index
-            .try_get(rotxn, epk)?
-            .ok_or(Error::EpkDoesNotExist { epk: *epk })?;
+    ) -> Result<x25519_dalek::StaticSecret, error::GetEncryptionXprvForEpk>
+    {
+        let epk_idx = self.get_epk_index(rotxn, epk)?;
         let encryption_secret = self.get_encryption_secret(rotxn, epk_idx)?;
         // sanity check that encryption secret corresponds to epk
         assert_eq!(*epk, (&encryption_secret).into());
@@ -320,12 +253,11 @@ impl Wallet {
         &self,
         rotxn: &RoTxn,
         index: u32,
-    ) -> Result<ed25519_dalek::hazmat::ExpandedSecretKey, Error> {
+    ) -> Result<ed25519_dalek::hazmat::ExpandedSecretKey, error::GetMasterXprv>
+    {
         let master_xprv = self.get_master_xprv(rotxn)?;
-        let derivation_path = DerivationPath::master()
-            .child(ChildNumber::Hardened { index: 0 })
-            .child(ChildNumber::Normal { index });
-        let xpriv = derive_xprv(master_xprv, &derivation_path);
+        let derivation_path = KnownBip32Path::TxSigning { index }.into();
+        let xpriv = util::derive_xprv(master_xprv, &derivation_path);
         let esk_bytes = xpriv.extended_secret_key_bytes();
         Ok(ed25519_dalek::hazmat::ExpandedSecretKey::from_bytes(
             esk_bytes,
@@ -355,12 +287,11 @@ impl Wallet {
         &self,
         rotxn: &RoTxn,
         index: u32,
-    ) -> Result<ed25519_dalek::hazmat::ExpandedSecretKey, Error> {
+    ) -> Result<ed25519_dalek::hazmat::ExpandedSecretKey, error::GetMasterXprv>
+    {
         let master_xprv = self.get_master_xprv(rotxn)?;
-        let derivation_path = DerivationPath::master()
-            .child(ChildNumber::Hardened { index: 2 })
-            .child(ChildNumber::Normal { index });
-        let xpriv = derive_xprv(master_xprv, &derivation_path);
+        let derivation_path = KnownBip32Path::MessageSigning { index }.into();
+        let xpriv = util::derive_xprv(master_xprv, &derivation_path);
         let esk_bytes = xpriv.extended_secret_key_bytes();
         Ok(ed25519_dalek::hazmat::ExpandedSecretKey::from_bytes(
             esk_bytes,
@@ -395,7 +326,26 @@ impl Wallet {
         vk: &VerifyingKey,
     ) -> Result<ed25519_dalek::hazmat::ExpandedSecretKey, Error> {
         self.try_get_message_signing_key_for_vk(rotxn, vk)?
-            .ok_or_else(|| VkDoesNotExistError { vk: *vk }.into())
+            .ok_or_else(|| error::VkDoesNotExist { vk: *vk }.into())
+    }
+
+    /// Get the SIWB auth xprv for a given BitName, service BitName, and nonce
+    fn get_siwb_auth_xprv(
+        &self,
+        rotxn: &RoTxn,
+        bitname: BitName,
+        service_bitname: BitName,
+        nonce: u64,
+    ) -> Result<XPrv, error::GetMasterXprv> {
+        let master_xprv = self.get_master_xprv(rotxn)?;
+        let derivation_path = KnownBip32Path::SiwbAuthentication {
+            bitname,
+            service_bitname,
+            nonce,
+        }
+        .into();
+        let xprv = util::derive_xprv(master_xprv, &derivation_path);
+        Ok(xprv)
     }
 
     pub fn get_new_address(&self) -> Result<Address, Error> {
@@ -961,6 +911,156 @@ impl Wallet {
             verifying_key,
             signature,
         })
+    }
+
+    pub fn siwb_authenticate_as<C, F, E, T>(
+        &self,
+        auth_as_epk: &EncryptionPubKey,
+        service_bitname: BitName,
+        nonce: u64,
+        service_epk: EncryptionPubKey,
+        challenge: &sign_in_with_bitnames::AuthenticationChallenge<C>,
+        validate_challenge: F,
+    ) -> Result<
+        (sign_in_with_bitnames::AuthenticationResponse, T),
+        error::SiwbAuthentication<E>,
+    >
+    where
+        C: BorshDeserialize + BorshSerialize,
+        E: std::error::Error,
+        F: FnOnce(&C) -> Result<Option<T>, E>,
+    {
+        let rotxn = self.env.read_txn()?;
+        let auth_as_encryption_xprv =
+            self.get_encryption_xprv_for_epk(&rotxn, auth_as_epk)?;
+        let siwb_authentication_xprv = self.get_siwb_auth_xprv(
+            &rotxn,
+            challenge.bitname,
+            service_bitname,
+            nonce,
+        )?;
+        let auth_response = sign_in_with_bitnames::authenticate(
+            auth_as_encryption_xprv,
+            siwb_authentication_xprv,
+            service_bitname,
+            service_epk,
+            challenge,
+            validate_challenge,
+        )?;
+        Ok(auth_response)
+    }
+
+    pub fn siwb_register_as(
+        &self,
+        register_as_bitname: BitName,
+        register_as_epk: &EncryptionPubKey,
+        service_bitname: BitName,
+        nonce: u64,
+        service_epk: &EncryptionPubKey,
+    ) -> Result<sign_in_with_bitnames::Registration, error::SiwbRegistration>
+    {
+        let rotxn = self.env.read_txn()?;
+        let register_as_encryption_xprv =
+            self.get_encryption_xprv_for_epk(&rotxn, register_as_epk)?;
+        let siwb_auth_xprv = self.get_siwb_auth_xprv(
+            &rotxn,
+            register_as_bitname,
+            service_bitname,
+            nonce,
+        )?;
+        let registration = sign_in_with_bitnames::register_as(
+            register_as_bitname,
+            register_as_encryption_xprv,
+            siwb_auth_xprv,
+            service_bitname,
+            service_epk,
+        )?;
+        Ok(registration)
+    }
+
+    /// Verify a registration, obtaining an authentication pubkey if successful
+    pub fn siwb_verify_registration(
+        &self,
+        service_bitname: BitName,
+        service_epk: &EncryptionPubKey,
+        register_as_epk: &EncryptionPubKey,
+        register_as_epk_chain_code: &Bip32ChainCode,
+        registration: sign_in_with_bitnames::Registration,
+    ) -> Result<curve25519_dalek::RistrettoPoint, error::SiwbVerifyRegistration>
+    {
+        let rotxn = self.env.read_txn()?;
+        let service_encryption_secret =
+            self.get_encryption_secret_for_epk(&rotxn, service_epk)?;
+        // Check that the EPK encodes a valid ed25519 point
+        let register_as_epk_ed25519 =
+            curve25519_dalek::MontgomeryPoint(register_as_epk.0.to_bytes())
+                .to_edwards(0)
+                .ok_or(error::SiwbVerifyRegistration::ConvertEpk)?
+                .compress();
+        let register_as_encryption_xpub =
+            ed25519_bip32::XPub::from_pk_and_chaincode(
+                register_as_epk_ed25519.as_bytes(),
+                &register_as_epk_chain_code.0,
+            );
+        let auth_pubkey = registration.verify(
+            register_as_encryption_xpub,
+            service_bitname,
+            service_encryption_secret,
+        )?;
+        Ok(auth_pubkey)
+    }
+
+    /// Verify an authentication, returning the new authentication pubkey
+    #[allow(clippy::too_many_arguments)]
+    pub fn siwb_verify_authentication<C>(
+        &self,
+        service_bitname: BitName,
+        service_epk: &EncryptionPubKey,
+        challenge: &sign_in_with_bitnames::AuthenticationChallenge<C>,
+        registered_auth_pk: curve25519_dalek::RistrettoPoint,
+        register_as_epk: &EncryptionPubKey,
+        register_as_epk_chain_code: &Bip32ChainCode,
+        registered_epk_old: &EncryptionPubKey,
+        registered_epk_old_chain_code: &Bip32ChainCode,
+        auth_response: sign_in_with_bitnames::AuthenticationResponse,
+    ) -> Result<curve25519_dalek::RistrettoPoint, error::SiwbVerifyAuthentication>
+    where
+        C: BorshSerialize,
+    {
+        let rotxn = self.env.read_txn()?;
+        let service_encryption_secret =
+            self.get_encryption_secret_for_epk(&rotxn, service_epk)?;
+        // Check that the EPK encodes a valid ed25519 point
+        let register_as_epk_ed25519 =
+            curve25519_dalek::MontgomeryPoint(register_as_epk.0.to_bytes())
+                .to_edwards(0)
+                .ok_or(error::SiwbVerifyAuthentication::ConvertEpk)?
+                .compress();
+        let register_as_encryption_xpub =
+            ed25519_bip32::XPub::from_pk_and_chaincode(
+                register_as_epk_ed25519.as_bytes(),
+                &register_as_epk_chain_code.0,
+            );
+        // Check that the EPK encodes a valid ed25519 point
+        let register_as_epk_old_ed25519 =
+            curve25519_dalek::MontgomeryPoint(registered_epk_old.0.to_bytes())
+                .to_edwards(0)
+                .ok_or(error::SiwbVerifyAuthentication::ConvertEpk)?
+                .compress();
+        let register_as_encryption_xpub_old =
+            ed25519_bip32::XPub::from_pk_and_chaincode(
+                register_as_epk_old_ed25519.as_bytes(),
+                &registered_epk_old_chain_code.0,
+            );
+        let new_auth_pk = auth_response.verify(
+            register_as_encryption_xpub,
+            register_as_encryption_xpub_old,
+            registered_auth_pk,
+            challenge,
+            service_bitname,
+            service_encryption_secret,
+        )?;
+        Ok(new_auth_pk)
     }
 }
 

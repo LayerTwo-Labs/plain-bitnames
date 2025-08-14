@@ -1,4 +1,5 @@
 //! RPC API
+#![allow(clippy::too_many_arguments)]
 
 use std::{collections::HashMap, net::SocketAddr};
 
@@ -14,9 +15,9 @@ use plain_bitnames::{
         Header, MerkleRoot, MutableBitNameData, OutPoint, Output,
         OutputContent, PointedOutput, Transaction, TransactionData, TxIn, Txid,
         VerifyingKey, WithdrawalBundle, WithdrawalOutputContent,
-        hashes::BitName, schema as bitnames_schema,
+        hashes::BitName, keys::Bip32ChainCode, schema as bitnames_schema,
     },
-    wallet::Balance,
+    wallet::{self, Balance},
 };
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
@@ -265,6 +266,45 @@ pub trait Rpc {
         address: Address,
         msg: String,
     ) -> RpcResult<Authorization>;
+
+    /// Sign in with BitNames authentication
+    #[method(name = "siwb_authenticate")]
+    async fn siwb_authenticate(
+        &self,
+        service_bitname: BitName,
+        challenge: wallet::sign_in_with_bitnames::AuthenticationChallenge<()>,
+    ) -> RpcResult<wallet::sign_in_with_bitnames::AuthenticationResponse>;
+
+    /// Sign in with BitNames registration
+    #[method(name = "siwb_register_as")]
+    async fn siwb_register_as(
+        &self,
+        bitname: BitName,
+        service_bitname: BitName,
+    ) -> RpcResult<wallet::sign_in_with_bitnames::Registration>;
+
+    /// Verify sign in with BitNames registration as service,
+    /// obtaining an authentication pubkey if successful
+    #[method(name = "siwb_verify_registration")]
+    async fn siwb_verify_registration(
+        &self,
+        service_bitname: BitName,
+        registration: wallet::sign_in_with_bitnames::Registration,
+    ) -> RpcResult<wallet::sign_in_with_bitnames::CompressedAuthenticationPubkey>;
+
+    /// Verify sign in with BitNames authentication as service,
+    /// returning the new authentication pubkey
+    #[method(name = "siwb_verify_auth")]
+    async fn siwb_verify_auth(
+        &self,
+        bitname: BitName,
+        registered_auth_pk: wallet::sign_in_with_bitnames::CompressedAuthenticationPubkey,
+        registered_epk_old: EncryptionPubKey,
+        registered_encryption_xpub_chain_code_old: Bip32ChainCode,
+        service_bitname: BitName,
+        challenge: wallet::sign_in_with_bitnames::AuthenticationChallenge<()>,
+        response: wallet::sign_in_with_bitnames::AuthenticationResponse,
+    ) -> RpcResult<wallet::sign_in_with_bitnames::CompressedAuthenticationPubkey>;
 
     /// Stop the node
     #[method(name = "stop")]

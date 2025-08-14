@@ -8,7 +8,8 @@ use eframe::egui::{self, Response};
 use hex::FromHex;
 
 use plain_bitnames::types::{
-    EncryptionPubKey, Hash, MutableBitNameData, Transaction, Txid, VerifyingKey,
+    Hash, MutableBitNameData, Transaction, Txid, VerifyingKey, bitname_data,
+    keys::Bip32ChainCode,
 };
 
 use crate::{app::App, gui::util::InnerResponseExt};
@@ -28,7 +29,10 @@ pub struct TrySetBitNameData {
     /// optional ipv6 addr
     pub socket_addr_v6: TrySetOption<SocketAddrV6>,
     /// optional pubkey used for encryption
-    pub encryption_pubkey: TrySetOption<EncryptionPubKey>,
+    pub encryption_pubkey:
+        TrySetOption<plain_bitnames::types::EncryptionPubKey>,
+    /// optional encryption xpub chain code
+    pub encryption_xpub_chain_code: TrySetOption<Bip32ChainCode>,
     /// optional pubkey used for signing messages
     pub signing_pubkey: TrySetOption<VerifyingKey>,
     /// paymail fee in sats
@@ -83,6 +87,18 @@ impl TryFrom<TrySetBitNameData> for MutableBitNameData {
         let encryption_pubkey = try_set.encryption_pubkey.0.map_err(|err| {
             format!("Cannot parse encryption pubkey: \"{err}\"")
         })?;
+        let encryption_xpub_chain_code = if encryption_pubkey.is_none() {
+            None
+        } else {
+            try_set.encryption_xpub_chain_code.0.map_err(|err| {
+                format!("Cannot parse encryption xpub chain code: \"{err}\"")
+            })?
+        };
+        let encryption_pubkey =
+            encryption_pubkey.map(|pubkey| bitname_data::EncryptionPubKey {
+                pubkey,
+                chain_code: encryption_xpub_chain_code,
+            });
         let signing_pubkey = try_set
             .signing_pubkey
             .0
@@ -243,18 +259,37 @@ impl TxCreator {
                 )
         });
         let encryption_pubkey_resp = ui.horizontal(|ui| {
-            let default_pubkey =
-                EncryptionPubKey::from(<[u8; 32] as Default>::default());
+            let default_pubkey = plain_bitnames::types::EncryptionPubKey::from(
+                <[u8; 32] as Default>::default(),
+            );
             ui.monospace("Encryption PubKey:       ")
                 | Self::show_option_field_default(
                     ui,
                     "bitname_data_encryption_pubkey",
                     default_pubkey,
                     &mut bitname_data.encryption_pubkey,
-                    |s| EncryptionPubKey::from_str(&s),
-                    EncryptionPubKey::to_string,
+                    |s| plain_bitnames::types::EncryptionPubKey::from_str(&s),
+                    plain_bitnames::types::EncryptionPubKey::to_string,
                 )
         });
+        let encryption_xpub_chain_code_resp =
+            if let Ok(Some(_)) = bitname_data.encryption_pubkey.0 {
+                Some(ui.horizontal(|ui| {
+                    let default_chain_code =
+                        Bip32ChainCode(<[u8; 32] as Default>::default());
+                    ui.monospace("Encryption XPub chain code:       ")
+                        | Self::show_option_field_default(
+                            ui,
+                            "bitname_data_encryption_xpub_chain_code",
+                            default_chain_code,
+                            &mut bitname_data.encryption_xpub_chain_code,
+                            |s| Bip32ChainCode::from_str(&s),
+                            Bip32ChainCode::to_string,
+                        )
+                }))
+            } else {
+                None
+            };
         let signing_pubkey_resp = ui.horizontal(|ui| {
             let default_pubkey = VerifyingKey::try_from(&[0u8; 32]).unwrap();
             ui.monospace("Signing PubKey:       ")
@@ -278,12 +313,16 @@ impl TxCreator {
                     u64::to_string,
                 )
         });
-        commitment_resp.join()
+        let mut resp = commitment_resp.join()
             | ipv4_resp.join()
             | ipv6_resp.join()
-            | encryption_pubkey_resp.join()
-            | signing_pubkey_resp.join()
-            | paymail_fee_resp.join()
+            | encryption_pubkey_resp.join();
+        if let Some(encryption_xpub_chain_code_resp) =
+            encryption_xpub_chain_code_resp
+        {
+            resp |= encryption_xpub_chain_code_resp.join()
+        };
+        resp | signing_pubkey_resp.join() | paymail_fee_resp.join()
     }
 
     pub fn show(

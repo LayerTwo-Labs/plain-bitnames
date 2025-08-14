@@ -7,7 +7,29 @@ use utoipa::{
     openapi::{RefOr, Schema},
 };
 
-use crate::types::{BitNameSeqId, EncryptionPubKey, Hash, VerifyingKey};
+use crate::types::{
+    self, BitNameSeqId, Hash, VerifyingKey, keys::Bip32ChainCode,
+};
+
+#[derive(
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    PartialEq,
+    Serialize,
+    ToSchema,
+)]
+#[cfg_attr(feature = "clap", derive(clap::Args))]
+pub struct EncryptionPubKey {
+    #[cfg_attr(feature = "clap", arg(long))]
+    pub pubkey: types::EncryptionPubKey,
+    #[cfg_attr(feature = "clap", arg(long))]
+    pub chain_code: Option<Bip32ChainCode>,
+}
 
 /// Bitname data that can be updated later
 #[derive(
@@ -40,8 +62,8 @@ pub struct MutableBitNameData {
     #[cfg_attr(feature = "clap", arg(long))]
     #[schema(value_type = Option<String>)]
     pub socket_addr_v6: Option<SocketAddrV6>,
-    /// Optional pubkey used for encryption
-    #[cfg_attr(feature = "clap", arg(long))]
+    /// Optional pubkey used for encryption, with optional chaincode
+    #[cfg_attr(feature = "clap", command(flatten))]
     pub encryption_pubkey: Option<EncryptionPubKey>,
     /// Optional pubkey used for signing messages
     #[cfg_attr(feature = "clap", arg(long))]

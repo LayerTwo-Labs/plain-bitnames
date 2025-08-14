@@ -50,13 +50,14 @@ impl EncryptMessage {
                     app.node
                         .get_current_bitname_data(&bitname)
                         .map_err(anyhow::Error::from)
-                        .and_then(|bitname_data| {
-                            bitname_data.mutable_data.encryption_pubkey.ok_or(
-                                anyhow::anyhow!(
-                                "No encryption pubkey exists for this BitName"
-                        ),
-                            )
-                        })
+                        .and_then(|bitname_data|
+                            match bitname_data.mutable_data.encryption_pubkey {
+                                Some(epk) => Ok(epk.pubkey),
+                                None => Err(anyhow::anyhow!(
+                                    "No encryption pubkey exists for this BitName"
+                                ))
+                            }
+                        )
                 } else {
                     EncryptionPubKey::bech32m_decode(&self.receiver_input)
                         .map_err(|_| {
