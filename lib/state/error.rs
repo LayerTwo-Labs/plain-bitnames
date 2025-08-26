@@ -20,7 +20,7 @@ pub enum BitName {
     #[error("Bitname {bitname} already registered as an ICANN name")]
     AlreadyIcann { bitname: BitNameId },
     #[error(transparent)]
-    Db(#[from] db::Error),
+    Db(Box<db::Error>),
     #[error("Missing BitName {bitname}")]
     Missing { bitname: BitNameId },
     #[error("Missing BitName input {bitname}")]
@@ -36,6 +36,12 @@ pub enum BitName {
     MissingReservation { txid: Txid },
     #[error("no BitNames to update")]
     NoBitNamesToUpdate,
+}
+
+impl From<db::Error> for BitName {
+    fn from(err: db::Error) -> Self {
+        Self::Db(Box::new(err))
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -87,7 +93,7 @@ pub enum Error {
     #[error(transparent)]
     BorshSerialize(borsh::io::Error),
     #[error(transparent)]
-    Db(#[from] sneed::Error),
+    Db(Box<sneed::Error>),
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
     #[error("invalid ICANN name: {plain_name}")]
@@ -150,4 +156,10 @@ pub enum Error {
     WithdrawalBundle(#[from] WithdrawalBundleError),
     #[error("wrong public key for address")]
     WrongPubKeyForAddress,
+}
+
+impl From<sneed::Error> for Error {
+    fn from(err: sneed::Error) -> Self {
+        Self::Db(Box::new(err))
+    }
 }
