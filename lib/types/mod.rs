@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
     sync::LazyLock,
@@ -451,10 +452,13 @@ impl Body {
             .collect()
     }
 
-    pub fn compute_merkle_root(
+    pub fn compute_merkle_root<FilledTx>(
         coinbase: &[Output],
-        txs: &[FilledTransaction],
-    ) -> Result<MerkleRoot, ComputeMerkleRootError> {
+        txs: &[FilledTx],
+    ) -> Result<MerkleRoot, ComputeMerkleRootError>
+    where
+        FilledTx: Borrow<FilledTransaction> + Sync,
+    {
         let CbmtNode {
             commitment: txs_root,
             ..
@@ -465,11 +469,15 @@ impl Body {
             let mut leaves = vec![CbmtNode::default(); n_txs];
 
             // Use Rayon to compute leaves in parallel across all CPU cores
-            use rayon::prelude::*;
+            use rayon::iter::{
+                IndexedParallelIterator, IntoParallelRefIterator,
+                ParallelIterator,
+            };
             let results: Result<Vec<_>, ComputeMerkleRootError> = txs
                 .par_iter()
                 .enumerate()
                 .map(|(idx, tx)| {
+                    let tx = tx.borrow();
                     let fees = tx.get_fee().map_err(|err| {
                         ComputeMerkleRootError::FeeComputation {
                             txid: tx.transaction.txid(),

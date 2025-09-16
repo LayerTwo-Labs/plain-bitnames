@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::{borrow::Borrow, io::Cursor};
 
 use bitcoin::amount::CheckedSum;
 use borsh::{self, BorshDeserialize, BorshSerialize};
@@ -882,6 +882,12 @@ pub struct Authorized<T> {
 }
 
 pub type AuthorizedTransaction = Authorized<Transaction>;
+
+impl<T> Borrow<T> for Authorized<T> {
+    fn borrow(&self) -> &T {
+        &self.transaction
+    }
+}
 
 impl From<Authorized<FilledTransaction>> for AuthorizedTransaction {
     fn from(tx: Authorized<FilledTransaction>) -> Self {
