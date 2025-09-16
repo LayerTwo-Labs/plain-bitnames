@@ -1,7 +1,8 @@
-#![feature(let_chains)]
 #![feature(try_find)]
 
-use std::path::Path;
+use mimalloc::MiMalloc;
+
+use std::{env, path::Path};
 
 use clap::Parser as _;
 use tokio::{signal::ctrl_c, sync::oneshot};
@@ -18,6 +19,26 @@ mod util;
 
 use line_buffer::{LineBuffer, LineBufferWriter};
 use util::saturating_pred_level;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
+fn configure_mimalloc() {
+    // Tune mimalloc via environment variables
+    unsafe {
+        env::set_var("MIMALLOC_ABANDONED_PAGE_LIMIT", "4");
+        env::set_var("MIMALLOC_ABANDONED_PAGE_RESET", "1");
+        env::set_var("MIMALLOC_ARENA_LIMIT", "4");
+        env::set_var("MIMALLOC_USE_NUMA_NODES", "all");
+        env::set_var("MIMALLOC_EAGER_COMMIT", "1");
+        env::set_var("MIMALLOC_EAGER_REGION_COMMIT", "1");
+        env::set_var("MIMALLOC_SEGMENT_CACHE", "32");
+        env::set_var("MIMALLOC_LARGE_OS_PAGES", "1");
+        env::set_var("MIMALLOC_RESERVE_HUGE_OS_PAGES", "4");
+        env::set_var("MIMALLOC_PAGE_RESET", "0");
+        env::set_var("MIMALLOC_SEGMENT_RESET", "0");
+    }
+}
 
 /// The empty string target `""` can be used to set a default level.
 fn targets_directive_str<'a, Targets>(targets: Targets) -> String
@@ -159,6 +180,7 @@ fn run_egui_app(
 }
 
 fn main() -> anyhow::Result<()> {
+    configure_mimalloc();
     let cli = cli::Cli::parse();
     let config = cli.get_config()?;
     let (line_buffer, _rolling_log_guard) = set_tracing_subscriber(

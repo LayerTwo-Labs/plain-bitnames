@@ -11,6 +11,7 @@ use crate::types::{
 
 /// Errors related to BitNames
 #[derive(Debug, Error, Transitive)]
+#[allow(clippy::duplicated_attributes)]
 #[transitive(from(db::Delete, db::Error))]
 #[transitive(from(db::Last, db::Error))]
 #[transitive(from(db::Put, db::Error))]
@@ -54,6 +55,7 @@ pub enum InvalidHeader {
 }
 
 #[derive(Debug, Error, Transitive)]
+#[allow(clippy::duplicated_attributes)]
 #[transitive(from(db::Clear, db::Error))]
 #[transitive(from(db::Delete, db::Error))]
 #[transitive(from(db::Error, sneed::Error))]
@@ -84,6 +86,8 @@ pub enum Error {
     BundleTooHeavy { weight: u64, max_weight: u64 },
     #[error(transparent)]
     BorshSerialize(borsh::io::Error),
+    #[error(transparent)]
+    ComputeMerkleRoot(#[from] crate::types::ComputeMerkleRootError),
     #[error(transparent)]
     Db(#[from] sneed::Error),
     #[error("failed to fill tx output contents: invalid transaction")]

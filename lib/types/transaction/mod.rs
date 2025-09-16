@@ -1,5 +1,6 @@
 use bitcoin::amount::CheckedSum;
 use borsh::BorshSerialize;
+use heed::{BoxedError, BytesDecode, BytesEncode};
 use serde::{Deserialize, Serialize};
 use utoipa::{PartialSchema, ToSchema};
 
@@ -76,6 +77,153 @@ impl std::fmt::Display for OutPoint {
                 write!(f, "deposit {txid} {vout}")
             }
         }
+    }
+}
+
+/// Fixed-width lexicographically sortable key for OutPoint
+/// Layout: [tag: u8][id: 32][vout: u32 BE]
+/// - tag: 0 = Regular, 1 = Coinbase, 2 = Deposit
+/// - id: txid/merkle_root/bitcoin::txid
+/// - vout: big-endian for numeric order = lexicographic order
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct OutPointKey([u8; 37]);
+
+impl OutPointKey {
+    /// Encode an OutPoint into a fixed-width lexicographically sortable key
+    #[inline]
+    pub fn from_outpoint(op: &OutPoint) -> Self {
+        let mut k = [0u8; 37];
+        match *op {
+            OutPoint::Regular {
+                txid: Txid(id),
+                vout,
+            } => {
+                k[0] = 0;
+                k[1..33].copy_from_slice(&id);
+                k[33..37].copy_from_slice(&vout.to_be_bytes());
+            }
+            OutPoint::Coinbase { merkle_root, vout } => {
+                k[0] = 1;
+                let id: Hash = merkle_root.into();
+                k[1..33].copy_from_slice(&id);
+                k[33..37].copy_from_slice(&vout.to_be_bytes());
+            }
+            OutPoint::Deposit(ref bop) => {
+                k[0] = 2;
+                k[1..33].copy_from_slice(bop.txid.as_ref());
+                k[33..37].copy_from_slice(&bop.vout.to_be_bytes());
+            }
+        }
+        Self(k)
+    }
+
+    /// Get the raw key bytes
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8; 37] {
+        &self.0
+    }
+
+    /// Decode OutPointKey back to OutPoint
+    #[inline]
+    pub fn to_outpoint(&self) -> OutPoint {
+        let tag = self.0[0];
+        let mut id = [0u8; 32];
+        id.copy_from_slice(&self.0[1..33]);
+        let vout = u32::from_be_bytes([
+            self.0[33], self.0[34], self.0[35], self.0[36],
+        ]);
+
+        match tag {
+            0 => OutPoint::Regular {
+                txid: Txid(id),
+                vout,
+            },
+            1 => OutPoint::Coinbase {
+                merkle_root: MerkleRoot::from(Hash::from(id)),
+                vout,
+            },
+            2 => {
+                use bitcoin::hashes::Hash as BitcoinHash;
+                let txid = bitcoin::Txid::from_byte_array(id);
+                OutPoint::Deposit(bitcoin::OutPoint { txid, vout })
+            }
+            _ => unreachable!("Invalid OutPointKey tag"),
+        }
+    }
+}
+
+impl From<OutPoint> for OutPointKey {
+    #[inline]
+    fn from(op: OutPoint) -> Self {
+        Self::from_outpoint(&op)
+    }
+}
+
+impl From<&OutPoint> for OutPointKey {
+    #[inline]
+    fn from(op: &OutPoint) -> Self {
+        Self::from_outpoint(op)
+    }
+}
+
+impl From<OutPointKey> for OutPoint {
+    #[inline]
+    fn from(key: OutPointKey) -> Self {
+        key.to_outpoint()
+    }
+}
+
+impl From<&OutPointKey> for OutPoint {
+    #[inline]
+    fn from(key: &OutPointKey) -> Self {
+        key.to_outpoint()
+    }
+}
+
+impl Ord for OutPointKey {
+    #[inline]
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+impl PartialOrd for OutPointKey {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl AsRef<[u8]> for OutPointKey {
+    #[inline]
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+// Database key encoding traits for direct LMDB usage
+impl<'a> BytesEncode<'a> for OutPointKey {
+    type EItem = OutPointKey;
+
+    #[inline]
+    fn bytes_encode(
+        item: &'a Self::EItem,
+    ) -> Result<std::borrow::Cow<'a, [u8]>, BoxedError> {
+        Ok(std::borrow::Cow::Borrowed(item.as_ref()))
+    }
+}
+
+impl<'a> BytesDecode<'a> for OutPointKey {
+    type DItem = OutPointKey;
+
+    #[inline]
+    fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
+        if bytes.len() != 37 {
+            return Err("OutPointKey must be exactly 37 bytes".into());
+        }
+        let mut key = [0u8; 37];
+        key.copy_from_slice(bytes);
+        Ok(OutPointKey(key))
     }
 }
 
@@ -438,6 +586,29 @@ impl FilledTransaction {
     /// accessor for tx data
     pub fn data(&self) -> &Option<TxData> {
         &self.transaction.data
+    }
+
+    /// Calculate the fee for this transaction
+    pub fn get_fee(&self) -> Result<bitcoin::Amount, super::GetFeeError> {
+        let input_value = self.spent_utxos.iter().try_fold(
+            bitcoin::Amount::ZERO,
+            |acc, output| {
+                acc.checked_add(output.content.get_value())
+                    .ok_or(super::GetFeeError::AmountOverflow)
+            },
+        )?;
+
+        let output_value = self.transaction.outputs.iter().try_fold(
+            bitcoin::Amount::ZERO,
+            |acc, output| {
+                acc.checked_add(output.content.get_value())
+                    .ok_or(super::GetFeeError::AmountOverflow)
+            },
+        )?;
+
+        input_value
+            .checked_sub(output_value)
+            .ok_or(super::GetFeeError::AmountUnderflow)
     }
 
     /// If the tx is a bitname registration, returns the implied reservation

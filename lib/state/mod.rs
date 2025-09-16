@@ -12,7 +12,7 @@ use crate::{
         Address, AmountOverflowError, Authorized, AuthorizedTransaction,
         BlockHash, Body, FilledOutput, FilledTransaction, GetAddress as _,
         GetValue as _, Header, InPoint, M6id, MerkleRoot, OutPoint,
-        SpentOutput, Transaction, VERSION, Verify as _, Version,
+        OutPointKey, SpentOutput, Transaction, VERSION, Verify as _, Version,
         WithdrawalBundle, WithdrawalBundleStatus, constants, hashes,
         proto::mainchain::TwoWayPegData,
     },
@@ -29,6 +29,16 @@ pub use error::Error;
 use rollback::{HeightStamped, RollBack};
 
 pub const WITHDRAWAL_BUNDLE_FAILURE_GAP: u32 = 4;
+
+/// Prevalidated block data containing computed values from validation
+/// to avoid redundant computation during connection
+pub struct PrevalidatedBlock {
+    pub filled_transactions: Vec<FilledTransaction>,
+    pub computed_merkle_root: MerkleRoot,
+    pub total_fees: bitcoin::Amount,
+    pub coinbase_value: bitcoin::Amount,
+    pub next_height: u32, // Precomputed next height to avoid DB read in write txn
+}
 
 /// Information we have regarding a withdrawal bundle
 #[derive(Debug, Deserialize, Serialize)]
@@ -68,8 +78,8 @@ pub struct State {
     /// Current height
     height: DatabaseUnique<UnitKey, SerdeBincode<u32>>,
     bitnames: bitnames::Dbs,
-    utxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
-    stxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
+    pub utxos: DatabaseUnique<OutPointKey, SerdeBincode<FilledOutput>>,
+    pub stxos: DatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>>,
     /// Pending withdrawal bundle and block height
     pending_withdrawal_bundle:
         DatabaseUnique<UnitKey, SerdeBincode<(WithdrawalBundle, u32)>>,
@@ -157,8 +167,7 @@ impl State {
 
     pub fn stxos(
         &self,
-    ) -> &RoDatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>
-    {
+    ) -> &RoDatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>> {
         &self.stxos
     }
 
@@ -188,7 +197,13 @@ impl State {
         &self,
         rotxn: &RoTxn,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let utxos = self.utxos.iter(rotxn)?.collect()?;
+        let utxos: HashMap<OutPoint, FilledOutput> = self
+            .utxos
+            .iter(rotxn)?
+            .map(|(outpoint_key, output)| {
+                Ok((OutPoint::from(outpoint_key), output))
+            })
+            .collect()?;
         Ok(utxos)
     }
 
@@ -197,10 +212,13 @@ impl State {
         rotxn: &RoTxn,
         addresses: &HashSet<Address>,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let utxos = self
+        let utxos: HashMap<OutPoint, FilledOutput> = self
             .utxos
             .iter(rotxn)?
             .filter(|(_, output)| Ok(addresses.contains(&output.address)))
+            .map(|(outpoint_key, output)| {
+                Ok((OutPoint::from(outpoint_key), output))
+            })
             .collect()?;
         Ok(utxos)
     }
@@ -232,7 +250,7 @@ impl State {
         for input in &transaction.inputs {
             let utxo = self
                 .utxos
-                .try_get(rotxn, input)?
+                .try_get(rotxn, &OutPointKey::from(input))?
                 .ok_or(Error::NoUtxo { outpoint: *input })?;
             spent_utxos.push(utxo);
         }
@@ -254,7 +272,7 @@ impl State {
         for (vin, input) in tx.inputs.iter().enumerate().rev() {
             let stxo = self
                 .stxos
-                .try_get(rotxn, input)?
+                .try_get(rotxn, &OutPointKey::from(input))?
                 .ok_or(Error::NoStxo { outpoint: *input })?;
             assert_eq!(
                 stxo.inpoint,
@@ -480,7 +498,8 @@ impl State {
     ) -> Result<bitcoin::Amount, Error> {
         let mut total_deposit_utxo_value = bitcoin::Amount::ZERO;
         self.utxos.iter(rotxn)?.map_err(Error::from).for_each(
-            |(outpoint, output)| {
+            |(outpoint_key, output)| {
+                let outpoint = OutPoint::from(outpoint_key);
                 if let OutPoint::Deposit(_) = outpoint {
                     total_deposit_utxo_value = total_deposit_utxo_value
                         .checked_add(output.get_value())
@@ -492,7 +511,8 @@ impl State {
         let mut total_deposit_stxo_value = bitcoin::Amount::ZERO;
         let mut total_withdrawal_stxo_value = bitcoin::Amount::ZERO;
         self.stxos.iter(rotxn)?.map_err(Error::from).for_each(
-            |(outpoint, spent_output)| {
+            |(outpoint_key, spent_output)| {
+                let outpoint = OutPoint::from(outpoint_key);
                 if let OutPoint::Deposit(_) = outpoint {
                     total_deposit_stxo_value = total_deposit_stxo_value
                         .checked_add(spent_output.output.get_value())
@@ -530,6 +550,38 @@ impl State {
         body: &Body,
     ) -> Result<MerkleRoot, Error> {
         block::connect(self, rwtxn, header, body)
+    }
+
+    /// Prevalidate a block and return computed values for efficient connection
+    pub fn prevalidate_block(
+        &self,
+        rotxn: &RoTxn,
+        header: &Header,
+        body: &Body,
+    ) -> Result<PrevalidatedBlock, Error> {
+        block::prevalidate(self, rotxn, header, body)
+    }
+
+    /// Connect a prevalidated block using precomputed values
+    pub fn connect_prevalidated_block(
+        &self,
+        rwtxn: &mut RwTxn,
+        header: &Header,
+        body: &Body,
+        prevalidated: PrevalidatedBlock,
+    ) -> Result<MerkleRoot, Error> {
+        block::connect_prevalidated(self, rwtxn, header, body, prevalidated)
+    }
+
+    /// Apply a block by combining validation and connection in a single operation
+    /// This is the optimized path that reduces B-tree traversals and commit overhead
+    pub fn apply_block(
+        &self,
+        rwtxn: &mut RwTxn,
+        header: &Header,
+        body: &Body,
+    ) -> Result<(), Error> {
+        block::apply_block(self, rwtxn, header, body)
     }
 
     pub fn disconnect_tip(
