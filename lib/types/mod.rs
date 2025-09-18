@@ -510,9 +510,10 @@ impl Body {
             }
         };
         // FIXME: Compute actual merkle root instead of just a hash.
-        let coinbase_root = hashes::hash(&coinbase);
+        let coinbase_root = hashes::hash_with_scratch_buffer(&coinbase);
         // TODO: Should this include `total_fees`?
-        let root = hashes::hash(&(coinbase_root, txs_root)).into();
+        let root =
+            hashes::hash_with_scratch_buffer(&(coinbase_root, txs_root)).into();
         Ok(root)
     }
 

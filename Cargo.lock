@@ -5152,7 +5152,6 @@ dependencies = [
  "hex 0.4.3",
  "http 1.3.1",
  "jsonrpsee",
- "mimalloc",
  "plain_bitnames",
  "plain_bitnames_app_rpc_api",
  "serde_json",
