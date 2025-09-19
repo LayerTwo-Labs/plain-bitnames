@@ -103,6 +103,17 @@ pub trait Rpc {
         msg: String,
     ) -> RpcResult<String>;
 
+    /// Delete peer from known_peers DB.
+    /// Connections to the peer are not terminated.
+    #[method(name = "forget_peer")]
+    async fn forget_peer(
+        &self,
+        #[open_api_method_arg(schema(
+            PartialSchema = "bitnames_schema::SocketAddr"
+        ))]
+        addr: SocketAddr,
+    ) -> RpcResult<()>;
+
     /// Format a deposit address
     #[method(name = "format_deposit_address")]
     async fn format_deposit_address(
