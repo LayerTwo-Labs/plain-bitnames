@@ -1,4 +1,5 @@
 use std::{
+    borrow::Borrow,
     cmp::Ordering,
     collections::{BTreeMap, HashMap},
     sync::LazyLock,
@@ -393,10 +394,13 @@ impl Body {
             .collect()
     }
 
-    pub fn compute_merkle_root(
+    pub fn compute_merkle_root<FilledTx>(
         coinbase: &[Output],
-        txs: &[FilledTransaction],
-    ) -> Result<Option<MerkleRoot>, AmountOverflowError> {
+        txs: &[FilledTx],
+    ) -> Result<Option<MerkleRoot>, AmountOverflowError>
+    where
+        FilledTx: Borrow<FilledTransaction>,
+    {
         let CbmtNode {
             commitment: txs_root,
             ..
@@ -406,6 +410,7 @@ impl Body {
                 .iter()
                 .enumerate()
                 .map(|(idx, tx)| {
+                    let tx = tx.borrow();
                     let Some(fees) = tx.fee()? else {
                         return Ok(None);
                     };
