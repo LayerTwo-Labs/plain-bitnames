@@ -144,7 +144,7 @@ impl From<OutPoint> for OutPointKey {
 impl From<&OutPoint> for OutPointKey {
     #[inline]
     fn from(op: &OutPoint) -> Self {
-        Self::from_outpoint(op)
+        <Self as From<OutPoint>>::from(*op)
     }
 }
 
@@ -158,7 +158,7 @@ impl From<OutPointKey> for OutPoint {
 impl From<&OutPointKey> for OutPoint {
     #[inline]
     fn from(key: &OutPointKey) -> Self {
-        key.to_outpoint()
+        <Self as From<OutPointKey>>::from(*key)
     }
 }
 
