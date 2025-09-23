@@ -1,5 +1,5 @@
 #![feature(try_find)]
-use std::{env, path::Path};
+use std::path::Path;
 
 use clap::Parser as _;
 use mimalloc::MiMalloc;
