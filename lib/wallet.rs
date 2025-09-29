@@ -15,7 +15,7 @@ use heed::{
     types::{Bytes, SerdeBincode, Str, U8, U32},
 };
 use libes::EciesError;
-use rayon::prelude::*;
+use rayon::prelude::ParallelSliceMut;
 use serde::{Deserialize, Serialize};
 use sneed::{DbError, Env, EnvError, RwTxnError, UnitKey, db, env, rwtxn};
 use thiserror::Error;
