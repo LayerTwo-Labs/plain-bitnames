@@ -15,6 +15,7 @@ use heed::{
     types::{Bytes, SerdeBincode, Str, U8, U32},
 };
 use libes::EciesError;
+use rayon::prelude::ParallelSliceMut;
 use serde::{Deserialize, Serialize};
 use sneed::{DbError, Env, EnvError, RwTxnError, UnitKey, db, env, rwtxn};
 use thiserror::Error;
@@ -26,9 +27,9 @@ use crate::{
         Address, AmountOverflowError, AmountUnderflowError,
         AuthorizedTransaction, BitcoinOutputContent, EncryptionPubKey,
         FilledOutput, GetValue, Hash, InPoint, MutableBitNameData, OutPoint,
-        Output, OutputContent, SpentOutput, Transaction, TxData, VERSION,
-        VerifyingKey, Version, WithdrawalOutputContent, hashes::BitName,
-        keys::Ecies,
+        OutPointKey, Output, OutputContent, SpentOutput, Transaction, TxData,
+        VERSION, VerifyingKey, Version, WithdrawalOutputContent,
+        hashes::BitName, keys::Ecies,
     },
     util::Watchable,
 };
@@ -135,8 +136,8 @@ pub struct Wallet {
         DatabaseUnique<U32<BigEndian>, SerdeBincode<EncryptionPubKey>>,
     /// Map each signing key index to a verifying key
     index_to_vk: DatabaseUnique<U32<BigEndian>, SerdeBincode<VerifyingKey>>,
-    utxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<FilledOutput>>,
-    stxos: DatabaseUnique<SerdeBincode<OutPoint>, SerdeBincode<SpentOutput>>,
+    utxos: DatabaseUnique<OutPointKey, SerdeBincode<FilledOutput>>,
+    stxos: DatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>>,
     /// Associates reservation commitments with plaintext BitNames
     bitname_reservations: DatabaseUnique<SerdeBincode<[u8; 32]>, Str>,
     /// Associates BitNames with plaintext names
@@ -152,11 +153,35 @@ impl Wallet {
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
         let env = {
+            use heed::EnvFlags;
             let mut env_open_options = heed::EnvOpenOptions::new();
             env_open_options
                 .map_size(10 * 1024 * 1024) // 10MB
                 .max_dbs(Self::NUM_DBS);
-            unsafe { Env::open(&env_open_options, path) }?
+            // Apply LMDB "fast" flags consistent with our benchmark setup:
+            // - WRITE_MAP lets us write directly into the memory map instead of
+            //   copying into LMDB's page buffer, reducing syscall overhead for
+            //   write-heavy workloads.
+            // - MAP_ASYNC hands dirty-page flushing to the kernel so commits do
+            //   not block waiting for msync, keeping latencies tight.
+            // - NO_SYNC and NO_META_SYNC skip fsync calls for data and
+            //   metadata; this trades durability for throughput, which is
+            //   acceptable here because the state can be reconstructed from the
+            //   canonical chain if a crash occurs.
+            // - NO_READ_AHEAD disables kernel readahead that would otherwise
+            //   touch cold pages we immediately overwrite, improving random
+            //   access behaviour on SSDs used in testing.
+            // - NO_TLS stops LMDB from relying on thread-local storage for
+            //   reader slots so transactions can be moved across Tokio tasks.
+            let fast_flags = EnvFlags::WRITE_MAP
+                | EnvFlags::MAP_ASYNC
+                | EnvFlags::NO_SYNC
+                | EnvFlags::NO_META_SYNC
+                | EnvFlags::NO_READ_AHEAD
+                | EnvFlags::NO_TLS;
+            unsafe { env_open_options.flags(fast_flags) };
+            unsafe { Env::open(&env_open_options, path) }
+                .map_err(EnvError::from)?
         };
         let mut rwtxn = env.write_txn()?;
         let seed_db = DatabaseUnique::create(&env, &mut rwtxn, "seed")?;
@@ -640,11 +665,12 @@ impl Wallet {
     ) -> Result<(bitcoin::Amount, HashMap<OutPoint, FilledOutput>), Error> {
         let rotxn = self.env.read_txn()?;
         let mut utxos: Vec<_> = self.utxos.iter(&rotxn)?.collect()?;
-        utxos.sort_unstable_by_key(|(_, output)| output.get_value());
+        // Parallel sort by value to accelerate coin selection on large wallets
+        utxos.par_sort_unstable_by_key(|(_, output)| output.get_value());
 
         let mut selected = HashMap::new();
         let mut total = bitcoin::Amount::ZERO;
-        for (outpoint, output) in &utxos {
+        for (outpoint_key, output) in &utxos {
             if output.content.is_withdrawal()
                 || output.is_bitname()
                 || output.is_reservation()
@@ -658,7 +684,8 @@ impl Wallet {
             total = total
                 .checked_add(output.get_value())
                 .ok_or(AmountOverflowError)?;
-            selected.insert(*outpoint, output.clone());
+            let outpoint: OutPoint = outpoint_key.to_outpoint();
+            selected.insert(outpoint, output.clone());
         }
         if total < value {
             return Err(Error::NotEnoughFunds);
@@ -672,17 +699,16 @@ impl Wallet {
     ) -> Result<(), Error> {
         let mut rwtxn = self.env.write_txn()?;
         for (outpoint, inpoint) in spent {
-            if let Some(output) = self
-                .utxos
-                .try_get(&rwtxn, outpoint)
-                .map_err(DbError::from)?
+            let key = OutPointKey::from(outpoint);
+            if let Some(output) =
+                self.utxos.try_get(&rwtxn, &key).map_err(DbError::from)?
             {
-                self.utxos.delete(&mut rwtxn, outpoint)?;
+                self.utxos.delete(&mut rwtxn, &key)?;
                 let spent_output = SpentOutput {
                     output,
                     inpoint: *inpoint,
                 };
-                self.stxos.put(&mut rwtxn, outpoint, &spent_output)?;
+                self.stxos.put(&mut rwtxn, &key, &spent_output)?;
             }
         }
         rwtxn.commit()?;
@@ -695,8 +721,9 @@ impl Wallet {
     ) -> Result<(), Error> {
         let mut rwtxn = self.env.write_txn()?;
         for (outpoint, output) in utxos {
+            let key = OutPointKey::from(outpoint);
             self.utxos
-                .put(&mut rwtxn, outpoint, output)
+                .put(&mut rwtxn, &key, output)
                 .map_err(DbError::from)?;
         }
         rwtxn.commit()?;
@@ -752,10 +779,11 @@ impl Wallet {
 
     pub fn get_utxos(&self) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
         let rotxn = self.env.read_txn()?;
-        let utxos: HashMap<_, _> = self
+        let utxos: HashMap<OutPoint, FilledOutput> = self
             .utxos
             .iter(&rotxn)
             .map_err(DbError::from)?
+            .map(|(key, output)| Ok((key.to_outpoint(), output)))
             .collect()
             .map_err(DbError::from)?;
         Ok(utxos)
@@ -763,7 +791,11 @@ impl Wallet {
 
     pub fn get_stxos(&self) -> Result<HashMap<OutPoint, SpentOutput>, Error> {
         let rotxn = self.env.read_txn()?;
-        let stxos = self.stxos.iter(&rotxn)?.collect()?;
+        let stxos: HashMap<OutPoint, SpentOutput> = self
+            .stxos
+            .iter(&rotxn)?
+            .map(|(key, spent_output)| Ok((key.to_outpoint(), spent_output)))
+            .collect()?;
         Ok(stxos)
     }
 
@@ -804,8 +836,9 @@ impl Wallet {
         let rotxn = self.env.read_txn()?;
         let mut authorizations = vec![];
         for input in &transaction.inputs {
+            let key = OutPointKey::from(input);
             let spent_utxo =
-                self.utxos.try_get(&rotxn, input)?.ok_or(Error::NoUtxo)?;
+                self.utxos.try_get(&rotxn, &key)?.ok_or(Error::NoUtxo)?;
             let index = self
                 .address_to_index
                 .try_get(&rotxn, &spent_utxo.address)

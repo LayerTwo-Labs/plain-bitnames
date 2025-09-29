@@ -33,12 +33,12 @@ use crate::cli::Config;
 pub enum Error {
     #[error(transparent)]
     AmountOverflow(#[from] AmountOverflowError),
+    #[error(transparent)]
+    ComputeMerkleRoot(#[from] plain_bitnames::types::ComputeMerkleRootError),
     #[error("CUSF mainchain proto error")]
     CusfMainchain(#[from] plain_bitnames::types::proto::Error),
     #[error("io error")]
     Io(#[from] std::io::Error),
-    #[error("Failed to compute merkle root")]
-    MerkleRoot,
     #[error("miner error: {0}")]
     Miner(#[from] miner::Error),
     #[error("node error")]
@@ -468,8 +468,8 @@ impl App {
                 .iter()
                 .map(|authorized_tx| authorized_tx.transaction.clone())
                 .collect::<Vec<_>>();
-            Body::compute_merkle_root(&coinbase, &txs)?.ok_or(Error::MerkleRoot)
-        }?;
+            Body::compute_merkle_root(&coinbase, &txs)?
+        };
         let body = {
             let txs = txs.into_iter().map(|tx| tx.into()).collect();
             Body::new(txs, coinbase)

@@ -9,6 +9,7 @@ use std::{
 use bitcoin::amount::CheckedSum;
 use fallible_iterator::FallibleIterator;
 use futures::{Stream, future::BoxFuture};
+use heed::EnvFlags;
 use sneed::{DbError, Env, EnvError, RwTxnError, env};
 use tokio::sync::Mutex;
 use tonic::transport::Channel;
@@ -22,8 +23,8 @@ use crate::{
         Address, AmountOverflowError, AmountUnderflowError, Authorized,
         AuthorizedTransaction, BitName, BitNameData, Block, BlockHash,
         BmmResult, Body, FilledOutput, FilledTransaction, GetValue, Header,
-        Network, OutPoint, SpentOutput, Tip, Transaction, TxIn, Txid,
-        WithdrawalBundle,
+        Network, OutPoint, OutPointKey, SpentOutput, Tip, Transaction, TxIn,
+        Txid, WithdrawalBundle,
         proto::{self, mainchain},
     },
     util::Watchable,
@@ -161,6 +162,28 @@ where
                         + MemPool::NUM_DBS
                         + Net::NUM_DBS,
                 );
+            // Apply LMDB "fast" flags consistent with our benchmark setup:
+            // - WRITE_MAP lets us write directly into the memory map instead of
+            //   copying into LMDB's page buffer, reducing syscall overhead for
+            //   write-heavy workloads.
+            // - MAP_ASYNC hands dirty-page flushing to the kernel so commits do
+            //   not block waiting for msync, keeping latencies tight.
+            // - NO_SYNC and NO_META_SYNC skip fsync calls for data and
+            //   metadata; this trades durability for throughput, which is
+            //   acceptable here because the state can be reconstructed from the
+            //   canonical chain if a crash occurs.
+            // - NO_READ_AHEAD disables kernel readahead that would otherwise
+            //   touch cold pages we immediately overwrite, improving random
+            //   access behaviour on SSDs used in testing.
+            // - NO_TLS stops LMDB from relying on thread-local storage for
+            //   reader slots so transactions can be moved across Tokio tasks.
+            let fast_flags = EnvFlags::WRITE_MAP
+                | EnvFlags::MAP_ASYNC
+                | EnvFlags::NO_SYNC
+                | EnvFlags::NO_META_SYNC
+                | EnvFlags::NO_READ_AHEAD
+                | EnvFlags::NO_TLS;
+            unsafe { env_open_opts.flags(fast_flags) };
             unsafe { Env::open(&env_open_opts, &env_path) }?
         };
         let state = State::new(&env)?;
@@ -366,7 +389,7 @@ where
             if let Some(output) = self
                 .state
                 .stxos()
-                .try_get(&rotxn, outpoint)
+                .try_get(&rotxn, &OutPointKey::from(outpoint))
                 .map_err(state::Error::from)?
             {
                 spent.push((*outpoint, output));
