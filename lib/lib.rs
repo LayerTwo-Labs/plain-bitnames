@@ -2,8 +2,9 @@
 #![feature(trait_alias)]
 #![feature(try_find)]
 
+pub use plain_bitnames_types::authorization;
+
 pub mod archive;
-pub mod authorization;
 pub mod mempool;
 pub mod miner;
 pub mod net;

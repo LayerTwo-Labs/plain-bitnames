@@ -3,7 +3,7 @@ use std::sync::LazyLock;
 use ed25519_dalek::PUBLIC_KEY_LENGTH;
 use hex_literal::hex;
 
-use crate::types::VerifyingKey;
+use crate::VerifyingKey;
 
 /// authorized pubkey that can make batch icann registration txs
 const BATCH_ICANN_VERIFYING_KEY_BYTES: [u8; PUBLIC_KEY_LENGTH] =

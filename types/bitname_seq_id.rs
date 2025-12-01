@@ -198,6 +198,7 @@ impl Serialize for BitNameSeqId {
 }
 
 /// Decode from big-endian
+#[cfg(feature = "heed")]
 impl<'a> heed::BytesDecode<'a> for BitNameSeqId {
     type DItem = Self;
 
@@ -208,6 +209,7 @@ impl<'a> heed::BytesDecode<'a> for BitNameSeqId {
 }
 
 /// Encode as big-endian
+#[cfg(feature = "heed")]
 impl<'a> heed::BytesEncode<'a> for BitNameSeqId {
     type EItem = Self;
 

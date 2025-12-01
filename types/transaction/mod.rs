@@ -2,7 +2,6 @@ use std::io::Cursor;
 
 use bitcoin::amount::CheckedSum;
 use borsh::{self, BorshDeserialize, BorshSerialize};
-use heed::{BoxedError, BytesDecode, BytesEncode};
 use serde::{Deserialize, Serialize};
 use utoipa::{PartialSchema, ToSchema};
 
@@ -13,8 +12,8 @@ use super::{
     serde_display_fromstr_human_readable, serde_hexstr_human_readable,
 };
 use crate::{
+    BitNameDataUpdates, MutableBitNameData,
     authorization::{Authorization, Signature},
-    types::{BitNameDataUpdates, MutableBitNameData},
 };
 
 mod output_content;
@@ -77,7 +76,7 @@ pub enum OutPoint {
         vout: u32,
     },
     // Created by mainchain deposits.
-    #[schema(value_type = crate::types::schema::BitcoinOutPoint)]
+    #[schema(value_type = crate::schema::BitcoinOutPoint)]
     Deposit(
         #[borsh(
             serialize_with = "borsh_serialize_bitcoin_outpoint",
@@ -184,22 +183,24 @@ impl AsRef<[u8]> for OutPointKey {
 }
 
 // Database key encoding traits for direct LMDB usage
-impl<'a> BytesEncode<'a> for OutPointKey {
+#[cfg(feature = "heed")]
+impl<'a> heed::BytesEncode<'a> for OutPointKey {
     type EItem = OutPointKey;
 
     #[inline]
     fn bytes_encode(
         item: &'a Self::EItem,
-    ) -> Result<std::borrow::Cow<'a, [u8]>, BoxedError> {
+    ) -> Result<std::borrow::Cow<'a, [u8]>, heed::BoxedError> {
         Ok(std::borrow::Cow::Borrowed(item.as_ref()))
     }
 }
 
-impl<'a> BytesDecode<'a> for OutPointKey {
+#[cfg(feature = "heed")]
+impl<'a> heed::BytesDecode<'a> for OutPointKey {
     type DItem = OutPointKey;
 
     #[inline]
-    fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
+    fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, heed::BoxedError> {
         if bytes.len() != OUTPOINT_KEY_SIZE {
             return Err("OutPointKey must be exactly 37 bytes".into());
         }
@@ -207,7 +208,7 @@ impl<'a> BytesDecode<'a> for OutPointKey {
         key.copy_from_slice(bytes);
         let mut cursor = Cursor::new(&key[..]);
         OutPoint::deserialize_reader(&mut cursor)
-            .map_err(|err| -> BoxedError { Box::new(err) })?;
+            .map_err(|err| -> heed::BoxedError { Box::new(err) })?;
         Ok(OutPointKey(key))
     }
 }

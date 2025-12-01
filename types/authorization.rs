@@ -6,7 +6,7 @@ use rayon::iter::{IntoParallelRefIterator as _, ParallelIterator as _};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use crate::types::{
+use crate::{
     Address, AuthorizedTransaction, Body, GetAddress, Transaction, Verify,
     VerifyingKey,
 };
