@@ -7,7 +7,7 @@ use utoipa::{
     openapi::{RefOr, Schema},
 };
 
-use crate::types::{BitNameSeqId, EncryptionPubKey, Hash, VerifyingKey};
+use crate::{BitNameSeqId, EncryptionPubKey, Hash, VerifyingKey};
 
 /// Bitname data that can be updated later
 #[derive(

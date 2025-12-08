@@ -128,7 +128,7 @@ mod withdrawal_content {
             serde(with = "bitcoin::amount::serde::as_sat")
         ],
         main_address_attrs: [
-            schema(value_type = crate::types::schema::BitcoinAddr),
+            schema(value_type = crate::schema::BitcoinAddr),
         ],
     );
 
@@ -231,7 +231,7 @@ mod withdrawal_content {
         }
     }
 
-    impl crate::types::GetValue for WithdrawalContent {
+    impl crate::GetValue for WithdrawalContent {
         fn get_value(&self) -> bitcoin::Amount {
             self.value
         }
@@ -407,7 +407,7 @@ mod content {
         }
     }
 
-    impl crate::types::GetValue for Content {
+    impl crate::GetValue for Content {
         #[inline(always)]
         fn get_value(&self) -> bitcoin::Amount {
             match self {
@@ -427,7 +427,7 @@ mod filled {
     use utoipa::{PartialSchema, ToSchema};
 
     use super::Content;
-    use crate::types::{BitName, Hash, Txid};
+    use crate::{BitName, Hash, Txid};
 
     /// Defines a Filled enum with the specified visibility, name,
     /// derives, and attributes for each variant
@@ -456,11 +456,11 @@ mod filled {
                 BitName(BitName),
                 /// Reservation txid and commitment
                 BitNameReservation(
-                    crate::types::Txid,
+                    crate::Txid,
                     $(
                         $(#[$bitname_reservation_commitment_attr])*
                     )?
-                    crate::types::Hash
+                    crate::Hash
                 ),
             }
         }
@@ -649,7 +649,7 @@ mod filled {
         }
     }
 
-    impl crate::types::GetValue for Filled {
+    impl crate::GetValue for Filled {
         fn get_value(&self) -> bitcoin::Amount {
             Content::from(self.clone()).get_value()
         }
