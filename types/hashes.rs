@@ -4,6 +4,7 @@ use bitcoin::hashes::Hash as _;
 use borsh::{BorshDeserialize, BorshSerialize};
 use hex::FromHex;
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 
 pub type Hash = [u8; blake3::OUT_LEN];
 
@@ -276,8 +277,11 @@ impl utoipa::ToSchema for BitName {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, ToSchema,
+)]
 #[repr(transparent)]
+#[schema(value_type = crate::schema::BitcoinOutPoint)]
 #[serde(transparent)]
 pub struct M6id(pub bitcoin::Txid);
 

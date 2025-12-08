@@ -91,6 +91,8 @@ pub enum Command {
     LatestFailedWithdrawalBundleHeight,
     /// List peers
     ListPeers,
+    /// List all STXOs
+    ListStxos,
     /// List all UTXOs
     ListUtxos,
     /// Attempt to mine a sidechain block
@@ -359,6 +361,10 @@ where
         Command::ListPeers => {
             let peers = rpc_client.list_peers().await?;
             serde_json::to_string_pretty(&peers)?
+        }
+        Command::ListStxos => {
+            let stxos = rpc_client.list_stxos().await?;
+            serde_json::to_string_pretty(&stxos)?
         }
         Command::ListUtxos => {
             let utxos = rpc_client.list_utxos().await?;
