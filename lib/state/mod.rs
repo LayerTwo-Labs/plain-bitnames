@@ -193,6 +193,20 @@ impl State {
         Ok(height)
     }
 
+    pub fn get_stxos(
+        &self,
+        rotxn: &RoTxn,
+    ) -> Result<HashMap<OutPoint, SpentOutput>, Error> {
+        let stxos = self
+            .stxos
+            .iter(rotxn)?
+            .map(|(outpoint_key, spent_output)| {
+                Ok((outpoint_key.into(), spent_output))
+            })
+            .collect()?;
+        Ok(stxos)
+    }
+
     pub fn get_utxos(
         &self,
         rotxn: &RoTxn,

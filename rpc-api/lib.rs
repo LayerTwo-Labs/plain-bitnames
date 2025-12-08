@@ -11,10 +11,10 @@ use plain_bitnames::{
         Address, Authorization, BatchIcannRegistrationData, BitNameData,
         BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent, Block,
         BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
-        Header, MerkleRoot, MutableBitNameData, OutPoint, Output,
-        OutputContent, PointedOutput, Transaction, TransactionData, TxIn, Txid,
-        VerifyingKey, WithdrawalBundle, WithdrawalOutputContent,
-        hashes::BitName, schema as bitnames_schema,
+        Header, InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint,
+        Output, OutputContent, PointedOutput, SpentOutput, Transaction,
+        TransactionData, TxIn, Txid, VerifyingKey, WithdrawalBundle,
+        WithdrawalOutputContent, hashes::BitName, schema as bitnames_schema,
     },
     wallet::Balance,
 };
@@ -39,10 +39,10 @@ pub struct TxInfo {
     bitnames_schema::SocketAddr, Address, Authorization,
     BatchIcannRegistrationData, BitcoinOutputContent, BitName,
     BitNameDataUpdates, BitNameSeqId, BlockHash, Body, EncryptionPubKey,
-    FilledOutput, FilledOutputContent, Header, MerkleRoot, MutableBitNameData,
-    OutPoint, Output, OutputContent, PeerConnectionStatus, Signature,
-    Transaction, TransactionData, Txid, TxIn, VerifyingKey,
-    WithdrawalOutputContent,
+    FilledOutput, FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
+    MutableBitNameData, OutPoint, Output, OutputContent, PeerConnectionStatus,
+    Signature, SpentOutput, Transaction, TransactionData, Txid, TxIn,
+    VerifyingKey, WithdrawalOutputContent,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -211,6 +211,13 @@ pub trait Rpc {
     /// List peers
     #[method(name = "list_peers")]
     async fn list_peers(&self) -> RpcResult<Vec<Peer>>;
+
+    /// List all STXOs
+    #[open_api_method(output_schema(
+        ToSchema = "Vec<PointedOutput<SpentOutput>>"
+    ))]
+    #[method(name = "list_stxos")]
+    async fn list_stxos(&self) -> RpcResult<Vec<PointedOutput<SpentOutput>>>;
 
     /// List all UTXOs
     #[open_api_method(output_schema(

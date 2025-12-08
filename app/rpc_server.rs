@@ -13,8 +13,8 @@ use plain_bitnames::{
     types::{
         Address, Authorization, BitName, BitNameData, Block, BlockHash,
         EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
-        PointedOutput, Transaction, Txid, VerifyingKey, WithdrawalBundle,
-        keys::Ecies,
+        PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
+        WithdrawalBundle, keys::Ecies,
     },
     wallet::Balance,
 };
@@ -280,6 +280,15 @@ impl RpcServer for RpcServerImpl {
     async fn list_peers(&self) -> RpcResult<Vec<Peer>> {
         let peers = self.app.node.get_active_peers();
         Ok(peers)
+    }
+
+    async fn list_stxos(&self) -> RpcResult<Vec<PointedOutput<SpentOutput>>> {
+        let stxos = self.app.node.get_all_stxos().map_err(custom_err)?;
+        let res = stxos
+            .into_iter()
+            .map(|(outpoint, output)| PointedOutput { outpoint, output })
+            .collect();
+        Ok(res)
     }
 
     async fn list_utxos(&self) -> RpcResult<Vec<PointedOutput<FilledOutput>>> {

@@ -375,6 +375,13 @@ where
         Ok(())
     }
 
+    pub fn get_all_stxos(
+        &self,
+    ) -> Result<HashMap<OutPoint, SpentOutput>, Error> {
+        let rotxn = self.env.read_txn()?;
+        self.state.get_stxos(&rotxn).map_err(Error::from)
+    }
+
     pub fn get_all_utxos(
         &self,
     ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
