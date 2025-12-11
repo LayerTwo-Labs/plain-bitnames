@@ -14,7 +14,8 @@ use plain_bitnames::{
         Header, InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint,
         Output, OutputContent, PointedOutput, SpentOutput, Transaction,
         TransactionData, TxIn, Txid, VerifyingKey, WithdrawalBundle,
-        WithdrawalOutputContent, hashes::BitName, schema as bitnames_schema,
+        WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
+        hashes::BitName, schema as bitnames_schema,
     },
     wallet::Balance,
 };
@@ -197,6 +198,14 @@ pub trait Rpc {
     async fn get_wallet_utxos(
         &self,
     ) -> RpcResult<Vec<PointedOutput<FilledOutput>>>;
+
+    /// Get wallet master XVerifyingKey
+    #[method(name = "get_wallet_master_xvk")]
+    async fn get_wallet_master_xvk(&self) -> RpcResult<XVerifyingKey>;
+
+    /// Get wallet master XEncryptionSecretKey
+    #[method(name = "get_wallet_master_xesk")]
+    async fn get_wallet_master_xesk(&self) -> RpcResult<XEncryptionSecretKey>;
 
     /// Get the current block count
     #[method(name = "getblockcount")]
