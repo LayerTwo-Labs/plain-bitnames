@@ -5010,7 +5010,7 @@ checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "plain_bitnames"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "addr",
  "anyhow",
@@ -5068,7 +5068,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "anyhow",
  "bincode",
@@ -5114,7 +5114,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_cli"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -5137,7 +5137,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_rpc_api"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -5152,7 +5152,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_integration_tests"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "anyhow",
  "bip300301_enforcer_integration_tests",
@@ -5176,7 +5176,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_types"
-version = "0.11.5"
+version = "0.11.6"
 dependencies = [
  "anyhow",
  "bech32",
