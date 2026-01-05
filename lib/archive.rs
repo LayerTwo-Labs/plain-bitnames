@@ -27,7 +27,7 @@ use crate::types::{
 #[transitive(from(rwtxn::error::Commit, RwTxnError))]
 pub enum Error {
     #[error(transparent)]
-    Db(#[from] DbError),
+    Db(Box<DbError>),
     #[error("Database env error")]
     DbEnv(#[from] EnvError),
     #[error("Database write error")]
@@ -73,6 +73,12 @@ pub enum Error {
     NoMainHeight(bitcoin::BlockHash),
     #[error("no tx with txid {0}")]
     NoTx(Txid),
+}
+
+impl From<DbError> for Error {
+    fn from(err: DbError) -> Self {
+        Self::Db(Box::new(err))
+    }
 }
 
 #[derive(Clone)]

@@ -54,7 +54,7 @@ pub enum Error {
     #[error("CUSF mainchain proto error")]
     CusfMainchain(#[from] proto::Error),
     #[error(transparent)]
-    Db(#[from] DbError),
+    Db(Box<DbError>),
     #[error("Database env error")]
     DbEnv(#[from] EnvError),
     #[error("Database write error")]
@@ -66,7 +66,7 @@ pub enum Error {
     #[error("mempool error")]
     MemPool(#[from] mempool::Error),
     #[error("net error")]
-    Net(#[from] Box<net::Error>),
+    Net(#[source] Box<net::Error>),
     #[error("net task error")]
     NetTask(#[source] Box<net_task::Error>),
     #[error("No CUSF mainchain wallet client")]
@@ -86,6 +86,12 @@ pub enum Error {
     #[cfg(feature = "zmq")]
     #[error("ZMQ error")]
     Zmq(#[from] zeromq::ZmqError),
+}
+
+impl From<DbError> for Error {
+    fn from(err: DbError) -> Self {
+        Self::Db(Box::new(err))
+    }
 }
 
 impl From<net::Error> for Error {

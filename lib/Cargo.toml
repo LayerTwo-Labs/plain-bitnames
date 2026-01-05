@@ -56,7 +56,7 @@ tokio-stream = { version = "0.1.15", features = ["sync"] }
 tokio-util = { workspace = true, features = ["rt"] }
 tonic = { workspace = true }
 tracing = { workspace = true }
-transitive = "1.0.1"
+transitive = "1.2.0"
 utoipa = { workspace = true, features = ["macros", "non_strict_integers"] }
 x25519-dalek = { workspace = true, features = ["static_secrets"] }
 zeromq = { version = "0.4.1", optional = true }
