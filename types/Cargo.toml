@@ -34,7 +34,6 @@ typenum = "1.18.0"
 utoipa = { workspace = true, features = ["macros", "non_strict_integers"] }
 x25519-dalek = { workspace = true, features = ["serde"] }
 
-
 [dependencies.ed25519-dalek]
 workspace = true
 features = ["batch", "digest", "hazmat", "serde"]

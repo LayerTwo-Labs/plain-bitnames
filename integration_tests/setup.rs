@@ -150,9 +150,13 @@ impl Sidechain for PostSetup {
     ) -> Result<Self, Self::SetupError> {
         let reserved_ports = ReservedPorts::new()?;
         let bitnames_dir = if let Some(suffix) = init.data_dir_suffix {
-            post_setup.out_dir.path().join(format!("bitnames-{suffix}"))
+            post_setup
+                .directories
+                .base_dir
+                .path()
+                .join(format!("bitnames-{suffix}"))
         } else {
-            post_setup.out_dir.path().join("bitnames")
+            post_setup.directories.base_dir.path().join("bitnames")
         };
         std::fs::create_dir(&bitnames_dir)
             .map_err(Self::SetupError::CreateBitNamesDir)?;
