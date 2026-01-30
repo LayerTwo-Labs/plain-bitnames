@@ -56,6 +56,9 @@ pub enum Command {
         #[arg(long)]
         msg: String,
     },
+    /// Delete peer from known_peers DB.
+    /// Connections to the peer are not terminated.
+    ForgetPeer { addr: SocketAddr },
     /// Format a deposit address
     FormatDepositAddress { address: Address },
     /// Generate a mnemonic seed phrase
@@ -295,6 +298,10 @@ where
             encryption_pubkey,
             msg,
         } => rpc_client.encrypt_msg(encryption_pubkey, msg).await?,
+        Command::ForgetPeer { addr } => {
+            rpc_client.forget_peer(addr).await?;
+            String::default()
+        }
         Command::FormatDepositAddress { address } => {
             rpc_client.format_deposit_address(address).await?
         }
@@ -477,7 +484,10 @@ impl Cli {
         tracing::info!(%request_id);
         let builder = HttpClientBuilder::default()
             .request_timeout(Duration::from_secs(self.timeout_secs))
-            .set_max_logging_length(1024)
+            .set_rpc_middleware(
+                jsonrpsee::core::middleware::RpcServiceBuilder::new()
+                    .rpc_logger(1024),
+            )
             .set_headers(HeaderMap::from_iter([(
                 http::header::HeaderName::from_static("x-request-id"),
                 http::header::HeaderValue::from_str(&request_id)?,
