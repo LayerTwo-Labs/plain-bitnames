@@ -55,7 +55,7 @@ pub enum Error {
     #[error("CUSF mainchain proto error")]
     CusfMainchain(#[from] proto::Error),
     #[error(transparent)]
-    Db(#[from] DbError),
+    Db(Box<DbError>),
     #[error("Database env error")]
     DbEnv(#[from] EnvError),
     #[error("Database write error")]
@@ -87,6 +87,12 @@ pub enum Error {
     #[cfg(feature = "zmq")]
     #[error("ZMQ error")]
     Zmq(#[from] zeromq::ZmqError),
+}
+
+impl From<DbError> for Error {
+    fn from(err: DbError) -> Self {
+        Self::Db(Box::new(err))
+    }
 }
 
 impl From<net::Error> for Error {
@@ -227,6 +233,14 @@ where
             #[cfg(feature = "zmq")]
             zmq_pub_handler: zmq_pub_handler.clone(),
         })
+    }
+
+    pub fn env(&self) -> &Env {
+        &self.env
+    }
+
+    pub fn archive(&self) -> &Archive {
+        &self.archive
     }
 
     /// Borrow the CUSF mainchain client, and execute the provided future.
@@ -672,6 +686,21 @@ where
 
     pub fn get_active_peers(&self) -> Vec<Peer> {
         self.net.get_active_peers()
+    }
+
+    pub async fn request_mainchain_ancestor_infos(
+        &self,
+        block_hash: bitcoin::BlockHash,
+    ) -> Result<bool, Error> {
+        let mainchain_task::Response::AncestorInfos(_, res): mainchain_task::Response = self
+            .mainchain_task
+            .request_oneshot(mainchain_task::Request::AncestorInfos(
+                block_hash,
+            ))
+            .map_err(|_| Error::SendMainchainTaskRequest)?
+            .await
+            .map_err(|_| Error::ReceiveMainchainTaskResponse)?;
+        res.map_err(Error::MainchainAncestors)
     }
 
     /// Attempt to submit a block.
