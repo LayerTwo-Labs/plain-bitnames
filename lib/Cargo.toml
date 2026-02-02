@@ -24,7 +24,8 @@ borsh = { workspace = true, features = ["derive"] }
 byteorder = "1.4.3"
 bytes = "1.9.0"
 clap = { workspace = true, features = ["derive"], optional = true }
-ed25519-dalek = { workspace = true }
+ed25519-bip32 = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["hazmat"]}
 fallible-iterator = { workspace = true }
 fatality = "0.1.1"
 futures = { workspace = true, features = ["alloc"] }

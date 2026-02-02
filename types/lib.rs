@@ -30,7 +30,10 @@ pub use bitname_data::{
 };
 pub use bitname_seq_id::BitNameSeqId;
 pub use hashes::{BitName, BlockHash, Hash, M6id, MerkleRoot, Txid};
-pub use keys::{EncryptionPubKey, VerifyingKey};
+pub use keys::{
+    EncryptionPubKey, VerifyingKey, XEncryptionSecretKey, XPubKey,
+    XVerifyingKey,
+};
 pub use transaction::{
     Authorized, AuthorizedTransaction, BatchIcannRegistrationData,
     BitcoinOutputContent, Content as OutputContent,

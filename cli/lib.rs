@@ -85,6 +85,12 @@ pub enum Command {
     GetPaymail,
     /// Get wallet addresses, sorted by base58 encoding
     GetWalletAddresses,
+    /// Get wallet master XEncryptionSecretKey
+    #[command(name = "get-wallet-master-xesk")]
+    GetWalletMasterXEsk,
+    /// Get wallet master XVerifyingKey
+    #[command(name = "get-wallet-master-xvk")]
+    GetWalletMasterXVk,
     /// Get wallet UTXOs
     GetWalletUtxos,
     /// Get the height of the latest failed withdrawal bundle
@@ -348,6 +354,14 @@ where
         Command::GetWalletAddresses => {
             let addresses = rpc_client.get_wallet_addresses().await?;
             serde_json::to_string_pretty(&addresses)?
+        }
+        Command::GetWalletMasterXEsk => {
+            let master_xesk = rpc_client.get_wallet_master_xesk().await?;
+            format!("{master_xesk}")
+        }
+        Command::GetWalletMasterXVk => {
+            let master_xvk = rpc_client.get_wallet_master_xvk().await?;
+            format!("{master_xvk}")
         }
         Command::GetWalletUtxos => {
             let utxos = rpc_client.get_wallet_utxos().await?;

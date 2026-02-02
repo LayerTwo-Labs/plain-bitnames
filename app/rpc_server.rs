@@ -14,7 +14,8 @@ use plain_bitnames::{
         Address, Authorization, BitName, BitNameData, Block, BlockHash,
         EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
         PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
-        WithdrawalBundle, keys::Ecies,
+        WithdrawalBundle,
+        keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
     },
     wallet::Balance,
 };
@@ -247,6 +248,23 @@ impl RpcServer for RpcServerImpl {
         let mut res: Vec<_> = addrs.into_iter().collect();
         res.sort_by_key(|addr| addr.as_base58());
         Ok(res)
+    }
+
+    async fn get_wallet_master_xesk(&self) -> RpcResult<XEncryptionSecretKey> {
+        let rotxn = self.app.wallet.env.read_txn().map_err(custom_err)?;
+        let master_xesk = self
+            .app
+            .wallet
+            .get_master_xesk(&rotxn)
+            .map_err(custom_err)?;
+        Ok(master_xesk)
+    }
+
+    async fn get_wallet_master_xvk(&self) -> RpcResult<XVerifyingKey> {
+        let rotxn = self.app.wallet.env.read_txn().map_err(custom_err)?;
+        let master_xvk =
+            self.app.wallet.get_master_xvk(&rotxn).map_err(custom_err)?;
+        Ok(master_xvk)
     }
 
     async fn get_wallet_utxos(
