@@ -13,8 +13,8 @@ use super::{
     serde_display_fromstr_human_readable, serde_hexstr_human_readable,
 };
 use crate::{
+    BitNameDataUpdates, MutableBitNameData,
     authorization::{Authorization, Signature},
-    types::{BitNameDataUpdates, MutableBitNameData},
 };
 
 mod output_content;
@@ -77,7 +77,7 @@ pub enum OutPoint {
         vout: u32,
     },
     // Created by mainchain deposits.
-    #[schema(value_type = crate::types::schema::BitcoinOutPoint)]
+    #[schema(value_type = crate::schema::BitcoinOutPoint)]
     Deposit(
         #[borsh(
             serialize_with = "borsh_serialize_bitcoin_outpoint",
