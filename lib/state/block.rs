@@ -248,7 +248,7 @@ pub fn connect_prevalidated(
             let spent_output = state
                 .utxos
                 .try_get(rwtxn, &key)?
-                .ok_or(Error::NoUtxo { outpoint: *input })?;
+                .ok_or(error::NoUtxo { outpoint: *input })?;
             let spent_output = SpentOutput {
                 output: spent_output,
                 inpoint: InPoint::Regular {
@@ -397,7 +397,7 @@ pub fn connect(
             let spent_output = state
                 .utxos
                 .try_get(rwtxn, &OutPointKey::from(input))?
-                .ok_or(Error::NoUtxo { outpoint: *input })?;
+                .ok_or(error::NoUtxo { outpoint: *input })?;
             let spent_output = SpentOutput {
                 output: spent_output,
                 inpoint: InPoint::Regular {
@@ -543,9 +543,9 @@ pub fn disconnect_tip(
                     vout: vout as u32,
                 };
                 if state.utxos.delete(rwtxn, &OutPointKey::from(&outpoint))? {
-                    Ok(())
+                    Ok::<_, Error>(())
                 } else {
-                    Err(Error::NoUtxo { outpoint })
+                    Err(error::NoUtxo { outpoint }.into())
                 }
             },
         )?;
@@ -577,9 +577,9 @@ pub fn disconnect_tip(
                 vout: vout as u32,
             };
             if state.utxos.delete(rwtxn, &OutPointKey::from(&outpoint))? {
-                Ok(())
+                Ok::<_, Error>(())
             } else {
-                Err(Error::NoUtxo { outpoint })
+                Err(error::NoUtxo { outpoint }.into())
             }
         },
     )?;

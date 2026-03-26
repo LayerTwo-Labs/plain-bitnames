@@ -10,7 +10,9 @@ use bip300301_enforcer_integration_tests::{
 };
 use bip300301_enforcer_lib::types::SidechainNumber;
 use futures::{TryFutureExt as _, channel::mpsc, future};
-use plain_bitnames::types::{FilledOutput, FilledOutputContent, PointedOutput};
+use plain_bitnames::types::{
+    FilledOutput, FilledOutputContent, Network, PointedOutput,
+};
 use plain_bitnames_app_rpc_api::RpcClient as _;
 use reserve_port::ReservedPort;
 use thiserror::Error;
@@ -169,6 +171,7 @@ impl Sidechain for PostSetup {
                 .enforcer_serve_grpc
                 .port(),
             net_port: reserved_ports.net.port(),
+            network: Network::Regtest,
             rpc_port: reserved_ports.rpc.port(),
             zmq_port: reserved_ports.zmq.port(),
         };
@@ -275,12 +278,10 @@ impl Sidechain for PostSetup {
                 .latest_failed_withdrawal_bundle_height()
                 .await?
                 .unwrap_or(0);
-            match WITHDRAWAL_BUNDLE_FAILURE_GAP.saturating_sub(
+            let blocks_to_mine = WITHDRAWAL_BUNDLE_FAILURE_GAP.saturating_sub(
                 block_height - latest_failed_withdrawal_bundle_height,
-            ) {
-                0 => WITHDRAWAL_BUNDLE_FAILURE_GAP + 1,
-                blocks_to_mine => blocks_to_mine,
-            }
+            );
+            std::cmp::max(1, blocks_to_mine)
         };
         tracing::debug!(
             "Mining BitNames blocks until withdrawal bundle is broadcast"
