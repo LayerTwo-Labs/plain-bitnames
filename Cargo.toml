@@ -48,12 +48,12 @@ x25519-dalek = "2.0.0"
 [workspace.dependencies.bip300301_enforcer_lib]
 default-features = false
 git = "https://github.com/LayerTwo-Labs/bip300301_enforcer"
-rev = "94bc123e0b26af9c18d10c933803d53af62f034c"
+rev = "a8d169ee34aeddf6d354aa52376d847831d7fbb3"
 
 [workspace.dependencies.bip300301_enforcer_integration_tests]
 default-features = false
 git = "https://github.com/LayerTwo-Labs/bip300301_enforcer"
-rev = "94bc123e0b26af9c18d10c933803d53af62f034c"
+rev = "a8d169ee34aeddf6d354aa52376d847831d7fbb3"
 
 [workspace.dependencies.l2l-openapi]
 git = "https://github.com/Ash-L2L/l2l-openapi"

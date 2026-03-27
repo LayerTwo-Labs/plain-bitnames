@@ -502,6 +502,7 @@ pub fn disconnect_tip(
         // revert transaction effects
         match &tx.data {
             None => (),
+            #[allow(clippy::collapsible_match, reason = "false positive")]
             Some(TxData::BitNameReservation { .. }) => {
                 if !state.bitnames.delete_reservation(rwtxn, &txid)? {
                     let err = error::BitName::MissingReservation { txid };
