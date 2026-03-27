@@ -5,8 +5,9 @@ use bip300301_enforcer_integration_tests::{
         activate_sidechain, deposit, fund_enforcer, propose_sidechain,
     },
     setup::{
-        Mode, Network, PostSetup as EnforcerPostSetup, Sidechain as _,
-        setup as setup_enforcer,
+        Mode, Network, PostSetup as EnforcerPostSetup,
+        PreSetup as EnforcerPreSetup, SetupOpts as EnforcerSetupOpts,
+        Sidechain as _,
     },
     util::{AbortOnDrop, AsyncTrial, TestFailureCollector, TestFileRegistry},
 };
@@ -28,16 +29,17 @@ const DEPOSIT_FEE: bitcoin::Amount = bitcoin::Amount::from_sat(1_000_000);
 
 /// Initial setup for the test
 async fn setup(
-    bin_paths: &BinPaths,
+    bin_paths: BinPaths,
     res_tx: mpsc::UnboundedSender<anyhow::Result<()>>,
 ) -> anyhow::Result<(EnforcerPostSetup, PostSetup)> {
-    let mut enforcer_post_setup = setup_enforcer(
-        &bin_paths.others,
-        Network::Regtest,
-        Mode::Mempool,
-        res_tx.clone(),
-    )
-    .await?;
+    let enforcer_pre_setup =
+        EnforcerPreSetup::new(bin_paths.others, Network::Regtest)?;
+    let mut enforcer_post_setup = {
+        let setup_opts: EnforcerSetupOpts = Default::default();
+        enforcer_pre_setup
+            .setup(Mode::Mempool, setup_opts, res_tx.clone())
+            .await?
+    };
     let () = propose_sidechain::<PostSetup>(&mut enforcer_post_setup).await?;
     tracing::info!("Proposed sidechain successfully");
     let () = activate_sidechain::<PostSetup>(&mut enforcer_post_setup).await?;
@@ -45,7 +47,7 @@ async fn setup(
     let () = fund_enforcer::<PostSetup>(&mut enforcer_post_setup).await?;
     let mut post_setup = PostSetup::setup(
         Init {
-            bitnames_app: bin_paths.bitnames.clone(),
+            bitnames_app: bin_paths.bitnames,
             data_dir_suffix: None,
         },
         &enforcer_post_setup,
@@ -72,7 +74,7 @@ async fn register_bitname_task(
     res_tx: mpsc::UnboundedSender<anyhow::Result<()>>,
 ) -> anyhow::Result<()> {
     let (mut enforcer_post_setup, post_setup) =
-        setup(&bin_paths, res_tx.clone()).await?;
+        setup(bin_paths, res_tx.clone()).await?;
     tracing::info!("Reserving BitName");
     let _: Txid = post_setup
         .rpc_client

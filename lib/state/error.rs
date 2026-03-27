@@ -45,7 +45,91 @@ impl From<db::Error> for BitName {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Error)]
+#[error("utxo {outpoint} doesn't exist")]
+pub struct NoUtxo {
+    pub outpoint: OutPoint,
+}
+
+#[derive(Debug, Error)]
+#[error("pending withdrawal bundle {0} unknown in withdrawal_bundles")]
+#[repr(transparent)]
+pub struct PendingWithdrawalBundleUnknown(pub M6id);
+
+#[allow(clippy::duplicated_attributes)]
+#[derive(Debug, Error, Transitive)]
+#[transitive(
+    from(db::Delete, db::Error),
+    from(db::Put, db::Error),
+    from(db::TryGet, db::Error)
+)]
+pub enum ConnectWithdrawalBundleSubmitted {
+    #[error(
+        "confirmed withdrawal bundle {} resubmitted in {}",
+        .m6id,
+        .event_block_hash,
+    )]
+    ConfirmedResubmitted {
+        event_block_hash: bitcoin::BlockHash,
+        m6id: M6id,
+    },
+    #[error(transparent)]
+    Db(Box<db::Error>),
+    #[error(
+        "dropped withdrawal bundle {0} marked as pending in withdrawal_bundles"
+    )]
+    DroppedPending(M6id),
+    #[error(transparent)]
+    NoUtxo(#[from] NoUtxo),
+    #[error(transparent)]
+    PendingWithdrawalBundleUnknown(#[from] PendingWithdrawalBundleUnknown),
+    #[error(
+        "withdrawal bundle {} submitted in {} resubmitted in {}",
+        m6id,
+        submitted_block_height,
+        event_block_hash
+    )]
+    Resubmitted {
+        event_block_hash: bitcoin::BlockHash,
+        m6id: M6id,
+        submitted_block_height: u32,
+    },
+    #[error(
+        "unknown confirmed withdrawal bundle {} marked as failed in {}",
+        .m6id,
+        .failed_block_height,
+    )]
+    UnknownConfirmedFailed {
+        m6id: M6id,
+        failed_block_height: u32,
+    },
+    #[error(
+        "unknown withdrawal bundle {} marked as dropped in {}",
+        .m6id,
+        .dropped_block_height,
+    )]
+    UnknownDropped {
+        m6id: M6id,
+        dropped_block_height: u32,
+    },
+    #[error(
+        "unknown withdrawal bundle {} marked as pending in {}",
+        .m6id,
+        .pending_block_height,
+    )]
+    UnknownPending {
+        m6id: M6id,
+        pending_block_height: u32,
+    },
+}
+
+impl From<db::Error> for ConnectWithdrawalBundleSubmitted {
+    fn from(err: db::Error) -> Self {
+        Self::Db(Box::new(err))
+    }
+}
+
+#[derive(Debug, Error)]
 pub enum InvalidHeader {
     #[error("expected block hash {expected}, but computed {computed}")]
     BlockHash {
@@ -67,6 +151,7 @@ pub enum InvalidHeader {
 #[transitive(from(db::Clear, db::Error))]
 #[transitive(from(db::Delete, db::Error))]
 #[transitive(from(db::Error, sneed::Error))]
+#[transitive(from(db::Get, db::Error))]
 #[transitive(from(db::IterInit, db::Error))]
 #[transitive(from(db::IterItem, db::Error))]
 #[transitive(from(db::Last, db::Error))]
@@ -97,6 +182,8 @@ pub enum Error {
     #[error(transparent)]
     ComputeMerkleRoot(#[from] crate::types::ComputeMerkleRootError),
     #[error(transparent)]
+    ConnectWithdrawalBundleSubmitted(#[from] ConnectWithdrawalBundleSubmitted),
+    #[error(transparent)]
     Db(Box<sneed::Error>),
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
@@ -125,10 +212,12 @@ pub enum Error {
     NoStxo { outpoint: OutPoint },
     #[error("no tip")]
     NoTip,
-    #[error("utxo {outpoint} doesn't exist")]
-    NoUtxo { outpoint: OutPoint },
+    #[error(transparent)]
+    NoUtxo(#[from] NoUtxo),
     #[error("Withdrawal bundle event block doesn't exist")]
     NoWithdrawalBundleEventBlock,
+    #[error(transparent)]
+    PendingWithdrawalBundleUnknown(#[from] PendingWithdrawalBundleUnknown),
     #[error("Too few BitName outputs")]
     TooFewBitNameOutputs,
     #[error(

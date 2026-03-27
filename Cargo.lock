@@ -763,7 +763,7 @@ dependencies = [
 [[package]]
 name = "bip300301_enforcer_integration_tests"
 version = "0.3.4"
-source = "git+https://github.com/LayerTwo-Labs/bip300301_enforcer?rev=a8d169ee34aeddf6d354aa52376d847831d7fbb3#a8d169ee34aeddf6d354aa52376d847831d7fbb3"
+source = "git+https://github.com/LayerTwo-Labs/bip300301_enforcer?rev=9c3eb0bdcb5b9a458e6f92cafb8bdbf76a860f74#9c3eb0bdcb5b9a458e6f92cafb8bdbf76a860f74"
 dependencies = [
  "anyhow",
  "bdk_wallet",
@@ -796,7 +796,7 @@ dependencies = [
 [[package]]
 name = "bip300301_enforcer_lib"
 version = "0.3.4"
-source = "git+https://github.com/LayerTwo-Labs/bip300301_enforcer?rev=a8d169ee34aeddf6d354aa52376d847831d7fbb3#a8d169ee34aeddf6d354aa52376d847831d7fbb3"
+source = "git+https://github.com/LayerTwo-Labs/bip300301_enforcer?rev=9c3eb0bdcb5b9a458e6f92cafb8bdbf76a860f74#9c3eb0bdcb5b9a458e6f92cafb8bdbf76a860f74"
 dependencies = [
  "aes-gcm",
  "argon2",
