@@ -206,6 +206,10 @@ pub enum WithdrawalBundleStatus {
     Failed,
     Pending,
     Submitted,
+    /// Submitted, but unexpected due to previously being dropped or failing.
+    /// It may not be possible to account for this withdrawal bundle, if it
+    /// double-spends UTXOs.
+    SubmittedUnexpected,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
