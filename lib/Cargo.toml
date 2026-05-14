@@ -27,8 +27,8 @@ clap = { workspace = true, features = ["derive"], optional = true }
 ed25519-bip32 = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["hazmat"]}
 educe = { workspace = true, features = ["Clone", "Debug"] }
+error-fatality = { workspace = true }
 fallible-iterator = { workspace = true }
-fatality = { workspace = true }
 futures = { workspace = true, features = ["alloc"] }
 governor = { workspace = true, features = ["quanta", "std"] }
 hashlink = { workspace = true, features = ["serde_impl"] }

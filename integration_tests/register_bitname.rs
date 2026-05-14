@@ -33,7 +33,7 @@ async fn setup(
     res_tx: mpsc::UnboundedSender<anyhow::Result<()>>,
 ) -> anyhow::Result<(EnforcerPostSetup, PostSetup)> {
     let enforcer_pre_setup =
-        EnforcerPreSetup::new(bin_paths.others, Network::Regtest)?;
+        EnforcerPreSetup::new(&bin_paths.others, Network::Regtest)?;
     let mut enforcer_post_setup = {
         let setup_opts: EnforcerSetupOpts = Default::default();
         enforcer_pre_setup
@@ -47,7 +47,7 @@ async fn setup(
     let () = fund_enforcer::<PostSetup>(&mut enforcer_post_setup).await?;
     let mut post_setup = PostSetup::setup(
         Init {
-            bitnames_app: bin_paths.bitnames,
+            bitnames_app: bin_paths.bitnames()?.clone(),
             data_dir_suffix: None,
         },
         &enforcer_post_setup,
