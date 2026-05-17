@@ -2,9 +2,11 @@ use std::{borrow::Borrow, io::Cursor};
 
 use bitcoin::amount::CheckedSum;
 use borsh::{self, BorshDeserialize, BorshSerialize};
-use heed::{BoxedError, BytesDecode, BytesEncode};
 use serde::{Deserialize, Serialize};
 use utoipa::{PartialSchema, ToSchema};
+
+#[cfg(feature = "heed")]
+use heed::{BoxedError, BytesDecode, BytesEncode};
 
 use super::{
     AmountOverflowError, GetValue,
@@ -184,6 +186,7 @@ impl AsRef<[u8]> for OutPointKey {
 }
 
 // Database key encoding traits for direct LMDB usage
+#[cfg(feature = "heed")]
 impl<'a> BytesEncode<'a> for OutPointKey {
     type EItem = OutPointKey;
 
@@ -195,6 +198,7 @@ impl<'a> BytesEncode<'a> for OutPointKey {
     }
 }
 
+#[cfg(feature = "heed")]
 impl<'a> BytesDecode<'a> for OutPointKey {
     type DItem = OutPointKey;
 

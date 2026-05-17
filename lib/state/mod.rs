@@ -54,15 +54,6 @@ enum WithdrawalBundleInfo {
     },
 }
 
-impl WithdrawalBundleInfo {
-    fn is_known(&self) -> bool {
-        match self {
-            Self::Known(_) => true,
-            Self::Unknown | Self::UnknownConfirmed { .. } => false,
-        }
-    }
-}
-
 type WithdrawalBundlesDb = DatabaseUnique<
     SerdeBincode<M6id>,
     SerdeBincode<(
@@ -259,7 +250,8 @@ impl State {
                 WithdrawalBundleStatus::Confirmed
                 | WithdrawalBundleStatus::Dropped
                 | WithdrawalBundleStatus::Pending
-                | WithdrawalBundleStatus::Submitted => None,
+                | WithdrawalBundleStatus::Submitted
+                | WithdrawalBundleStatus::SubmittedUnexpected => None,
             })
             .unwrap_or_else(|| {
                 panic!("missing failure status for {latest_failed_m6id}")
