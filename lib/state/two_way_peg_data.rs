@@ -785,7 +785,7 @@ fn disconnect_withdrawal_bundle_failed(
                     &OutPointKey::from(outpoint),
                     &spent_output,
                 )?;
-                if state.utxos.delete(rwtxn, &OutPointKey::from(outpoint))? {
+                if !state.utxos.delete(rwtxn, &OutPointKey::from(outpoint))? {
                     return Err(error::NoUtxo {
                         outpoint: *outpoint,
                     }
