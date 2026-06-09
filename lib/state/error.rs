@@ -37,6 +37,11 @@ pub enum BitName {
     MissingReservation { txid: Txid },
     #[error("no BitNames to update")]
     NoBitNamesToUpdate,
+    #[error(
+        "no spent BitName reservation matches the commitment for the \
+         registration of {bitname}"
+    )]
+    NoReservationForRegistration { bitname: BitNameId },
 }
 
 impl From<db::Error> for BitName {
