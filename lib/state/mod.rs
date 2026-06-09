@@ -686,20 +686,25 @@ impl Watchable<()> for State {
 mod tests {
     use ed25519_dalek::SigningKey;
 
-    use super::{Error, State};
     use crate::{
         authorization,
+        state::{Error, State, error},
         types::{
-            Address, AuthorizedTransaction, BitcoinOutputContent, FilledOutput,
-            FilledOutputContent, OutPoint, OutPointKey, Output, OutputContent,
-            Transaction, VerifyingKey,
+            Address, AuthorizedTransaction, BitName, BitcoinOutputContent,
+            FilledOutput, FilledOutputContent, FilledTransaction, Hash,
+            MutableBitNameData, OutPoint, OutPointKey, Output, OutputContent,
+            Transaction, TxData, Txid, VerifyingKey,
         },
     };
 
     /// Open a fresh state in a unique temporary directory.
-    fn new_state() -> (sneed::Env, State) {
-        let path = std::env::temp_dir()
-            .join(format!("plain_bitnames_auth_count_{}", std::process::id()));
+    fn new_state(dir_name_suffix: &str) -> (sneed::Env, State) {
+        let dir_name = if dir_name_suffix.is_empty() {
+            format!("plain_bitnames_{}", std::process::id())
+        } else {
+            format!("plain_bitnames_{dir_name_suffix}_{}", std::process::id())
+        };
+        let path = std::env::temp_dir().join(dir_name);
         let _remove_result = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         let env = {
@@ -738,13 +743,47 @@ mod tests {
         outpoint
     }
 
+    /// Build a BitName registration that registers `name_hash` with
+    /// `revealed_nonce`, while spending a single reservation that commits to
+    /// `reservation_commitment`.
+    fn registration_tx(
+        name_hash: BitName,
+        revealed_nonce: Hash,
+        reservation_commitment: Hash,
+    ) -> FilledTransaction {
+        let address = Address([0; 20]);
+        let mut transaction = Transaction::new(
+            vec![OutPoint::Regular {
+                txid: Txid([0; 32]),
+                vout: 0,
+            }],
+            vec![Output::new(address, OutputContent::BitName)],
+        );
+        transaction.data = Some(TxData::BitNameRegistration {
+            name_hash,
+            revealed_nonce,
+            bitname_data: Box::new(MutableBitNameData::default()),
+        });
+        let reservation = FilledOutput::new(
+            address,
+            FilledOutputContent::BitNameReservation(
+                Txid([0; 32]),
+                reservation_commitment,
+            ),
+        );
+        FilledTransaction {
+            transaction,
+            spent_utxos: vec![reservation],
+        }
+    }
+
     /// A transaction that spends an input without supplying an authorization
     /// for it must be rejected. Otherwise the `zip` of authorizations and
     /// spent UTXOs silently skips the unauthorized input, allowing any UTXO to
     /// be spent without a signature.
     #[test]
     fn validate_transaction_rejects_missing_authorization() {
-        let (env, state) = new_state();
+        let (env, state) = new_state("auth_count");
         let signing_key = SigningKey::from_bytes(&[1u8; 32]);
         let verifying_key: VerifyingKey = signing_key.verifying_key().into();
         let address = authorization::get_address(&verifying_key);
@@ -787,5 +826,43 @@ mod tests {
         state
             .validate_transaction(&rotxn, &authorized)
             .expect("correctly authorized tx should validate");
+    }
+
+    /// A registration whose spent reservation does not commit to the
+    /// registered name must be rejected. Otherwise it passes validation and
+    /// later panics in `apply_registration`, which fails to find the
+    /// reservation to burn.
+    #[test]
+    fn validate_bitnames_rejects_registration_without_matching_reservation() {
+        let (env, state) = new_state("registration");
+        let rotxn = env.read_txn().unwrap();
+        let name_hash = BitName([7; 32]);
+        let revealed_nonce: Hash = [3; 32];
+        let implied_commitment: Hash =
+            blake3::keyed_hash(&revealed_nonce, &name_hash.0).into();
+
+        // The reservation commits to something other than the registered name.
+        let mismatched_commitment: Hash = [0; 32];
+        assert_ne!(mismatched_commitment, implied_commitment);
+        let tx =
+            registration_tx(name_hash, revealed_nonce, mismatched_commitment);
+        let err = state.validate_bitnames(&rotxn, &tx).expect_err(
+            "registration without a matching reservation must be rejected",
+        );
+        assert!(
+            matches!(
+                err,
+                Error::BitName(
+                    error::BitName::NoReservationForRegistration { bitname }
+                ) if bitname == name_hash
+            ),
+            "unexpected error: {err:?}"
+        );
+
+        // The same registration burning the matching reservation is accepted.
+        let tx = registration_tx(name_hash, revealed_nonce, implied_commitment);
+        state.validate_bitnames(&rotxn, &tx).expect(
+            "registration burning the matching reservation should validate",
+        );
     }
 }
