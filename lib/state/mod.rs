@@ -407,6 +407,26 @@ impl State {
             if self.bitnames.try_get_bitname(rotxn, &name_hash)?.is_some() {
                 return Err(Error::BitNameAlreadyRegistered { name_hash });
             }
+            // A registration must burn the reservation that commits to it,
+            // i.e. a spent reservation whose commitment equals
+            // keyed_hash(revealed_nonce, name_hash). Without this check,
+            // `apply_registration` would later fail to find the reservation
+            // to burn.
+            if let Some(implied_commitment) =
+                tx.implied_reservation_commitment()
+            {
+                let burns_matching_reservation =
+                    tx.spent_reservations().any(|(_, filled_output)| {
+                        filled_output.reservation_commitment()
+                            == Some(&implied_commitment)
+                    });
+                if !burns_matching_reservation {
+                    return Err(error::BitName::NoReservationForRegistration {
+                        bitname: name_hash,
+                    }
+                    .into());
+                }
+            }
             if n_bitname_outputs == n_bitname_inputs + 1 {
                 return Ok(());
             };
