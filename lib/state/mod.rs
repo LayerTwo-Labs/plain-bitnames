@@ -484,6 +484,17 @@ impl State {
     ) -> Result<bitcoin::Amount, Error> {
         let filled_transaction =
             self.fill_transaction(rotxn, &transaction.transaction)?;
+        // Pairing authorizations with spent UTXOs via `zip` silently ignores
+        // trailing inputs when there are too few authorizations. Require an
+        // exact count so that every input requiring authorization is covered.
+        let n_authorizations_required =
+            filled_transaction.spent_utxos_requiring_auth().len();
+        if transaction.authorizations.len() != n_authorizations_required {
+            return Err(Error::WrongNumberOfAuthorizations {
+                expected: n_authorizations_required,
+                received: transaction.authorizations.len(),
+            });
+        }
         for (authorization, spent_utxo) in transaction
             .authorizations
             .iter()

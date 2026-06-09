@@ -265,6 +265,10 @@ pub enum Error {
     UtxoDoubleSpent,
     #[error(transparent)]
     WithdrawalBundle(#[from] WithdrawalBundleError),
+    #[error(
+        "wrong number of authorizations: expected {expected}, but received {received}"
+    )]
+    WrongNumberOfAuthorizations { expected: usize, received: usize },
     #[error("wrong public key for address")]
     WrongPubKeyForAddress,
 }
