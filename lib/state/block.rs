@@ -84,6 +84,21 @@ pub fn validate(
         };
         return Err(err);
     }
+    // The authorization and address checks below pair authorizations with
+    // spent UTXOs positionally via `zip`, which silently ignores any trailing
+    // inputs when there are fewer authorizations than inputs requiring one.
+    // Require an exact count so that every input requiring authorization is
+    // covered by a provided authorization.
+    let n_authorizations_required: usize = filled_txs
+        .iter()
+        .map(|t| t.spent_utxos_requiring_auth().len())
+        .sum();
+    if body.authorizations.len() != n_authorizations_required {
+        return Err(Error::WrongNumberOfAuthorizations {
+            expected: n_authorizations_required,
+            received: body.authorizations.len(),
+        });
+    }
     let spent_utxos = filled_txs
         .iter()
         .flat_map(|t| t.spent_utxos_requiring_auth().into_iter());
@@ -167,6 +182,21 @@ pub fn prevalidate(
             computed: computed_merkle_root,
         };
         return Err(err);
+    }
+    // The authorization and address checks below pair authorizations with
+    // spent UTXOs positionally via `zip`, which silently ignores any trailing
+    // inputs when there are fewer authorizations than inputs requiring one.
+    // Require an exact count so that every input requiring authorization is
+    // covered by a provided authorization.
+    let n_authorizations_required: usize = filled_transactions
+        .iter()
+        .map(|t| t.spent_utxos_requiring_auth().len())
+        .sum();
+    if body.authorizations.len() != n_authorizations_required {
+        return Err(Error::WrongNumberOfAuthorizations {
+            expected: n_authorizations_required,
+            received: body.authorizations.len(),
+        });
     }
     let spent_utxos = filled_transactions
         .iter()
