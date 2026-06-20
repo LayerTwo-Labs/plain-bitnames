@@ -587,12 +587,22 @@ pub struct FilledOutput {
 
 impl FilledOutput {
     /// construct a new filled output
+    #[inline(always)]
     pub fn new(address: Address, content: FilledContent) -> Self {
         Self {
             address,
             content,
             memo: Vec::new(),
         }
+    }
+
+    /// Construct a new Bitcoin value output
+    #[inline(always)]
+    pub fn new_bitcoin_value(
+        address: Address,
+        amount: bitcoin::Amount,
+    ) -> Self {
+        Self::new(address, FilledContent::new_bitcoin_value(amount))
     }
 
     /// returns the BitName ID (name hash) if the filled output content
@@ -698,9 +708,15 @@ impl FilledTransaction {
         self.transaction.implied_reservation_commitment()
     }
 
-    /// accessor for tx outputs
+    /// accessor for tx inputs
     pub fn inputs(&self) -> &TxInputs {
         &self.transaction.inputs
+    }
+
+    pub fn filled_inputs(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = (&OutPoint, &FilledOutput)> {
+        self.transaction.inputs.iter().zip(&self.spent_utxos)
     }
 
     /// true if the tx data corresponds to a BitName registration
