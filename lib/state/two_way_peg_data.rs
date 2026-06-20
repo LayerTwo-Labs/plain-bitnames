@@ -1317,7 +1317,6 @@ mod tests {
             merkle_root,
             prev_side_hash: None,
             prev_main_hash: main0,
-            roots: Vec::new(),
         };
         {
             let mut rwtxn = env.write_txn().unwrap();
@@ -1334,7 +1333,6 @@ mod tests {
             merkle_root,
             prev_side_hash: Some(genesis.hash()),
             prev_main_hash: main1,
-            roots: Vec::new(),
         };
         let deposit_outpoint = bitcoin::OutPoint {
             txid: bitcoin::Txid::from_byte_array([2; 32]),
@@ -1351,11 +1349,14 @@ mod tests {
                     events: vec![BlockEvent::Deposit(Deposit {
                         tx_index: 0,
                         outpoint: deposit_outpoint,
-                        output: Output {
+                        output: FilledOutput {
                             address: Address::ALL_ZEROS,
-                            content: OutputContent::Value(
-                                bitcoin::Amount::from_sat(1000),
+                            content: FilledOutputContent::Bitcoin(
+                                BitcoinOutputContent(
+                                    bitcoin::Amount::from_sat(1000),
+                                ),
                             ),
+                            memo: Vec::new(),
                         },
                     })],
                 },
