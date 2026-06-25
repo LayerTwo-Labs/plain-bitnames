@@ -46,7 +46,7 @@ impl Messaging {
     }
 
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        egui::CentralPanel::default().show(ui.ctx(), |ui| {
+        egui::CentralPanel::default().show_inside(ui, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_sized((250., 10.), |ui: &mut egui::Ui| {
                     //ui.group(|ui| {

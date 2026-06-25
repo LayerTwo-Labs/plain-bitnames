@@ -89,7 +89,7 @@ impl Inbox {
         settings: &Settings,
         ui: &mut egui::Ui,
     ) {
-        egui::SidePanel::left("Inbox")
+        egui::Panel::left("Inbox")
             //.exact_width(250.)
             .show_inside(ui, |ui| {
                 let () = self

@@ -58,8 +58,8 @@ impl MyBitnames {
             known_name_bitname_reservations,
             unknown_name_bitname_reservations,
         ) = app.map(Self::get_bitname_reservations).unwrap_or_default();
-        let _response = egui::SidePanel::left("My BitName Reservations")
-            .exact_width(350.)
+        let _response = egui::Panel::left("My BitName Reservations")
+            .exact_size(350.)
             .resizable(false)
             .show_inside(ui, move |ui| {
                 ui.heading("BitName Reservations");
@@ -140,8 +140,8 @@ impl MyBitnames {
     pub fn show_bitnames(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
         let (known_name_bitnames, unknown_name_bitnames) =
             app.map(Self::get_bitnames).unwrap_or_default();
-        egui::SidePanel::left("My BitNames")
-            .exact_width(350.)
+        egui::Panel::left("My BitNames")
+            .exact_size(350.)
             .resizable(false)
             .show_inside(ui, |ui| {
                 ui.heading("BitNames");

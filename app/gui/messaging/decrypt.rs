@@ -67,8 +67,8 @@ impl DecryptMessage {
             };
             self.receiver_pubkey = Some(receiver_pubkey);
         }
-        let ciphertext_response = egui::SidePanel::left("ciphertext message")
-            .exact_width(ui.available_width() / 2.)
+        let ciphertext_response = egui::Panel::left("ciphertext message")
+            .exact_size(ui.available_width() / 2.)
             .resizable(false)
             .show_inside(ui, |ui| {
                 ui.vertical_centered(|ui| {
