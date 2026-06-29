@@ -497,7 +497,17 @@ impl State {
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitnames(rotxn, tx)?;
         let () = self.validate_batch_icann(tx)?;
-        tx.fee()?.ok_or(Error::NotEnoughValueIn)
+        for (outpoint, output) in tx.spent_inputs() {
+            // a withdrawal output is committed to a bundle and can only be
+            // spent by the bundle, never by a transaction
+            if output.content.is_withdrawal() {
+                return Err(Error::SpendWithdrawalOutput {
+                    outpoint: *outpoint,
+                });
+            }
+        }
+        let fee = tx.fee()?;
+        Ok(fee)
     }
 
     pub fn validate_transaction(

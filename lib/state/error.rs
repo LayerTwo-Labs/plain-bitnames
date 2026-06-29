@@ -6,7 +6,7 @@ use transitive::Transitive;
 
 use crate::types::{
     AmountOverflowError, AmountUnderflowError, BitName as BitNameId, BlockHash,
-    M6id, MerkleRoot, OutPoint, Txid, WithdrawalBundleError,
+    M6id, MerkleRoot, OutPoint, Txid, WithdrawalBundleError, transaction,
 };
 
 /// Errors related to BitNames
@@ -187,6 +187,8 @@ pub enum Error {
     #[error(transparent)]
     BorshSerialize(borsh::io::Error),
     #[error(transparent)]
+    ComputeFee(#[from] transaction::ComputeFeeError),
+    #[error(transparent)]
     ComputeMerkleRoot(#[from] crate::types::ComputeMerkleRootError),
     #[error(transparent)]
     ConnectWithdrawalBundleSubmitted(#[from] ConnectWithdrawalBundleSubmitted),
@@ -213,14 +215,14 @@ pub enum Error {
     NoDepositBlock,
     #[error("total fees less than coinbase value")]
     NotEnoughFees,
-    #[error("value in is less than value out")]
-    NotEnoughValueIn,
     #[error("stxo {outpoint} doesn't exist")]
     NoStxo { outpoint: OutPoint },
     #[error("no tip")]
     NoTip,
     #[error(transparent)]
     NoUtxo(#[from] NoUtxo),
+    #[error("withdrawal output {outpoint} cannot be spent by a transaction")]
+    SpendWithdrawalOutput { outpoint: OutPoint },
     #[error("Withdrawal bundle event block doesn't exist")]
     NoWithdrawalBundleEventBlock,
     #[error(transparent)]

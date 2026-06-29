@@ -1320,7 +1320,7 @@ mod test {
     // a peer's invalid block (value out > value in) must not be fatal
     #[test]
     fn invalid_peer_block_is_not_fatal() {
-        let err = Error::State(Box::new(state::Error::NotEnoughValueIn));
+        let err = Error::State(Box::new(state::Error::NotEnoughFees));
         assert!(!is_fatal_reorg_error(&err));
     }
 
