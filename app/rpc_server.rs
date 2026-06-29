@@ -21,6 +21,7 @@ use plain_bitnames::{
 };
 use plain_bitnames_app_rpc_api::{RpcServer, TxInfo};
 use tower_http::{
+    cors::CorsLayer,
     request_id::{
         MakeRequestId, PropagateRequestIdLayer, RequestId, SetRequestIdLayer,
     },
@@ -77,7 +78,7 @@ impl RpcServer for RpcServerImpl {
     ) -> RpcResult<bitcoin::Txid> {
         let app = self.app.clone();
         tokio::task::spawn_blocking(move || {
-            app.deposit(
+            app.deposit_blocking(
                 address,
                 bitcoin::Amount::from_sat(value_sats),
                 bitcoin::Amount::from_sat(fee_sats),
@@ -562,7 +563,9 @@ pub async fn run_server(
         )))
         .into_inner();
 
-    let http_middleware = tower::ServiceBuilder::new().layer(tracer);
+    let http_middleware = tower::ServiceBuilder::new()
+        .layer(tracer)
+        .layer(CorsLayer::permissive());
     let rpc_middleware = RpcServiceBuilder::new().rpc_logger(1024);
 
     let server = Server::builder()

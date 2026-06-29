@@ -233,7 +233,15 @@ mod withdrawal_content {
 
     impl crate::GetValue for WithdrawalContent {
         fn get_value(&self) -> bitcoin::Amount {
-            self.value
+            let Self {
+                value,
+                main_fee,
+                main_address: _,
+            } = self;
+            // a withdrawal removes both the payout and the mainchain fee
+            // from the sidechain, since the enforcer pays both out of the
+            // treasury
+            value.checked_add(*main_fee).unwrap_or(bitcoin::Amount::MAX)
         }
     }
 }

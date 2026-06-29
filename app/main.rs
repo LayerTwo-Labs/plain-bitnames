@@ -1,5 +1,5 @@
 #![feature(try_find)]
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use clap::Parser as _;
 use mimalloc::MiMalloc;
@@ -178,9 +178,13 @@ fn run_egui_app(
     line_buffer: LineBuffer,
     app: Option<crate::app::App>,
 ) -> Result<(), eframe::Error> {
-    let native_options = eframe::NativeOptions::default();
+    let native_options = eframe::NativeOptions {
+        viewport: eframe::egui::ViewportBuilder::default()
+            .with_inner_size(eframe::egui::vec2(1280.0, 720.0)),
+        ..Default::default()
+    };
     let rpc_url = url::Url::parse(&format!("http://{}", config.rpc_addr))
-        .expect("failed to parse rpc addr");
+        .expect("failed to parse rpc url");
     eframe::run_native(
         "Plain Bitnames",
         native_options,
@@ -215,14 +219,21 @@ fn main() -> anyhow::Result<()> {
         });
     });
     if !config.headless {
-        let app = match app {
-            Ok(app) => Some(app),
+        let (app, rt) = match app {
+            Ok(app) => {
+                let rt = Arc::clone(&app.runtime);
+                (Some(app), rt)
+            }
             Err(err) => {
                 let err = anyhow::Error::from(err);
                 tracing::error!("{err:#}");
-                None
+                let rt = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()?;
+                (None, Arc::new(rt))
             }
         };
+        let _rt_guard = rt.enter();
         // For GUI mode we want the GUI to start, even if the app fails to start.
         return run_egui_app(&config, line_buffer, app)
             .map_err(|e| anyhow::anyhow!("failed to run egui app: {e:#}"));

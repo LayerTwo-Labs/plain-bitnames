@@ -217,8 +217,15 @@ impl<'a> BytesDecode<'a> for OutPointKey {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{OUTPOINT_KEY_SIZE, OutPoint, OutPointKey};
+mod test {
+    use crate::{
+        Address,
+        transaction::{
+            Content, FilledContent, FilledOutput, FilledTransaction,
+            GetValue as _, OUTPOINT_KEY_SIZE, OutPoint, OutPointKey, Output,
+            Transaction, output_content,
+        },
+    };
 
     #[test]
     fn check_outpoint_key_size() -> anyhow::Result<()> {
@@ -252,6 +259,50 @@ mod tests {
             anyhow::ensure!(decoded == op);
         }
         Ok(())
+    }
+
+    // a withdrawal output must be funded for both its payout and its mainchain
+    // fee, since both leave the treasury
+    #[test]
+    fn withdrawal_value_includes_main_fee() {
+        let value = bitcoin::Amount::from_sat(1000);
+        let main_fee = bitcoin::Amount::from_sat(300);
+        let main_address = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"
+            .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+            .unwrap();
+        let withdrawal = Output {
+            address: Address::ALL_ZEROS,
+            content: Content::Withdrawal(output_content::WithdrawalContent {
+                value,
+                main_fee,
+                main_address,
+            }),
+            memo: Vec::new(),
+        };
+        assert_eq!(withdrawal.get_value(), value + main_fee);
+
+        let value_output = |amount| FilledOutput {
+            address: Address::ALL_ZEROS,
+            content: FilledContent::Bitcoin(output_content::BitcoinContent(
+                amount,
+            )),
+            memo: Vec::new(),
+        };
+        let withdrawal_tx = |funding| FilledTransaction {
+            transaction: Transaction {
+                outputs: vec![withdrawal.clone()],
+                ..Default::default()
+            },
+            spent_utxos: vec![value_output(funding)],
+        };
+
+        // inputs covering only the payout are insufficient
+        assert!(withdrawal_tx(value).get_fee().is_err());
+        // inputs covering payout plus mainchain fee fully fund it
+        assert_eq!(
+            withdrawal_tx(value + main_fee).get_fee().unwrap(),
+            bitcoin::Amount::ZERO
+        );
     }
 }
 
