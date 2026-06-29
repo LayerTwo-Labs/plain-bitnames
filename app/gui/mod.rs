@@ -199,21 +199,20 @@ impl EguiApp {
         // Use the cc.gl (a glow::Context) to create graphics shaders and buffers that you can use
         // for e.g. egui::PaintCallback.
         cc.egui_ctx.set_fonts(FONT_DEFINITIONS.clone());
-        let mut style = (*cc.egui_ctx.style()).clone();
-        // Palette found using https://coolors.co/005c80-a0a0a0-0d0630-c1ff9b-ce1483
-        // Default blue, eg. selected buttons
-        const _LAPIS_LAZULI: Color32 = Color32::from_rgb(0x0D, 0x5c, 0x80);
-        // Default grey, eg. grid lines
-        const _CADET_GREY: Color32 = Color32::from_rgb(0xa0, 0xa0, 0xa0);
-        const _VIOLET: Color32 = Color32::from_rgb(0x0D, 0x06, 0x30);
-        const LIGHT_GREEN: Color32 = Color32::from_rgb(0xc1, 0xff, 0x9b);
-        const _RED_VIOLET: Color32 = Color32::from_rgb(0xce, 0x14, 0x83);
-        // Accent color
-        const ACCENT: Color32 = LIGHT_GREEN;
-        // Grid color / accent color
-        style.visuals.widgets.noninteractive.bg_stroke.color = ACCENT;
-
-        cc.egui_ctx.set_style(style);
+        cc.egui_ctx.global_style_mut(|style| {
+            // Palette found using https://coolors.co/005c80-a0a0a0-0d0630-c1ff9b-ce1483
+            // Default blue, eg. selected buttons
+            const _LAPIS_LAZULI: Color32 = Color32::from_rgb(0x0D, 0x5c, 0x80);
+            // Default grey, eg. grid lines
+            const _CADET_GREY: Color32 = Color32::from_rgb(0xa0, 0xa0, 0xa0);
+            const _VIOLET: Color32 = Color32::from_rgb(0x0D, 0x06, 0x30);
+            const LIGHT_GREEN: Color32 = Color32::from_rgb(0xc1, 0xff, 0x9b);
+            const _RED_VIOLET: Color32 = Color32::from_rgb(0xce, 0x14, 0x83);
+            // Accent color
+            const ACCENT: Color32 = LIGHT_GREEN;
+            // Grid color / accent color
+            style.visuals.widgets.noninteractive.bg_stroke.color = ACCENT;
+        });
 
         let activity = Activity::new(app.as_ref());
         let bottom_panel = BottomPanel::new(app.clone());
@@ -238,18 +237,18 @@ impl EguiApp {
 }
 
 impl eframe::App for EguiApp {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        ctx.request_repaint();
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        ui.request_repaint();
         if let Some(app) = self.app.as_ref()
             && !app.wallet.has_seed().unwrap_or(false)
         {
-            egui::CentralPanel::default().show(ctx, |_ui| {
-                egui::Window::new("Set Seed").show(ctx, |ui| {
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                egui::Window::new("Set Seed").show(ui, |ui| {
                     self.set_seed.show(app, ui);
                 });
             });
         } else {
-            egui::TopBottomPanel::top("tabs").show(ctx, |ui| {
+            egui::Panel::top("tabs").show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     Tab::iter().for_each(|tab_variant| {
                         let tab_name = tab_variant.to_string();
@@ -261,29 +260,33 @@ impl eframe::App for EguiApp {
                     })
                 });
             });
-            egui::TopBottomPanel::bottom("bottom_panel")
-                .show(ctx, |ui| self.bottom_panel.show(&mut self.miner, ui));
-            egui::CentralPanel::default().show(ctx, |ui| match self.tab {
-                Tab::ParentChain => {
-                    self.parent_chain.show(self.app.as_ref(), ui)
-                }
-                Tab::Coins => {
-                    let () = self.coins.show(self.app.as_ref(), ui).unwrap();
-                }
-                Tab::BitNames => {
-                    self.bitnames.show(self.app.as_ref(), ui);
-                }
-                Tab::Paymail => {
-                    self.paymail.show(self.app.as_ref(), ui).unwrap()
-                }
-                Tab::Messaging => {
-                    self.messaging.show(self.app.as_ref(), ui);
-                }
-                Tab::Activity => {
-                    self.activity.show(self.app.as_ref(), ui);
-                }
-                Tab::ConsoleLogs => {
-                    self.console_logs.show(self.app.as_ref(), ui);
+            egui::Panel::bottom("bottom_panel").show_inside(ui, |ui| {
+                self.bottom_panel.show(&mut self.miner, ui)
+            });
+            egui::CentralPanel::default().show_inside(ui, |ui| {
+                match self.tab {
+                    Tab::ParentChain => {
+                        self.parent_chain.show(self.app.as_ref(), ui)
+                    }
+                    Tab::Coins => {
+                        let () =
+                            self.coins.show(self.app.as_ref(), ui).unwrap();
+                    }
+                    Tab::BitNames => {
+                        self.bitnames.show(self.app.as_ref(), ui);
+                    }
+                    Tab::Paymail => {
+                        self.paymail.show(self.app.as_ref(), ui).unwrap()
+                    }
+                    Tab::Messaging => {
+                        self.messaging.show(self.app.as_ref(), ui);
+                    }
+                    Tab::Activity => {
+                        self.activity.show(self.app.as_ref(), ui);
+                    }
+                    Tab::ConsoleLogs => {
+                        self.console_logs.show(self.app.as_ref(), ui);
+                    }
                 }
             });
         }

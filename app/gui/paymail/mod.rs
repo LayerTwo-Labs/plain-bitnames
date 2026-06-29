@@ -29,13 +29,13 @@ impl Paymail {
         ui: &mut egui::Ui,
     ) -> anyhow::Result<()> {
         ui.heading("My Paymail");
-        egui::TopBottomPanel::top("paymail_tabs").show(ui.ctx(), |ui| {
+        egui::Panel::top("paymail_tabs").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.tab, Tab::Inbox, "inbox");
                 ui.selectable_value(&mut self.tab, Tab::Settings, "settings");
             });
         });
-        egui::CentralPanel::default().show(ui.ctx(), |ui| match self.tab {
+        egui::CentralPanel::default().show_inside(ui, |ui| match self.tab {
             Tab::Inbox => {
                 self.inbox.show(app, &self.settings, ui);
             }

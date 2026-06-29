@@ -96,9 +96,11 @@ pub enum Error {
     #[error("borsh serialization error")]
     BorshSerialize(#[from] borsh::io::Error),
     #[error("ed25519_dalek error")]
-    DalekError(#[from] SignatureError),
-    #[error("bincode error")]
-    BincodeError(#[from] bincode::Error),
+    Dalek(#[from] SignatureError),
+    #[error("not enough authorizations")]
+    NotEnoughAuthorizations,
+    #[error("too many authorizations")]
+    TooManyAuthorizations,
     #[error(
         "wrong key for address: address = {address},
          hash(verifying_key) = {hash_verifying_key}"
@@ -170,6 +172,14 @@ fn tx_msg_canonical(tx: &Transaction) -> borsh::io::Result<Vec<u8>> {
 pub fn verify_authorized_transaction(
     transaction: &AuthorizedTransaction,
 ) -> Result<(), Error> {
+    let verifications_required = &transaction.transaction.inputs.len();
+    match transaction.authorizations.len().cmp(verifications_required) {
+        std::cmp::Ordering::Less => return Err(Error::NotEnoughAuthorizations),
+        std::cmp::Ordering::Equal => (),
+        std::cmp::Ordering::Greater => {
+            return Err(Error::TooManyAuthorizations);
+        }
+    }
     let tx_msg_canonical = tx_msg_canonical(&transaction.transaction)?;
     let messages: Vec<_> = std::iter::repeat_n(
         tx_msg_canonical.as_slice(),

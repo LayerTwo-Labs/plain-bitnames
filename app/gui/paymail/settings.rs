@@ -56,7 +56,7 @@ impl Settings {
     }
 
     pub fn show(&mut self, ui: &mut egui::Ui) {
-        egui::SidePanel::left("Inbox")
+        egui::Panel::left("Inbox")
             //.exact_width(250.)
             .show_inside(ui, |ui| {
                 ui.vertical(|ui| {
@@ -67,7 +67,7 @@ impl Settings {
                     );
                 });
             });
-        egui::CentralPanel::default().show(ui.ctx(), |ui| match self.tab {
+        egui::CentralPanel::default().show_inside(ui, |ui| match self.tab {
             Tab::BitnameInboxes => {
                 self.show_bitname_inboxes(ui);
             }

@@ -434,8 +434,10 @@ mod filled {
     use serde::{Deserialize, Serialize};
     use utoipa::{PartialSchema, ToSchema};
 
-    use super::Content;
-    use crate::{BitName, Hash, Txid};
+    use crate::{
+        BitName, Hash, Txid,
+        transaction::{Content, output_content},
+    };
 
     /// Defines a Filled enum with the specified visibility, name,
     /// derives, and attributes for each variant
@@ -459,8 +461,8 @@ mod filled {
                 $(
                     $(#[$bitcoin_attr])*
                 )?
-                Bitcoin(super::BitcoinContent),
-                BitcoinWithdrawal(super::WithdrawalContent),
+                Bitcoin(output_content::BitcoinContent),
+                BitcoinWithdrawal(output_content::WithdrawalContent),
                 BitName(BitName),
                 /// Reservation txid and commitment
                 BitNameReservation(
@@ -506,6 +508,12 @@ mod filled {
     );
 
     impl Filled {
+        /// Constructs a new filled Bitcoin value output
+        #[inline(always)]
+        pub fn new_bitcoin_value(amount: bitcoin::Amount) -> Self {
+            Self::Bitcoin(output_content::BitcoinContent(amount))
+        }
+
         /// returns the BitName ID (name hash) if the filled output content
         /// corresponds to a BitName output.
         pub fn bitname(&self) -> Option<&BitName> {

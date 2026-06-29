@@ -27,7 +27,7 @@ pub struct BitNames {
 
 impl BitNames {
     pub fn show(&mut self, app: Option<&App>, ui: &mut egui::Ui) {
-        egui::TopBottomPanel::top("bitnames_tabs").show(ui.ctx(), |ui| {
+        egui::Panel::top("bitnames_tabs").show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 Tab::iter().for_each(|tab_variant| {
                     let tab_name = tab_variant.to_string();
@@ -35,7 +35,7 @@ impl BitNames {
                 })
             });
         });
-        egui::CentralPanel::default().show(ui.ctx(), |ui| match self.tab {
+        egui::CentralPanel::default().show_inside(ui, |ui| match self.tab {
             Tab::AllBitNames => {
                 let () = self.all_bitnames.show(app, ui);
             }

@@ -68,8 +68,8 @@ impl EncryptMessage {
             };
             self.receiver_pubkey = Some(receiver_pubkey);
         }
-        let plaintext_response = egui::SidePanel::left("plaintext message")
-            .exact_width(ui.available_width() / 2.)
+        let plaintext_response = egui::Panel::left("plaintext message")
+            .exact_size(ui.available_width() / 2.)
             .resizable(false)
             .show_inside(ui, |ui| {
                 ui.vertical_centered(|ui| {
