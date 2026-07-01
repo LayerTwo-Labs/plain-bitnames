@@ -61,11 +61,11 @@ pub struct VkDoesNotExistError {
 pub struct WalletEnv;
 
 type DatabaseUnique<KC, DC> = sneed::DatabaseUnique<KC, DC, WalletEnv>;
-type RoTxn<'a> = sneed::RoTxn<'a, WalletEnv>;
+type RoTxn<'a> = sneed::RoTxn<'a, heed::AnyTls, WalletEnv>;
 
 #[derive(Clone)]
 pub struct Wallet {
-    pub env: sneed::Env<WalletEnv>,
+    pub env: sneed::Env<heed::WithoutTls, WalletEnv>,
     // Seed is always [u8; 64], but due to serde not implementing serialize
     // for [T; 64], use heed's `Bytes`
     // TODO: Don't store the seed in plaintext.
@@ -100,7 +100,8 @@ impl Wallet {
         std::fs::create_dir_all(path)?;
         let env = {
             use heed::EnvFlags;
-            let mut env_open_options = heed::EnvOpenOptions::new();
+            let mut env_open_options =
+                heed::EnvOpenOptions::new().read_txn_without_tls();
             env_open_options
                 .map_size(10 * 1024 * 1024) // 10MB
                 .max_dbs(Self::NUM_DBS);
@@ -123,8 +124,7 @@ impl Wallet {
                 | EnvFlags::MAP_ASYNC
                 | EnvFlags::NO_SYNC
                 | EnvFlags::NO_META_SYNC
-                | EnvFlags::NO_READ_AHEAD
-                | EnvFlags::NO_TLS;
+                | EnvFlags::NO_READ_AHEAD;
             unsafe { env_open_options.flags(fast_flags) };
             unsafe { Env::open(&env_open_options, path) }?
         };

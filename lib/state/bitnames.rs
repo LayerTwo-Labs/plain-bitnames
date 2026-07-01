@@ -294,10 +294,13 @@ impl Dbs {
     pub const NUM_DBS: u32 = 3;
 
     /// Create / Open DBs. Does not commit the RwTxn.
-    pub(in crate::state) fn new(
-        env: &sneed::Env,
+    pub(in crate::state) fn new<Tls>(
+        env: &sneed::Env<Tls>,
         rwtxn: &mut RwTxn,
-    ) -> Result<Self, env::error::CreateDb> {
+    ) -> Result<Self, env::error::CreateDb>
+    where
+        Tls: heed::TlsUsage,
+    {
         let bitnames = DatabaseUnique::create(env, rwtxn, "bitnames")?;
         let reservations =
             DatabaseUnique::create(env, rwtxn, "bitname_reservations")?;
