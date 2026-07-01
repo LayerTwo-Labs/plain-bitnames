@@ -572,6 +572,9 @@ impl Body {
         }
     }
 
+    /// Size limit in bytes
+    pub const MAX_SIZE: usize = 8 * 1024 * 1024;
+
     pub fn authorized_transactions(&self) -> Vec<AuthorizedTransaction> {
         let mut authorizations_iter = self.authorizations.iter();
         self.transactions
