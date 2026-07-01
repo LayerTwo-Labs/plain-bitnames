@@ -252,7 +252,7 @@ impl Net {
     #[instrument(skip_all, fields(addr), err(Debug))]
     pub fn connect_peer(
         &self,
-        env: sneed::Env,
+        env: sneed::Env<heed::WithoutTls>,
         addr: SocketAddr,
     ) -> Result<(), Error> {
         if self.active_peers.read().contains_key(&addr) {
@@ -309,7 +309,7 @@ impl Net {
     }
 
     pub fn new(
-        env: &sneed::Env,
+        env: &sneed::Env<heed::WithoutTls>,
         archive: Archive,
         network: Network,
         state: State,
@@ -389,7 +389,7 @@ impl Net {
     /// and a new peer was added.
     pub async fn accept_incoming(
         &self,
-        env: sneed::Env,
+        env: sneed::Env<heed::WithoutTls>,
     ) -> Result<Option<SocketAddr>, error::AcceptConnection> {
         tracing::debug!(
             "listening for connections on `{}`",

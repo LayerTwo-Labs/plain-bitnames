@@ -96,7 +96,10 @@ pub struct State {
 impl State {
     pub const NUM_DBS: u32 = bitnames::Dbs::NUM_DBS + 10;
 
-    pub fn new(env: &sneed::Env) -> Result<Self, Error> {
+    pub fn new<Tls>(env: &sneed::Env<Tls>) -> Result<Self, Error>
+    where
+        Tls: heed::TlsUsage,
+    {
         let mut rwtxn = env.write_txn()?;
         let tip = DatabaseUnique::create(env, &mut rwtxn, "tip")?;
         let height = DatabaseUnique::create(env, &mut rwtxn, "height")?;
