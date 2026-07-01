@@ -26,6 +26,12 @@ pub fn validate(
     header: &Header,
     body: &Body,
 ) -> Result<(bitcoin::Amount, MerkleRoot), Error> {
+    let body_size =
+        borsh::object_length(&body).map_err(Error::BorshSerialize)?;
+    if body_size > Body::MAX_SIZE {
+        return Err(Error::BodyTooLarge);
+    }
+
     let tip_hash = state.try_get_tip(rotxn)?;
     if header.prev_side_hash != tip_hash {
         let err = error::InvalidHeader::PrevSideHash {
@@ -123,6 +129,12 @@ pub fn prevalidate(
     header: &Header,
     body: &Body,
 ) -> Result<PrevalidatedBlock, Error> {
+    let body_size =
+        borsh::object_length(&body).map_err(Error::BorshSerialize)?;
+    if body_size > Body::MAX_SIZE {
+        return Err(Error::BodyTooLarge);
+    }
+
     let tip_hash = state.try_get_tip(rotxn)?;
     if header.prev_side_hash != tip_hash {
         let err = error::InvalidHeader::PrevSideHash {
@@ -131,6 +143,7 @@ pub fn prevalidate(
         };
         return Err(Error::InvalidHeader(err));
     };
+
     let mut coinbase_value = bitcoin::Amount::ZERO;
     for output in &body.coinbase {
         coinbase_value = coinbase_value
