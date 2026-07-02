@@ -5416,6 +5416,7 @@ dependencies = [
  "serde_with",
  "sneed",
  "strum 0.28.0",
+ "temp-dir",
  "thiserror 2.0.18",
  "tiny-bip39",
  "tokio",

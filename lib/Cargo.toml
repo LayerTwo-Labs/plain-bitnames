@@ -67,6 +67,9 @@ zeromq = { workspace = true, optional = true }
 workspace = true
 features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
 
+[dev-dependencies]
+temp-dir = { workspace = true }
+
 [features]
 clap = ["dep:clap", "plain_bitnames_types/clap"]
 zmq = ["dep:zeromq"]
