@@ -19,7 +19,11 @@ use futures::{
     stream,
 };
 use nonempty::NonEmpty;
-use sneed::{DbError, EnvError, RwTxn, RwTxnError, db};
+use sneed::{
+    DbError, EnvError, RwTxn, RwTxnError, db, env::error as env_error,
+    rwtxn::error as rwtxn_error,
+};
+use thiserror::Error;
 use tokio::task::{self, JoinHandle};
 use tokio_stream::StreamNotifyClose;
 
@@ -41,9 +45,13 @@ use crate::{
 };
 
 #[allow(clippy::duplicated_attributes)]
-#[derive(thiserror::Error, transitive::Transitive, Debug)]
-#[transitive(from(db::error::IterInit, DbError))]
-#[transitive(from(db::error::IterItem, DbError))]
+#[derive(transitive::Transitive, Debug, Error)]
+#[transitive(
+    from(db::error::IterInit, DbError),
+    from(db::error::IterItem, DbError),
+    from(env_error::WriteTxn, EnvError),
+    from(rwtxn_error::Commit, RwTxnError)
+)]
 pub enum Error {
     #[error("archive error")]
     Archive(#[from] archive::Error),
@@ -395,7 +403,7 @@ fn reorg_to_tip(
             }
             two_way_peg_data
         };
-        let () = connect_tip_(
+        let () = match connect_tip_(
             &mut rwtxn,
             archive,
             mempool,
@@ -403,7 +411,27 @@ fn reorg_to_tip(
             header,
             body,
             &two_way_peg_data,
-        )?;
+        ) {
+            Ok(()) => (),
+            Err(err) => {
+                if is_fatal_reorg_error(&err) {
+                    // The stored body for this block failed validation (e.g. a peer
+                    // supplied a body whose contents do not match the header's merkle
+                    // root). Abort the reorg and discard the invalid body from the
+                    // archive so that the block is reported missing again and the real
+                    // body is re-requested, instead of the archive staying poisoned.
+                    drop(rwtxn);
+                    let mut rwtxn = env.write_txn()?;
+                    let () = archive.delete_body(
+                        &mut rwtxn,
+                        header.hash(),
+                        body,
+                    )?;
+                    rwtxn.commit()?;
+                }
+                return Err(err);
+            }
+        };
         let new_tip_hash = state.try_get_tip(&rwtxn)?.unwrap();
         let bmm_verification =
             archive.get_best_main_verification(&rwtxn, new_tip_hash)?;
@@ -1054,7 +1082,7 @@ impl NetTask {
                                 "rejecting invalid tip from peer"
                             );
                             if let Some(addr) = addr {
-                                self.ctxt.net.remove_active_peer(addr);
+                                let () = self.ctxt.net.remove_active_peer(addr);
                             }
                             false
                         }
@@ -1295,7 +1323,7 @@ mod test {
     // a peer's invalid block (value out > value in) must not be fatal
     #[test]
     fn invalid_peer_block_is_not_fatal() {
-        let err = Error::State(state::Error::NotEnoughValueIn);
+        let err = Error::State(Box::new(state::Error::NotEnoughValueIn));
         assert!(!is_fatal_reorg_error(&err));
     }
 
