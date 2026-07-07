@@ -422,11 +422,8 @@ fn reorg_to_tip(
                     // body is re-requested, instead of the archive staying poisoned.
                     drop(rwtxn);
                     let mut rwtxn = env.write_txn()?;
-                    let () = archive.delete_body(
-                        &mut rwtxn,
-                        header.hash(),
-                        body,
-                    )?;
+                    let () =
+                        archive.delete_body(&mut rwtxn, header.hash(), body)?;
                     rwtxn.commit()?;
                 }
                 return Err(err);
