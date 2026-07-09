@@ -5374,7 +5374,7 @@ checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "plain_bitnames"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "addr",
  "anyhow",
@@ -5434,7 +5434,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -5481,7 +5481,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_cli"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -5504,7 +5504,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_rpc_api"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -5519,7 +5519,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_integration_tests"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "bip300301_enforcer_integration_tests",
@@ -5543,7 +5543,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_types"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "bech32",
@@ -8534,7 +8534,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
