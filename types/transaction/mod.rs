@@ -3,6 +3,7 @@ use std::{borrow::Borrow, io::Cursor};
 use bitcoin::amount::CheckedSum;
 use borsh::{self, BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 use utoipa::{PartialSchema, ToSchema};
 
 #[cfg(feature = "heed")]
@@ -662,6 +663,16 @@ pub struct SpentOutput {
     pub inpoint: InPoint,
 }
 
+#[derive(Debug, Error)]
+pub enum ComputeFeeError {
+    #[error("underfunded (value in < value out)")]
+    Underfunded,
+    #[error("value in overflow")]
+    ValueInOverflow(#[source] AmountOverflowError),
+    #[error("value out overflow")]
+    ValueOutOverflow(#[source] AmountOverflowError),
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FilledTransaction {
     pub transaction: Transaction,
@@ -802,13 +813,17 @@ impl FilledTransaction {
 
     /// returns the difference between the value spent and value out, if it is
     /// non-negative.
-    pub fn fee(&self) -> Result<Option<bitcoin::Amount>, AmountOverflowError> {
-        let spent_value = self.spent_value()?;
-        let value_out = self.value_out()?;
+    pub fn fee(&self) -> Result<bitcoin::Amount, ComputeFeeError> {
+        let spent_value = self
+            .spent_value()
+            .map_err(ComputeFeeError::ValueInOverflow)?;
+        let value_out = self
+            .value_out()
+            .map_err(ComputeFeeError::ValueOutOverflow)?;
         if spent_value < value_out {
-            Ok(None)
+            Err(ComputeFeeError::Underfunded)
         } else {
-            Ok(Some(spent_value - value_out))
+            Ok(spent_value - value_out)
         }
     }
 

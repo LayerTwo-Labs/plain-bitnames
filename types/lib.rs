@@ -22,7 +22,7 @@ pub mod constants;
 pub mod hashes;
 pub mod keys;
 pub mod schema;
-mod transaction;
+pub mod transaction;
 
 pub use address::Address;
 pub use bitname_data::{

@@ -230,12 +230,8 @@ impl RpcServer for RpcServerImpl {
             }
             None => None,
         };
-        let fee_sats = filled_tx
-            .transaction
-            .fee()
-            .map_err(custom_err)?
-            .unwrap()
-            .to_sat();
+        let fee_sats =
+            filled_tx.transaction.fee().map_err(custom_err)?.to_sat();
         let res = TxInfo {
             confirmations,
             fee_sats,
