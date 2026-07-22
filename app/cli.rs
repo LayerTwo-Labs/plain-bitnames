@@ -156,6 +156,9 @@ pub(super) struct Cli {
     /// Forces the P2P listener to loopback and rejects direct peers.
     #[arg(long)]
     tor_proxy_mode: bool,
+    /// The single loopback tunnel peer trusted in Tor proxy mode.
+    #[arg(long, requires = "tor_proxy_mode")]
+    tor_proxy_peer: Option<SocketAddr>,
     /// ZMQ pub/sub address
     #[cfg(feature = "zmq")]
     #[arg(default_value_t = DEFAULT_ZMQ_ADDR, long, short)]
@@ -211,6 +214,7 @@ impl Cli {
             network: self.network,
             rpc_addr: self.rpc_addr,
             tor_proxy_mode: self.tor_proxy_mode,
+            tor_proxy_peer: self.tor_proxy_peer,
             #[cfg(feature = "zmq")]
             zmq_addr: self.zmq_addr,
         })
@@ -231,6 +235,7 @@ pub struct Config {
     pub network: Network,
     pub rpc_addr: SocketAddr,
     pub tor_proxy_mode: bool,
+    pub tor_proxy_peer: Option<SocketAddr>,
     #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
 }

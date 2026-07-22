@@ -249,6 +249,7 @@ impl App {
         let node = runtime.block_on(Node::new(
             config.net_addr,
             config.tor_proxy_mode,
+            config.tor_proxy_peer,
             &config.datadir,
             config.network,
             cusf_mainchain,

@@ -202,29 +202,41 @@ fn loopback_addr(addr: SocketAddr) -> SocketAddr {
     SocketAddr::new(ip, addr.port())
 }
 
-fn peer_address_allowed(tor_proxy_mode: bool, addr: SocketAddr) -> bool {
-    !tor_proxy_mode || addr.ip().is_loopback()
+fn peer_address_allowed(
+    tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
+    addr: SocketAddr,
+) -> bool {
+    !tor_proxy_mode
+        || tor_proxy_peer
+            .map_or_else(|| addr.ip().is_loopback(), |trusted| addr == trusted)
 }
 
 fn is_connected_tunnel_peer(
     tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
     addr: SocketAddr,
     status: PeerConnectionStatus,
 ) -> bool {
     tor_proxy_mode
-        && addr.ip().is_loopback()
+        && peer_address_allowed(true, tor_proxy_peer, addr)
         && status == PeerConnectionStatus::Connected
 }
 
 fn validate_peer_address(
     tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
     addr: SocketAddr,
 ) -> Result<(), Error> {
     if addr.ip().is_unspecified() {
         return Err(Error::UnspecfiedPeerIP(addr.ip()));
     }
-    if !peer_address_allowed(tor_proxy_mode, addr) {
-        return Err(Error::NonLoopbackPeerInTorProxyMode(addr));
+    if !peer_address_allowed(tor_proxy_mode, tor_proxy_peer, addr) {
+        return Err(if tor_proxy_peer.is_some() {
+            Error::UntrustedTorProxyPeer(addr)
+        } else {
+            Error::NonLoopbackPeerInTorProxyMode(addr)
+        });
     }
     Ok(())
 }
@@ -232,13 +244,14 @@ fn validate_peer_address(
 fn queue_transaction_to_peers(
     active_peers: &HashMap<SocketAddr, PeerConnectionHandle>,
     tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
     exclude: &HashSet<SocketAddr>,
     tx: &AuthorizedTransaction,
 ) -> usize {
     let mut queued_peers = 0;
     for (addr, peer_connection_handle) in active_peers {
         if exclude.contains(addr)
-            || !peer_address_allowed(tor_proxy_mode, *addr)
+            || !peer_address_allowed(tor_proxy_mode, tor_proxy_peer, *addr)
         {
             continue;
         }
@@ -289,6 +302,7 @@ pub struct Net {
         mpsc::UnboundedSender<(SocketAddr, Option<PeerConnectionInfo>)>,
     known_peers: DatabaseUnique<SerdeBincode<SocketAddr>, Unit>,
     tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
     _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
@@ -358,6 +372,7 @@ impl Net {
             .filter(|(addr, connection)| {
                 is_connected_tunnel_peer(
                     self.tor_proxy_mode,
+                    self.tor_proxy_peer,
                     **addr,
                     connection.connection_status(),
                 )
@@ -378,7 +393,7 @@ impl Net {
         addr: SocketAddr,
     ) -> Result<(), Error> {
         // Reconnects and manual RPC connections both flow through this check.
-        validate_peer_address(self.tor_proxy_mode, addr)?;
+        validate_peer_address(self.tor_proxy_mode, self.tor_proxy_peer, addr)?;
         if self.active_peers.read().contains_key(&addr) {
             tracing::error!("already connected");
             return Err(error::AlreadyConnected(addr).into());
@@ -432,6 +447,7 @@ impl Net {
         state: State,
         bind_addr: SocketAddr,
         tor_proxy_mode: bool,
+        tor_proxy_peer: Option<SocketAddr>,
     ) -> Result<(Self, PeerInfoRx), Error> {
         let bind_addr = if tor_proxy_mode {
             loopback_addr(bind_addr)
@@ -470,6 +486,7 @@ impl Net {
             peer_info_tx,
             known_peers,
             tor_proxy_mode,
+            tor_proxy_peer,
             _version: version,
         };
         #[allow(clippy::let_and_return)]
@@ -480,8 +497,11 @@ impl Net {
                 .iter(&rotxn)
                 .map_err(DbError::from)?
                 .filter(|(peer_addr, _)| {
-                    let allowed =
-                        peer_address_allowed(tor_proxy_mode, *peer_addr);
+                    let allowed = peer_address_allowed(
+                        tor_proxy_mode,
+                        tor_proxy_peer,
+                        *peer_addr,
+                    );
                     if !allowed {
                         tracing::info!(
                             %peer_addr,
@@ -554,7 +574,9 @@ impl Net {
         };
         let addr = connection.addr();
         tracing::trace!(%addr, "accepted incoming connection");
-        if !self.peer_address_allowed(addr) {
+        // Incoming sidecar streams use ephemeral loopback source ports; only
+        // outbound submission/reconnect trust is pinned to tor_proxy_peer.
+        if !peer_address_allowed(self.tor_proxy_mode, None, addr) {
             tracing::warn!(
                 %addr,
                 "refusing non-loopback connection in Tor proxy mode"
@@ -606,7 +628,7 @@ impl Net {
     }
 
     pub(crate) fn peer_address_allowed(&self, addr: SocketAddr) -> bool {
-        peer_address_allowed(self.tor_proxy_mode, addr)
+        peer_address_allowed(self.tor_proxy_mode, self.tor_proxy_peer, addr)
     }
 
     /// Attempt to push an internal message to the specified peer
@@ -647,6 +669,7 @@ impl Net {
         queue_transaction_to_peers(
             &active_peers,
             self.tor_proxy_mode,
+            self.tor_proxy_peer,
             &exclude,
             &tx,
         )
@@ -679,7 +702,7 @@ mod tests {
     fn tor_proxy_mode_rejects_direct_peer_addresses() {
         let addr = "192.0.2.1:4002".parse().unwrap();
         assert!(matches!(
-            validate_peer_address(true, addr),
+            validate_peer_address(true, None, addr),
             Err(Error::NonLoopbackPeerInTorProxyMode(rejected))
                 if rejected == addr
         ));
@@ -695,7 +718,7 @@ mod tests {
         ];
         let filtered: Vec<_> = persisted
             .into_iter()
-            .filter(|addr| peer_address_allowed(true, *addr))
+            .filter(|addr| peer_address_allowed(true, None, *addr))
             .collect();
 
         assert_eq!(
@@ -710,7 +733,10 @@ mod tests {
     #[test]
     fn tor_proxy_mode_allows_loopback_udp_tunnel_peers() {
         for addr in ["127.0.0.1:4002", "[::1]:4002"] {
-            assert!(validate_peer_address(true, addr.parse().unwrap()).is_ok());
+            assert!(
+                validate_peer_address(true, None, addr.parse().unwrap())
+                    .is_ok()
+            );
         }
     }
 
@@ -751,21 +777,25 @@ mod tests {
 
         assert!(is_connected_tunnel_peer(
             true,
+            None,
             loopback,
             PeerConnectionStatus::Connected
         ));
         assert!(!is_connected_tunnel_peer(
             true,
+            None,
             loopback,
             PeerConnectionStatus::Connecting
         ));
         assert!(!is_connected_tunnel_peer(
             true,
+            None,
             direct,
             PeerConnectionStatus::Connected
         ));
         assert!(!is_connected_tunnel_peer(
             false,
+            None,
             loopback,
             PeerConnectionStatus::Connected
         ));
@@ -787,6 +817,7 @@ mod tests {
                 queue_transaction_to_peers(
                     &connected_peers,
                     true,
+                    None,
                     &HashSet::new(),
                     &transaction,
                 ),
@@ -801,6 +832,7 @@ mod tests {
                 queue_transaction_to_peers(
                     &closed_peers,
                     true,
+                    None,
                     &HashSet::new(),
                     &transaction,
                 ),
@@ -814,6 +846,7 @@ mod tests {
                 queue_transaction_to_peers(
                     &HashMap::from([(direct, direct_peer)]),
                     false,
+                    None,
                     &HashSet::new(),
                     &transaction,
                 ),
@@ -825,6 +858,20 @@ mod tests {
     #[test]
     fn direct_mode_still_allows_non_loopback_peers() {
         let addr = "192.0.2.1:4002".parse().unwrap();
-        assert!(validate_peer_address(false, addr).is_ok());
+        assert!(validate_peer_address(false, None, addr).is_ok());
+    }
+
+    #[test]
+    fn tor_proxy_mode_allows_only_the_configured_tunnel() {
+        let trusted = "127.0.0.1:4100".parse().unwrap();
+        assert!(validate_peer_address(true, Some(trusted), trusted).is_ok());
+        assert!(matches!(
+            validate_peer_address(
+                true,
+                Some(trusted),
+                "127.0.0.1:4200".parse().unwrap()
+            ),
+            Err(Error::UntrustedTorProxyPeer(_))
+        ));
     }
 }

@@ -163,6 +163,7 @@ where
     pub async fn new(
         bind_addr: SocketAddr,
         tor_proxy_mode: bool,
+        tor_proxy_peer: Option<SocketAddr>,
         datadir: &Path,
         network: Network,
         cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
@@ -234,6 +235,7 @@ where
             state.clone(),
             bind_addr,
             tor_proxy_mode,
+            tor_proxy_peer,
         )?;
         let cusf_mainchain_wallet =
             cusf_mainchain_wallet.map(|wallet| Arc::new(Mutex::new(wallet)));
