@@ -6,13 +6,14 @@ use jsonrpsee::{core::RpcResult, proc_macros::rpc};
 use l2l_openapi::open_api;
 use plain_bitnames::{
     authorization::{Dst, Signature},
-    net::{Peer, PeerConnectionStatus},
+    net::{Peer, PeerConnectionStatus, TorProxyStatus},
     types::{
         Address, Authorization, BatchIcannRegistrationData, BitNameData,
-        BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent, Block,
-        BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
-        Header, InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint,
-        Output, OutputContent, PointedOutput, SpentOutput, Transaction,
+        BitNameDataUpdates, BitNameResolution, BitNameSeqId,
+        BitcoinOutputContent, Block, BlockHash, Body, EncryptionPubKey,
+        FilledOutput, FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
+        MutableBitNameData, OutPoint, Output, OutputContent, PaymailEntry,
+        PaymailRecipient, PointedOutput, SpentOutput, Transaction,
         TransactionData, TxIn, Txid, VerifyingKey, WithdrawalBundle,
         WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
         hashes::BitName, schema as bitnames_schema,
@@ -38,12 +39,12 @@ pub struct TxInfo {
     bitnames_schema::BitcoinAddr, bitnames_schema::BitcoinBlockHash,
     bitnames_schema::BitcoinOutPoint, bitnames_schema::BitcoinTransaction,
     bitnames_schema::SocketAddr, Address, Authorization,
-    BatchIcannRegistrationData, BitcoinOutputContent, BitName,
+    BatchIcannRegistrationData, BitcoinOutputContent, BitName, BitNameData,
     BitNameDataUpdates, BitNameSeqId, BlockHash, Body, EncryptionPubKey,
     FilledOutput, FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
-    MutableBitNameData, OutPoint, Output, OutputContent, PeerConnectionStatus,
-    Signature, SpentOutput, Transaction, TransactionData, Txid, TxIn,
-    VerifyingKey, WithdrawalOutputContent,
+    MutableBitNameData, OutPoint, Output, OutputContent, PaymailRecipient,
+    PeerConnectionStatus, Signature, SpentOutput, Transaction, TransactionData,
+    Txid, TxIn, VerifyingKey, WithdrawalOutputContent,
 ])]
 #[rpc(client, server)]
 pub trait Rpc {
@@ -57,12 +58,28 @@ pub trait Rpc {
     async fn bitname_data(&self, bitname_id: BitName)
     -> RpcResult<BitNameData>;
 
+    /// Retrieve BitName data after a transaction in a canonical block.
+    #[method(name = "bitname_data_at_position")]
+    async fn bitname_data_at_position(
+        &self,
+        bitname: BitName,
+        block_hash: BlockHash,
+        tx_index: u32,
+    ) -> RpcResult<BitNameData>;
+
     /// List all BitNames
     #[open_api_method(output_schema(
         PartialSchema = "schema::ArrayTuple<BitName, BitNameData>"
     ))]
     #[method(name = "bitnames")]
     async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>>;
+
+    /// Resolve a BitName to its current owner output, address, and mutable data.
+    #[method(name = "resolve_bitname")]
+    async fn resolve_bitname(
+        &self,
+        bitname: BitName,
+    ) -> RpcResult<BitNameResolution>;
 
     /// Deposit to address
     #[open_api_method(output_schema(PartialSchema = "schema::BitcoinTxid"))]
@@ -175,6 +192,12 @@ pub trait Rpc {
     #[method(name = "get_paymail")]
     async fn get_paymail(&self) -> RpcResult<HashMap<OutPoint, FilledOutput>>;
 
+    /// Get JSON-safe paymail entries, including spent-output history and the
+    /// exact BitNames that owned each output address at confirmation time.
+    /// Under-fee entries are included for local accepted-contact policy.
+    #[method(name = "get_paymail_entries")]
+    async fn get_paymail_entries(&self) -> RpcResult<Vec<PaymailEntry>>;
+
     /// Get transaction by txid
     #[method(name = "get_transaction")]
     async fn get_transaction(
@@ -220,6 +243,12 @@ pub trait Rpc {
     /// List peers
     #[method(name = "list_peers")]
     async fn list_peers(&self) -> RpcResult<Vec<Peer>>;
+
+    /// Return whether Tor proxy mode is active and how many tunnel peers are
+    /// connected.
+    #[open_api_method(output_schema(ToSchema))]
+    #[method(name = "tor_proxy_status")]
+    async fn tor_proxy_status(&self) -> RpcResult<TorProxyStatus>;
 
     /// List all STXOs
     #[open_api_method(output_schema(
@@ -267,6 +296,15 @@ pub trait Rpc {
     /// Reserve a BitName
     #[method(name = "reserve_bitname")]
     async fn reserve_bitname(&self, plain_name: String) -> RpcResult<Txid>;
+
+    /// Update mutable data for an owned BitName while retaining ownership.
+    #[method(name = "update_bitname")]
+    async fn update_bitname(
+        &self,
+        bitname: BitName,
+        updates: BitNameDataUpdates,
+        fee_sats: u64,
+    ) -> RpcResult<Txid>;
 
     /// Set the wallet seed from a mnemonic seed phrase
     #[open_api_method(output_schema(ToSchema))]

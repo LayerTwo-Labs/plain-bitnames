@@ -22,11 +22,11 @@ use crate::{
     authorization::{self, Authorization, Signature, get_address},
     types::{
         Address, AmountOverflowError, AuthorizedTransaction,
-        BitcoinOutputContent, EncryptionPubKey, FilledOutput, GetValue, Hash,
-        InPoint, MutableBitNameData, OutPoint, OutPointKey, Output,
-        OutputContent, SpentOutput, Transaction, TxData, VERSION, VerifyingKey,
-        Version, WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
-        hashes::BitName, keys::Ecies,
+        BitNameDataUpdates, BitcoinOutputContent, EncryptionPubKey,
+        FilledOutput, GetValue, Hash, InPoint, MutableBitNameData, OutPoint,
+        OutPointKey, Output, OutputContent, SpentOutput, Transaction, TxData,
+        VERSION, VerifyingKey, Version, WithdrawalOutputContent,
+        XEncryptionSecretKey, XVerifyingKey, hashes::BitName, keys::Ecies,
     },
     util::Watchable,
 };
@@ -567,6 +567,42 @@ impl Wallet {
         Ok(Transaction::new(inputs, outputs))
     }
 
+    /// Create a transaction that updates mutable data for an owned BitName
+    /// while retaining ownership at the existing BitName output address.
+    pub fn create_bitname_update(
+        &self,
+        bitname: BitName,
+        updates: BitNameDataUpdates,
+        fee: bitcoin::Amount,
+    ) -> Result<Transaction, Error> {
+        let (bitname_outpoint, bitname_output) = self
+            .get_bitnames()?
+            .into_iter()
+            .find(|(_, output)| output.bitname() == Some(&bitname))
+            .ok_or(Error::BitNameNotOwned { bitname })?;
+
+        let (total, coins) = self.select_coins(fee)?;
+        let change = total - fee;
+        let mut inputs: Vec<_> = coins.into_keys().collect();
+        inputs.push(bitname_outpoint);
+
+        let mut outputs = Vec::with_capacity(2);
+        if change != Amount::ZERO {
+            outputs.push(Output::new(
+                self.get_new_address()?,
+                OutputContent::Bitcoin(BitcoinOutputContent(change)),
+            ));
+        }
+        // Keep the BitName output last. State transition logic defines the last
+        // spent/recreated BitName as the record being updated.
+        outputs
+            .push(Output::new(bitname_output.address, OutputContent::BitName));
+
+        let mut transaction = Transaction::new(inputs, outputs);
+        transaction.data = Some(TxData::BitNameUpdate(Box::new(updates)));
+        Ok(transaction)
+    }
+
     /// given a regular transaction, add a bitname reservation.
     /// given a bitname reservation tx, change the reserved name.
     /// panics if the tx is not regular or a bitname reservation tx.
@@ -1016,15 +1052,28 @@ impl Watchable<()> for Wallet {
 
 #[cfg(test)]
 mod test {
-    use crate::wallet::Wallet;
+    use std::collections::HashMap;
 
-    #[test]
-    fn test_get_or_generate_last_address() -> anyhow::Result<()> {
+    use bitcoin::Amount;
+
+    use crate::{
+        types::{
+            BitName, BitNameDataUpdates, FilledOutput, FilledOutputContent,
+            GetValue, OutPoint, OutputContent, TxData, Txid, Update,
+        },
+        wallet::Wallet,
+    };
+
+    fn test_wallet_dir(test_name: &str) -> anyhow::Result<std::path::PathBuf> {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos();
-        let test_dir =
-            std::env::temp_dir().join(format!("bitnames_test_wallet_{nanos}"));
+        Ok(std::env::temp_dir().join(format!("bitnames_{test_name}_{nanos}")))
+    }
+
+    #[test]
+    fn test_get_or_generate_last_address() -> anyhow::Result<()> {
+        let test_dir = test_wallet_dir("test_wallet")?;
 
         // Ensure clean state
         if test_dir.exists() {
@@ -1062,6 +1111,74 @@ mod test {
         assert_eq!(addr3, addr4);
 
         // Clean up
+        let _unused = std::fs::remove_dir_all(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn create_bitname_update_retains_owner_and_pays_fee() -> anyhow::Result<()>
+    {
+        let test_dir = test_wallet_dir("update_bitname")?;
+        let wallet = Wallet::new(&test_dir)?;
+        wallet.set_seed(&[2u8; 64])?;
+
+        let owner_address = wallet.get_new_address()?;
+        let funding_address = wallet.get_new_address()?;
+        let bitname = BitName([3u8; 32]);
+        let bitname_outpoint = OutPoint::Regular {
+            txid: Txid([4u8; 32]),
+            vout: 0,
+        };
+        let funding_outpoint = OutPoint::Regular {
+            txid: Txid([5u8; 32]),
+            vout: 0,
+        };
+        wallet.put_utxos(&HashMap::from([
+            (
+                bitname_outpoint,
+                FilledOutput {
+                    address: owner_address,
+                    content: FilledOutputContent::BitName(bitname),
+                    memo: Vec::new(),
+                },
+            ),
+            (
+                funding_outpoint,
+                FilledOutput::new_bitcoin_value(
+                    funding_address,
+                    Amount::from_sat(1_000),
+                ),
+            ),
+        ]))?;
+
+        let updates = BitNameDataUpdates {
+            commitment: Update::Retain,
+            socket_addr_v4: Update::Retain,
+            socket_addr_v6: Update::Retain,
+            encryption_pubkey: Update::Retain,
+            signing_pubkey: Update::Retain,
+            paymail_fee_sats: Update::Set(2_000),
+        };
+        let transaction = wallet.create_bitname_update(
+            bitname,
+            updates,
+            Amount::from_sat(100),
+        )?;
+
+        assert_eq!(transaction.inputs.len(), 2);
+        assert!(transaction.inputs.contains(&bitname_outpoint));
+        assert!(transaction.inputs.contains(&funding_outpoint));
+        assert_eq!(transaction.outputs.len(), 2);
+        assert_eq!(transaction.outputs[0].get_value(), Amount::from_sat(900));
+        let bitname_output = transaction.outputs.last().unwrap();
+        assert_eq!(bitname_output.address, owner_address);
+        assert!(matches!(bitname_output.content, OutputContent::BitName));
+        assert!(matches!(
+            transaction.data,
+            Some(TxData::BitNameUpdate(updates))
+                if matches!(updates.paymail_fee_sats, Update::Set(2_000))
+        ));
+
         let _unused = std::fs::remove_dir_all(&test_dir);
         Ok(())
     }

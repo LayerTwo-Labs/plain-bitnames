@@ -6,8 +6,8 @@ use thiserror::Error;
 use transitive::Transitive;
 
 use crate::types::{
-    Address, AmountOverflowError, AmountUnderflowError, EncryptionPubKey,
-    VerifyingKey,
+    Address, AmountOverflowError, AmountUnderflowError, BitName,
+    EncryptionPubKey, VerifyingKey,
 };
 
 #[derive(Debug, Error)]
@@ -107,6 +107,8 @@ pub enum Error {
     Authorization(#[from] crate::authorization::Error),
     #[error("bip32 error")]
     Bip32(#[from] bitcoin::bip32::Error),
+    #[error("BitName {bitname} is not owned by this wallet")]
+    BitNameNotOwned { bitname: BitName },
     #[error(transparent)]
     Db(#[from] db::Error),
     #[error("Database env error")]

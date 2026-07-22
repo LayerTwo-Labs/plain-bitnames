@@ -2,6 +2,8 @@ use std::collections::BTreeSet;
 
 use utoipa::openapi::{self, Ref, RefOr, Schema};
 
+use crate::RpcClient as _;
+
 /// Get all component refs
 trait ComponentRefs {
     fn component_refs(&self) -> impl Iterator<Item = &Ref> + '_;
@@ -306,5 +308,49 @@ fn check_schema() -> anyhow::Result<()> {
             anyhow::bail!("No references to {component_ref}")
         }
     }
+    Ok(())
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn bitname_data_at_position_rpc_contract() -> anyhow::Result<()> {
+    use jsonrpsee::{RpcModule, http_client::HttpClientBuilder};
+    use plain_bitnames::types::{
+        BitName, BitNameData, BitNameSeqId, BlockHash, MutableBitNameData,
+    };
+
+    let bitname = BitName([1; 32]);
+    let block_hash = BlockHash([2; 32]);
+    let tx_index = 3;
+    let expected = BitNameData {
+        seq_id: BitNameSeqId::new(4),
+        mutable_data: MutableBitNameData {
+            commitment: Some([5; 32]),
+            paymail_fee_sats: Some(1),
+            ..Default::default()
+        },
+    };
+    let response = expected.clone();
+    let mut module = RpcModule::new(());
+    module.register_method(
+        "bitname_data_at_position",
+        move |params, _, _| {
+            let received: (BitName, BlockHash, u32) = params.parse()?;
+            assert_eq!(received, (bitname, block_hash, tx_index));
+            jsonrpsee::core::RpcResult::Ok(response.clone())
+        },
+    )?;
+    let server = jsonrpsee::server::Server::builder()
+        .build("127.0.0.1:0")
+        .await?;
+    let addr = server.local_addr()?;
+    let handle = server.start(module);
+    let client =
+        HttpClientBuilder::default().build(format!("http://{addr}"))?;
+
+    let actual = client
+        .bitname_data_at_position(bitname, block_hash, tx_index)
+        .await?;
+    assert_eq!(actual, expected);
+    handle.stop()?;
     Ok(())
 }

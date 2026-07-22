@@ -17,7 +17,7 @@ use tonic::transport::Channel;
 use crate::{
     archive::{self, Archive},
     mempool::{self, MemPool},
-    net::{self, Net, Peer},
+    net::{self, Net, Peer, TorProxyStatus},
     state::{self, State},
     types::{
         Address, AmountOverflowError, AmountUnderflowError, Authorized,
@@ -72,6 +72,8 @@ pub enum Error {
     NetTask(#[source] Box<net_task::Error>),
     #[error("No CUSF mainchain wallet client")]
     NoCusfMainchainWalletClient,
+    #[error("block {block_hash} is not on the current canonical chain")]
+    NonCanonicalBlock { block_hash: BlockHash },
     #[error("peer info stream closed")]
     PeerInfoRxClosed,
     #[error("Receive mainchain task response cancelled")]
@@ -80,6 +82,8 @@ pub enum Error {
     SendMainchainTaskRequest,
     #[error("state error")]
     State(#[source] Box<state::Error>),
+    #[error("Tor proxy mode has no connected tunnel peer")]
+    TorProxyUnavailable,
     #[error("Utreexo error: {0}")]
     Utreexo(String),
     #[error("Verify BMM error")]
@@ -116,6 +120,25 @@ impl From<state::Error> for Error {
 pub type FilledTransactionWithPosition =
     (Authorized<FilledTransaction>, Option<TxIn>);
 
+fn ensure_canonical_block(
+    archive: &Archive,
+    rotxn: &sneed::RoTxn,
+    tip: Option<BlockHash>,
+    block_hash: BlockHash,
+) -> Result<(), Error> {
+    let is_canonical = if let Some(tip) = tip
+        && archive.try_get_height(rotxn, block_hash)?.is_some()
+    {
+        archive.is_descendant(rotxn, block_hash, tip)?
+    } else {
+        false
+    };
+    if !is_canonical {
+        return Err(Error::NonCanonicalBlock { block_hash });
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 pub struct Node<MainchainTransport = Channel> {
     archive: Archive,
@@ -139,6 +162,7 @@ where
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         bind_addr: SocketAddr,
+        tor_proxy_mode: bool,
         datadir: &Path,
         network: Network,
         cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
@@ -203,8 +227,14 @@ where
                 archive.clone(),
                 cusf_mainchain.clone(),
             );
-        let (net, peer_info_rx) =
-            Net::new(&env, archive.clone(), network, state.clone(), bind_addr)?;
+        let (net, peer_info_rx) = Net::new(
+            &env,
+            archive.clone(),
+            network,
+            state.clone(),
+            bind_addr,
+            tor_proxy_mode,
+        )?;
         let cusf_mainchain_wallet =
             cusf_mainchain_wallet.map(|wallet| Arc::new(Mutex::new(wallet)));
         let net_task = NetTaskHandle::new(
@@ -320,8 +350,8 @@ where
         Ok(res)
     }
 
-    /** Resolve bitname data at the specified block height.
-     * Returns an error if it does not exist.rror if it does not exist. */
+    /** Resolve BitName data at the specified block height.
+     * Returns an error if it does not exist. */
     pub fn get_bitname_data_at_block_height(
         &self,
         bitname: &BitName,
@@ -332,6 +362,37 @@ where
             .state
             .bitnames()
             .get_bitname_data_at_block_height(&rotxn, bitname, height)
+            .map_err(state::Error::BitName)?)
+    }
+
+    /// Resolve BitName data at an exact transaction position within a block.
+    pub fn get_bitname_data_at_block_position(
+        &self,
+        bitname: &BitName,
+        block_hash: BlockHash,
+        tx_index: u32,
+    ) -> Result<BitNameData, Error> {
+        let rotxn = self.env.read_txn()?;
+        let tip = self.state.try_get_tip(&rotxn)?;
+        ensure_canonical_block(&self.archive, &rotxn, tip, block_hash)?;
+        let height = self.archive.get_height(&rotxn, block_hash)?;
+        let body = self.archive.get_body(&rotxn, block_hash)?;
+        let tx_indexes = body
+            .transactions
+            .iter()
+            .enumerate()
+            .map(|(index, transaction)| (transaction.txid(), index as u32))
+            .collect::<HashMap<_, _>>();
+        Ok(self
+            .state
+            .bitnames()
+            .get_bitname_data_at_block_position(
+                &rotxn,
+                bitname,
+                height,
+                tx_index,
+                &tx_indexes,
+            )
             .map_err(state::Error::BitName)?)
     }
 
@@ -365,13 +426,22 @@ where
         &self,
         transaction: AuthorizedTransaction,
     ) -> Result<(), Error> {
+        let tor_proxy_status = self.net.tor_proxy_status();
+        if !tor_proxy_status.allows_transaction_submission() {
+            return Err(Error::TorProxyUnavailable);
+        }
+        let txid = transaction.transaction.txid();
         {
             let mut rotxn = self.env.write_txn()?;
             self.state.validate_transaction(&rotxn, &transaction)?;
             self.mempool.put(&mut rotxn, &transaction)?;
             rotxn.commit().map_err(RwTxnError::from)?;
         }
-        self.net.push_tx(Default::default(), transaction);
+        let queued_peers = self.net.push_tx(Default::default(), transaction);
+        if tor_proxy_status.tor_proxy_mode && queued_peers == 0 {
+            self.remove_from_mempool(txid)?;
+            return Err(Error::TorProxyUnavailable);
+        }
         Ok(())
     }
 
@@ -695,6 +765,10 @@ where
         self.net.get_active_peers()
     }
 
+    pub fn tor_proxy_status(&self) -> TorProxyStatus {
+        self.net.tor_proxy_status()
+    }
+
     pub async fn request_mainchain_ancestor_infos(
         &self,
         block_hash: bitcoin::BlockHash,
@@ -839,5 +913,93 @@ where
     /// Get a notification whenever the tip changes
     pub fn watch_state(&self) -> impl Stream<Item = ()> {
         self.state.watch()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bitcoin::hashes::Hash as _;
+
+    use super::*;
+
+    fn header(prev_side_hash: Option<BlockHash>, marker: u8) -> Header {
+        Header {
+            merkle_root: [marker; 32].into(),
+            prev_side_hash,
+            prev_main_hash: bitcoin::BlockHash::all_zeros(),
+        }
+    }
+
+    #[test]
+    fn canonical_guard_rejects_old_branch_after_reorg() -> anyhow::Result<()> {
+        let temp_dir =
+            temp_dir::TempDir::with_prefix("plain-bitnames-node-canonical")?;
+        let mut opts = heed::EnvOpenOptions::new();
+        opts.map_size(64 * 1024 * 1024).max_dbs(Archive::NUM_DBS);
+        let env = unsafe { sneed::Env::open(&opts, temp_dir.path()) }?;
+        let archive = Archive::new(&env)?;
+
+        let genesis = header(None, 1);
+        let genesis_hash = genesis.hash();
+        let branch_a = header(Some(genesis_hash), 2);
+        let branch_a_hash = branch_a.hash();
+        let branch_b = header(Some(genesis_hash), 3);
+        let branch_b_hash = branch_b.hash();
+        let mut rwtxn = env.write_txn()?;
+        archive.put_header(&mut rwtxn, &genesis)?;
+        archive.put_header(&mut rwtxn, &branch_a)?;
+        archive.put_header(&mut rwtxn, &branch_b)?;
+        rwtxn.commit()?;
+
+        let rotxn = env.read_txn()?;
+        assert!(
+            ensure_canonical_block(
+                &archive,
+                &rotxn,
+                Some(branch_a_hash),
+                genesis_hash,
+            )
+            .is_ok()
+        );
+        assert!(
+            ensure_canonical_block(
+                &archive,
+                &rotxn,
+                Some(branch_a_hash),
+                branch_a_hash,
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            ensure_canonical_block(
+                &archive,
+                &rotxn,
+                Some(branch_a_hash),
+                branch_b_hash,
+            ),
+            Err(Error::NonCanonicalBlock { block_hash })
+                if block_hash == branch_b_hash
+        ));
+
+        assert!(
+            ensure_canonical_block(
+                &archive,
+                &rotxn,
+                Some(branch_b_hash),
+                branch_b_hash,
+            )
+            .is_ok()
+        );
+        assert!(matches!(
+            ensure_canonical_block(
+                &archive,
+                &rotxn,
+                Some(branch_b_hash),
+                branch_a_hash,
+            ),
+            Err(Error::NonCanonicalBlock { block_hash })
+                if block_hash == branch_a_hash
+        ));
+        Ok(())
     }
 }

@@ -1169,7 +1169,7 @@ impl NetTask {
                             self.ctxt.mempool.put(&mut rwtxn, &new_tx)?;
                             rwtxn.commit().map_err(RwTxnError::from)?;
                             // broadcast
-                            let () = self
+                            let _queued_peers = self
                                 .ctxt
                                 .net
                                 .push_tx(HashSet::from_iter([addr]), new_tx);
@@ -1195,6 +1195,13 @@ impl NetTask {
                     }
                 }
                 MailboxItem::ReconnectPeer(peer_address) => {
+                    if !self.ctxt.net.peer_address_allowed(peer_address) {
+                        tracing::warn!(
+                            %peer_address,
+                            "refusing to reconnect directly in Tor proxy mode"
+                        );
+                        continue;
+                    }
                     match self
                         .ctxt
                         .net

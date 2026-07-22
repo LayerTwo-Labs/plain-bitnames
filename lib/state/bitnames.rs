@@ -1,6 +1,9 @@
 //! Functions and types related to BitNames
 
-use std::net::{SocketAddrV4, SocketAddrV6};
+use std::{
+    collections::HashMap,
+    net::{SocketAddrV4, SocketAddrV6},
+};
 
 use heed::types::SerdeBincode;
 use serde::{Deserialize, Serialize};
@@ -262,6 +265,46 @@ impl BitNameData {
         })
     }
 
+    /// Returns the BitName data as it was after the transaction at `tx_index`
+    /// in a block.
+    pub fn at_block_position(
+        &self,
+        height: u32,
+        tx_index: u32,
+        tx_indexes: &HashMap<Txid, u32>,
+    ) -> Option<crate::types::BitNameData> {
+        let mutable_data = crate::types::MutableBitNameData {
+            commitment: self
+                .commitment
+                .at_block_position(height, tx_index, tx_indexes)?
+                .data,
+            socket_addr_v4: self
+                .socket_addr_v4
+                .at_block_position(height, tx_index, tx_indexes)?
+                .data,
+            socket_addr_v6: self
+                .socket_addr_v6
+                .at_block_position(height, tx_index, tx_indexes)?
+                .data,
+            encryption_pubkey: self
+                .encryption_pubkey
+                .at_block_position(height, tx_index, tx_indexes)?
+                .data,
+            signing_pubkey: self
+                .signing_pubkey
+                .at_block_position(height, tx_index, tx_indexes)?
+                .data,
+            paymail_fee_sats: self
+                .paymail_fee_sats
+                .at_block_position(height, tx_index, tx_indexes)?
+                .data,
+        };
+        Some(crate::types::BitNameData {
+            seq_id: self.seq_id,
+            mutable_data,
+        })
+    }
+
     /// get the current bitname data
     pub fn current(&self) -> crate::types::BitNameData {
         let mutable_data = crate::types::MutableBitNameData {
@@ -392,6 +435,23 @@ impl Dbs {
     ) -> Result<crate::types::BitNameData, Error> {
         self.get_bitname(rotxn, bitname)?
             .at_block_height(height)
+            .ok_or(Error::MissingData {
+                bitname: *bitname,
+                block_height: height,
+            })
+    }
+
+    /// Resolve BitName data at an exact transaction position within a block.
+    pub fn get_bitname_data_at_block_position(
+        &self,
+        rotxn: &RoTxn,
+        bitname: &BitName,
+        height: u32,
+        tx_index: u32,
+        tx_indexes: &HashMap<Txid, u32>,
+    ) -> Result<crate::types::BitNameData, Error> {
+        self.get_bitname(rotxn, bitname)?
+            .at_block_position(height, tx_index, tx_indexes)
             .ok_or(Error::MissingData {
                 bitname: *bitname,
                 block_height: height,

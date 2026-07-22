@@ -9,12 +9,12 @@ use jsonrpsee::{
 
 use plain_bitnames::{
     authorization::{self, Dst, Signature},
-    net::Peer,
+    net::{Peer, TorProxyStatus},
     types::{
-        Address, Authorization, BitName, BitNameData, Block, BlockHash,
-        EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
-        PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
-        WithdrawalBundle,
+        Address, Authorization, BitName, BitNameData, BitNameDataUpdates,
+        BitNameResolution, Block, BlockHash, EncryptionPubKey, FilledOutput,
+        MutableBitNameData, OutPoint, PaymailEntry, PointedOutput, SpentOutput,
+        Transaction, Txid, VerifyingKey, WithdrawalBundle,
         keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
     },
     wallet::Balance,
@@ -62,8 +62,27 @@ impl RpcServer for RpcServerImpl {
             .map_err(custom_err)
     }
 
+    async fn bitname_data_at_position(
+        &self,
+        bitname: BitName,
+        block_hash: BlockHash,
+        tx_index: u32,
+    ) -> RpcResult<BitNameData> {
+        self.app
+            .node
+            .get_bitname_data_at_block_position(&bitname, block_hash, tx_index)
+            .map_err(custom_err)
+    }
+
     async fn bitnames(&self) -> RpcResult<Vec<(BitName, BitNameData)>> {
         self.app.node.bitnames().map_err(custom_err)
+    }
+
+    async fn resolve_bitname(
+        &self,
+        bitname: BitName,
+    ) -> RpcResult<BitNameResolution> {
+        self.app.resolve_bitname(bitname).map_err(custom_err)
     }
 
     async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
@@ -194,6 +213,10 @@ impl RpcServer for RpcServerImpl {
         self.app.get_paymail(None).map_err(custom_err)
     }
 
+    async fn get_paymail_entries(&self) -> RpcResult<Vec<PaymailEntry>> {
+        self.app.get_paymail_entries(None).map_err(custom_err)
+    }
+
     async fn get_transaction(
         &self,
         txid: Txid,
@@ -297,6 +320,10 @@ impl RpcServer for RpcServerImpl {
         Ok(peers)
     }
 
+    async fn tor_proxy_status(&self) -> RpcResult<TorProxyStatus> {
+        Ok(self.app.node.tor_proxy_status())
+    }
+
     async fn list_stxos(&self) -> RpcResult<Vec<PointedOutput<SpentOutput>>> {
         let stxos = self.app.node.get_all_stxos().map_err(custom_err)?;
         let res = stxos
@@ -383,6 +410,17 @@ impl RpcServer for RpcServerImpl {
         let txid = tx.txid();
         self.app.sign_and_send(tx).map_err(custom_err)?;
         Ok(txid)
+    }
+
+    async fn update_bitname(
+        &self,
+        bitname: BitName,
+        updates: BitNameDataUpdates,
+        fee_sats: u64,
+    ) -> RpcResult<Txid> {
+        self.app
+            .update_bitname(bitname, updates, Amount::from_sat(fee_sats))
+            .map_err(custom_err)
     }
 
     async fn set_seed_from_mnemonic(&self, mnemonic: String) -> RpcResult<()> {

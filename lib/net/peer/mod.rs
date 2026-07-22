@@ -442,6 +442,21 @@ impl Drop for ConnectionHandle {
     }
 }
 
+#[cfg(test)]
+pub(in crate::net) fn test_connection_handle(
+    status: PeerConnectionStatus,
+) -> (ConnectionHandle, mpsc::UnboundedReceiver<InternalMessage>) {
+    let (internal_message_tx, internal_message_rx) = mpsc::unbounded();
+    let task = spawn(std::future::pending());
+    let connection_handle = ConnectionHandle {
+        task,
+        received_msg_successfully: Arc::new(AtomicBool::new(false)),
+        status_repr: Arc::new(AtomicBool::new(status.as_repr())),
+        internal_message_tx,
+    };
+    (connection_handle, internal_message_rx)
+}
+
 /// Handle an existing connection
 pub fn handle(
     ctxt: ConnectionContext,

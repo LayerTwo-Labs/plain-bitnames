@@ -11,8 +11,10 @@ use plain_bitnames::{
     miner::{self, Miner},
     node::{self, Node},
     types::{
-        self, Address, AmountOverflowError, BitcoinOutputContent, Body,
-        FilledOutput, GetValue, InPoint, OutPoint, Transaction,
+        self, Address, AmountOverflowError, BitNameDataUpdates,
+        BitNameResolution, BitcoinOutputContent, BlockHash, Body, FilledOutput,
+        GetValue, InPoint, OutPoint, PaymailEntry, PaymailRecipient,
+        Transaction, Txid,
         hashes::BitName,
         proto::mainchain::{
             self,
@@ -46,6 +48,8 @@ pub enum Error {
     Node(#[source] Box<node::Error>),
     #[error("No CUSF mainchain wallet client")]
     NoCusfMainchainWalletClient,
+    #[error("No current owner output exists for BitName {bitname}")]
+    NoBitNameOwnerOutput { bitname: BitName },
     #[error("Failed to request mainchain ancestor info for {block_hash}")]
     RequestMainchainAncestorInfos { block_hash: bitcoin::BlockHash },
     #[error("Unable to verify existence of CUSF mainchain service(s) at {url}")]
@@ -61,6 +65,15 @@ impl From<node::Error> for Error {
     fn from(err: node::Error) -> Self {
         Self::Node(Box::new(err))
     }
+}
+
+type ChainPosition = (u32, u32);
+
+fn ownership_contains(
+    positions: &Range<ChainPosition>,
+    position: ChainPosition,
+) -> bool {
+    positions.contains(&position)
 }
 
 fn update_wallet(node: &Node, wallet: &Wallet) -> Result<(), Error> {
@@ -235,6 +248,7 @@ impl App {
         tracing::debug!("Initializing node...");
         let node = runtime.block_on(Node::new(
             config.net_addr,
+            config.tor_proxy_mode,
             &config.datadir,
             config.network,
             cusf_mainchain,
@@ -306,144 +320,227 @@ impl App {
         self.runtime.block_on(self.get_new_main_address())
     }
 
-    /** Get all paymail.
-     *  If `inbox_whitelist` is `Some`,
-     * only the specified bitnames will be used as inboxes. */
-    pub fn get_paymail(
+    /// Resolve a BitName to its current owner output, address, and mutable data.
+    pub fn resolve_bitname(
+        &self,
+        bitname: BitName,
+    ) -> Result<BitNameResolution, Error> {
+        let data = self.node.get_current_bitname_data(&bitname)?;
+        let (outpoint, output) = self
+            .node
+            .get_all_utxos()?
+            .into_iter()
+            .find(|(_, output)| output.bitname() == Some(&bitname))
+            .ok_or(Error::NoBitNameOwnerOutput { bitname })?;
+        Ok(BitNameResolution {
+            bitname,
+            outpoint,
+            address: output.address,
+            data,
+        })
+    }
+
+    /// Update mutable data for an owned BitName while retaining ownership.
+    pub fn update_bitname(
+        &self,
+        bitname: BitName,
+        updates: BitNameDataUpdates,
+        fee: bitcoin::Amount,
+    ) -> Result<Txid, Error> {
+        let transaction =
+            self.wallet.create_bitname_update(bitname, updates, fee)?;
+        let txid = transaction.txid();
+        self.sign_and_send(transaction)?;
+        Ok(txid)
+    }
+
+    fn confirmed_tx_location(
+        &self,
+        txid: Txid,
+        tip: BlockHash,
+    ) -> Result<Option<(BlockHash, u32, u32)>, Error> {
+        for (block_hash, tx_index) in self.node.get_tx_inclusions(txid)? {
+            if self.node.is_descendant(block_hash, tip)? {
+                let height = self.node.get_height(block_hash)?;
+                return Ok(Some((block_hash, height, tx_index)));
+            }
+        }
+        Ok(None)
+    }
+
+    fn confirmed_outpoint_location(
+        &self,
+        outpoint: OutPoint,
+        tip: BlockHash,
+    ) -> Result<Option<(BlockHash, u32, u32)>, Error> {
+        match outpoint {
+            OutPoint::Regular { txid, vout: _ } => {
+                self.confirmed_tx_location(txid, tip)
+            }
+            OutPoint::Coinbase { .. } | OutPoint::Deposit(_) => Ok(None),
+        }
+    }
+
+    /** Get JSON-safe paymail entries.
+     *  If `inbox_whitelist` is `Some`, only the specified BitNames will be
+     * used as inboxes. Both unspent and spent wallet outputs are considered so
+     * spending a received payment does not erase mailbox history. */
+    pub fn get_paymail_entries(
         &self,
         inbox_whitelist: Option<&HashSet<BitName>>,
-    ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
-        let mut utxos = self.wallet.get_utxos()?;
+    ) -> Result<Vec<PaymailEntry>, Error> {
+        #[derive(Clone)]
+        struct Ownership {
+            bitname: BitName,
+            positions: Range<ChainPosition>,
+        }
+
+        let Some(tip) = self.node.try_get_tip()? else {
+            return Ok(Vec::new());
+        };
+
+        let mut mailbox_outputs = self.wallet.get_utxos()?;
+        for (outpoint, spent_output) in self.wallet.get_stxos()? {
+            mailbox_outputs
+                .entry(outpoint)
+                .or_insert(spent_output.output);
+        }
+
         let mut bitname_utxos = self.wallet.get_bitnames()?;
         let mut bitname_stxos = self.wallet.get_spent_bitnames()?;
         if let Some(inbox_whitelist) = inbox_whitelist {
             bitname_utxos.retain(|_, output| {
-                let Some(bitname) = output.bitname() else {
-                    return false;
-                };
-                inbox_whitelist.contains(bitname)
+                output
+                    .bitname()
+                    .is_some_and(|bitname| inbox_whitelist.contains(bitname))
             });
-            bitname_stxos.retain(|_, output| {
-                let Some(bitname) = output.output.bitname() else {
-                    return false;
-                };
-                inbox_whitelist.contains(bitname)
-            })
-        };
-        let Some(tip) = self.node.try_get_tip()? else {
-            return Ok(HashMap::new());
-        };
-        let outpoints_to_block_heights: HashMap<_, _> = utxos
-            .iter()
-            .map(|(&outpoint, _)| outpoint)
-            .chain(bitname_stxos.iter().map(|(&outpoint, _)| outpoint))
-            .filter_map(|outpoint| match outpoint {
-                OutPoint::Regular { txid, vout: _ } => Some((outpoint, txid)),
-                _ => None,
-            })
-            .map(|(outpoint, txid)| {
-                let inclusions = self.node.get_tx_inclusions(txid)?;
-                let Some(block_hash) =
-                    inclusions.into_keys().try_find(|block_hash| {
-                        self.node.is_descendant(*block_hash, tip)
-                    })?
-                else {
-                    return Ok((outpoint, None));
-                };
-                let height = self.node.get_height(block_hash)?;
-                Ok((outpoint, Some(height)))
-            })
-            .collect::<Result<_, node::Error>>()?;
-        let inpoints_to_block_heights: HashMap<_, _> =
-            bitname_stxos.values()
-                .map(|spent_output| {
-                let txid = match spent_output.inpoint {
-                    InPoint::Regular { txid, vin:_ } => txid,
-                    _ => panic!(
-                        "Impossible: bitname inpoint can only refer to regular tx"
-                    )
-                };
-                let inclusions = self.node.get_tx_inclusions(txid)?;
-                let Some(block_hash) = inclusions.into_keys().try_find(|block_hash| {
-                    self.node.is_descendant(*block_hash, tip)
-                })? else {
-                    return Ok((spent_output.inpoint, None));
-                };
-                let height = self.node.get_height(block_hash)?;
-                Ok((spent_output.inpoint, Some(height)))
-            }).collect::<Result<_, node::Error>>()?;
-        /* associate to each address, a set of pairs of bitname data and
-        ownership period for the bitname. */
-        let mut addrs_to_bitnames_ownership: HashMap<_, HashSet<_>> =
+            bitname_stxos.retain(|_, spent_output| {
+                spent_output
+                    .output
+                    .bitname()
+                    .is_some_and(|bitname| inbox_whitelist.contains(bitname))
+            });
+        }
+
+        let mut ownership_by_address: HashMap<Address, Vec<Ownership>> =
             HashMap::new();
-        // populate with owned bitnames
         for (outpoint, output) in bitname_utxos {
-            let Some(bitname) = output.bitname() else {
+            let Some(&bitname) = output.bitname() else {
                 continue;
             };
-            let bitname_data = self.node.get_current_bitname_data(bitname)?;
-            let Some(height) = outpoints_to_block_heights[&outpoint] else {
+            let Some((_, acquired_height, acquired_tx_index)) =
+                self.confirmed_outpoint_location(outpoint, tip)?
+            else {
                 continue;
             };
-            let owned = Range {
-                start: height,
-                end: u32::MAX,
-            };
-            addrs_to_bitnames_ownership
+            ownership_by_address
                 .entry(output.address)
                 .or_default()
-                .insert((bitname_data, owned));
+                .push(Ownership {
+                    bitname,
+                    positions: (acquired_height, acquired_tx_index)
+                        ..(u32::MAX, u32::MAX),
+                });
         }
-        // populate with spent bitnames
-        for (outpoint, output) in bitname_stxos {
-            let Some(bitname) = output.output.bitname() else {
+        for (outpoint, spent_output) in bitname_stxos {
+            let Some(&bitname) = spent_output.output.bitname() else {
                 continue;
             };
-            let Some(acquired_height) = outpoints_to_block_heights[&outpoint]
+            let Some((_, acquired_height, acquired_tx_index)) =
+                self.confirmed_outpoint_location(outpoint, tip)?
             else {
                 continue;
             };
-            let spent_height = inpoints_to_block_heights[&output.inpoint];
-            let bitname_data = self
-                .node
-                .get_bitname_data_at_block_height(bitname, acquired_height)?;
-            let owned = Range {
-                start: acquired_height,
-                end: spent_height.unwrap_or(u32::MAX),
+            let spent_txid = match spent_output.inpoint {
+                InPoint::Regular { txid, vin: _ } => txid,
+                InPoint::Withdrawal { .. } => continue,
             };
-            addrs_to_bitnames_ownership
-                .entry(output.output.address)
+            let spent_position = self
+                .confirmed_tx_location(spent_txid, tip)?
+                .map_or((u32::MAX, u32::MAX), |(_, height, tx_index)| {
+                    (height, tx_index)
+                });
+            ownership_by_address
+                .entry(spent_output.output.address)
                 .or_default()
-                .insert((bitname_data, owned));
+                .push(Ownership {
+                    bitname,
+                    positions: (acquired_height, acquired_tx_index)
+                        ..spent_position,
+                });
         }
-        // retain if memo exists, and output value >= paymail fee
-        utxos.retain(|outpoint, output| {
+
+        let mut entries = Vec::new();
+        for (outpoint, output) in mailbox_outputs {
             if output.memo.is_empty() {
-                return false;
+                continue;
             }
-            let Some(bitname_data_ownership) =
-                addrs_to_bitnames_ownership.get(&output.address)
+            let Some((block_hash, block_height, tx_index)) =
+                self.confirmed_outpoint_location(outpoint, tip)?
             else {
-                return false;
+                continue;
             };
-            let Some(height) = outpoints_to_block_heights[outpoint] else {
-                return false;
+            let Some(ownerships) = ownership_by_address.get(&output.address)
+            else {
+                continue;
             };
-            let min_fee = bitname_data_ownership
+            let position = (block_height, tx_index);
+            let mut recipients: Vec<_> = ownerships
                 .iter()
-                .filter_map(|(bitname_data, ownership)| {
-                    if !ownership.contains(&height) {
-                        return None;
-                    };
-                    bitname_data.mutable_data.paymail_fee_sats
+                .filter(|ownership| {
+                    ownership_contains(&ownership.positions, position)
                 })
-                .min();
-            let Some(min_fee) = min_fee else {
-                return false;
-            };
-            output.get_value().to_sat() >= min_fee
+                .map(|ownership| -> Result<PaymailRecipient, Error> {
+                    let data = self.node.get_bitname_data_at_block_position(
+                        &ownership.bitname,
+                        block_hash,
+                        tx_index,
+                    )?;
+                    Ok(PaymailRecipient {
+                        bitname: ownership.bitname,
+                        required_fee_sats: data.mutable_data.paymail_fee_sats,
+                        data,
+                    })
+                })
+                .collect::<Result<_, _>>()?;
+            recipients.sort_by_key(|recipient| recipient.bitname);
+            recipients.dedup_by_key(|recipient| recipient.bitname);
+            if recipients.is_empty() {
+                continue;
+            }
+            entries.push(PaymailEntry {
+                outpoint,
+                value_sats: output.get_value().to_sat(),
+                output,
+                block_hash,
+                block_height,
+                tx_index,
+                recipients,
+            });
+        }
+        entries.sort_by_key(|entry| {
+            (entry.block_height, entry.tx_index, entry.outpoint)
         });
-        Ok(utxos)
+        Ok(entries)
+    }
+
+    /** Legacy paymail response.
+     *
+     * New JSON clients should use `get_paymail_entries`, whose vector response
+     * does not use `OutPoint` as a JSON object key. */
+    pub fn get_paymail(
+        &self,
+        inbox_whitelist: Option<&HashSet<BitName>>,
+    ) -> Result<HashMap<OutPoint, FilledOutput>, Error> {
+        let unspent_outpoints: HashSet<_> =
+            self.wallet.get_utxos()?.into_keys().collect();
+        Ok(self
+            .get_paymail_entries(inbox_whitelist)?
+            .into_iter()
+            .filter(|entry| unspent_outpoints.contains(&entry.outpoint))
+            .filter(PaymailEntry::meets_advertised_fee)
+            .map(|entry| (entry.outpoint, entry.output))
+            .collect())
     }
 
     const EMPTY_BLOCK_BMM_BRIBE: bitcoin::Amount =
@@ -644,5 +741,20 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         self.task.abort()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ownership_contains;
+
+    #[test]
+    fn ownership_uses_transaction_order_within_a_block() {
+        let positions = (12, 1)..(12, 4);
+
+        assert!(!ownership_contains(&positions, (12, 0)));
+        assert!(ownership_contains(&positions, (12, 1)));
+        assert!(ownership_contains(&positions, (12, 3)));
+        assert!(!ownership_contains(&positions, (12, 4)));
     }
 }

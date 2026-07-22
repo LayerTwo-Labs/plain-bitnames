@@ -1,5 +1,5 @@
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     ops::Deref,
     path::PathBuf,
     sync::LazyLock,
@@ -35,6 +35,14 @@ const DEFAULT_NET_ADDR: SocketAddr =
 
 const DEFAULT_RPC_ADDR: SocketAddr =
     ipv4_socket_addr([127, 0, 0, 1], 6000 + THIS_SIDECHAIN as u16);
+
+fn loopback_addr(addr: SocketAddr) -> SocketAddr {
+    let ip = match addr.ip() {
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+    };
+    SocketAddr::new(ip, addr.port())
+}
 
 #[cfg(feature = "zmq")]
 const DEFAULT_ZMQ_ADDR: SocketAddr =
@@ -144,6 +152,10 @@ pub(super) struct Cli {
     /// Socket address to host the RPC server
     #[arg(default_value_t = DEFAULT_RPC_ADDR, long, short)]
     rpc_addr: SocketAddr,
+    /// Allow P2P only through loopback UDP tunnel sidecars.
+    /// Forces the P2P listener to loopback and rejects direct peers.
+    #[arg(long)]
+    tor_proxy_mode: bool,
     /// ZMQ pub/sub address
     #[cfg(feature = "zmq")]
     #[arg(default_value_t = DEFAULT_ZMQ_ADDR, long, short)]
@@ -182,6 +194,11 @@ impl Cli {
         } else {
             saturating_pred_level(self.log_level)
         };
+        let net_addr = if self.tor_proxy_mode {
+            loopback_addr(self.net_addr)
+        } else {
+            self.net_addr
+        };
         Ok(Config {
             datadir: self.datadir.0,
             file_log_level: self.file_log_level,
@@ -190,9 +207,10 @@ impl Cli {
             log_level,
             mainchain_grpc_url,
             mnemonic_seed_phrase_path: self.mnemonic_seed_phrase_path,
-            net_addr: self.net_addr,
+            net_addr,
             network: self.network,
             rpc_addr: self.rpc_addr,
+            tor_proxy_mode: self.tor_proxy_mode,
             #[cfg(feature = "zmq")]
             zmq_addr: self.zmq_addr,
         })
@@ -212,6 +230,59 @@ pub struct Config {
     pub net_addr: SocketAddr,
     pub network: Network,
     pub rpc_addr: SocketAddr,
+    pub tor_proxy_mode: bool,
     #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config_from(args: &[&str]) -> Config {
+        Cli::try_parse_from(args).unwrap().get_config().unwrap()
+    }
+
+    #[test]
+    fn tor_proxy_mode_propagates_and_forces_ipv4_loopback() {
+        let config = config_from(&[
+            "plain-bitnames",
+            "--datadir",
+            "test-data",
+            "--net-addr",
+            "0.0.0.0:4002",
+            "--tor-proxy-mode",
+        ]);
+
+        assert!(config.tor_proxy_mode);
+        assert_eq!(config.net_addr, "127.0.0.1:4002".parse().unwrap());
+    }
+
+    #[test]
+    fn tor_proxy_mode_preserves_ipv6_and_port() {
+        let config = config_from(&[
+            "plain-bitnames",
+            "--datadir",
+            "test-data",
+            "--net-addr",
+            "[2001:db8::1]:4102",
+            "--tor-proxy-mode",
+        ]);
+
+        assert_eq!(config.net_addr, "[::1]:4102".parse().unwrap());
+    }
+
+    #[test]
+    fn direct_p2p_mode_remains_the_default() {
+        let config = config_from(&[
+            "plain-bitnames",
+            "--datadir",
+            "test-data",
+            "--net-addr",
+            "192.0.2.1:4002",
+        ]);
+
+        assert!(!config.tor_proxy_mode);
+        assert_eq!(config.net_addr, "192.0.2.1:4002".parse().unwrap());
+    }
 }

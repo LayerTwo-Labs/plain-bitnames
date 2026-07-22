@@ -21,6 +21,7 @@ pub mod bitname_seq_id;
 pub mod constants;
 pub mod hashes;
 pub mod keys;
+mod paymail;
 pub mod schema;
 pub mod transaction;
 
@@ -34,6 +35,7 @@ pub use keys::{
     EncryptionPubKey, VerifyingKey, XEncryptionSecretKey, XPubKey,
     XVerifyingKey,
 };
+pub use paymail::{BitNameResolution, PaymailEntry, PaymailRecipient};
 pub use transaction::{
     Authorized, AuthorizedTransaction, BatchIcannRegistrationData,
     BitcoinOutputContent, Content as OutputContent,
