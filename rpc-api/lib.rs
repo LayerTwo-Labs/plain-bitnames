@@ -343,6 +343,7 @@ pub trait Rpc {
         value: u64,
         fee: u64,
         memo: Option<String>,
+        idempotency_key: Option<String>,
     ) -> RpcResult<Txid>;
 
     /// Verify a signature on a message against the specified verifying key.

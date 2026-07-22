@@ -450,7 +450,7 @@ where
             fee_sats,
         } => {
             let txid = rpc_client
-                .transfer(dest, value_sats, fee_sats, None)
+                .transfer(dest, value_sats, fee_sats, None, None)
                 .await?;
             format!("{txid}")
         }

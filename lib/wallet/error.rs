@@ -121,6 +121,10 @@ pub enum Error {
     EpkDoesNotExist(#[from] EpkDoesNotExist),
     #[error("io error")]
     Io(#[from] std::io::Error),
+    #[error(
+        "idempotency key `{key}` was already used for a different transfer"
+    )]
+    IdempotencyConflict { key: String },
     #[error("no index for address {address}")]
     NoIndex { address: Address },
     #[error(transparent)]

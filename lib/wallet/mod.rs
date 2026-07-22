@@ -51,6 +51,15 @@ pub struct Balance {
     pub available: Amount,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct TransferIntent {
+    address: Address,
+    value_sats: u64,
+    fee_sats: u64,
+    memo: Option<Vec<u8>>,
+    transaction: Transaction,
+}
+
 #[derive(Debug, Error)]
 #[error("Message signature verification key {vk} does not exist")]
 pub struct VkDoesNotExistError {
@@ -88,13 +97,14 @@ pub struct Wallet {
     bitname_reservations: DatabaseUnique<SerdeBincode<[u8; 32]>, Str>,
     /// Associates BitNames with plaintext names
     known_bitnames: DatabaseUnique<SerdeBincode<BitName>, Str>,
+    transfer_intents: DatabaseUnique<Str, SerdeBincode<TransferIntent>>,
     /// Map each verifying key to it's index
     vk_to_index: DatabaseUnique<SerdeBincode<VerifyingKey>, U32<BigEndian>>,
     _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 12;
+    pub const NUM_DBS: u32 = 13;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
@@ -146,6 +156,8 @@ impl Wallet {
             DatabaseUnique::create(&env, &mut rwtxn, "bitname_reservations")?;
         let known_bitnames =
             DatabaseUnique::create(&env, &mut rwtxn, "known_bitnames")?;
+        let transfer_intents =
+            DatabaseUnique::create(&env, &mut rwtxn, "transfer_intents")?;
         let vk_to_index =
             DatabaseUnique::create(&env, &mut rwtxn, "vk_to_index")?;
         let version = DatabaseUnique::create(&env, &mut rwtxn, "version")?;
@@ -165,6 +177,7 @@ impl Wallet {
             stxos,
             bitname_reservations,
             known_bitnames,
+            transfer_intents,
             vk_to_index,
             _version: version,
         })
@@ -565,6 +578,51 @@ impl Wallet {
             ))
         }
         Ok(Transaction::new(inputs, outputs))
+    }
+
+    pub fn create_idempotent_transfer(
+        &self,
+        key: &str,
+        address: Address,
+        value: bitcoin::Amount,
+        fee: bitcoin::Amount,
+        memo: Option<Vec<u8>>,
+    ) -> Result<Transaction, Error> {
+        let matches = |intent: &TransferIntent| {
+            intent.address == address
+                && intent.value_sats == value.to_sat()
+                && intent.fee_sats == fee.to_sat()
+                && intent.memo == memo
+        };
+        let rotxn = self.env.read_txn()?;
+        if let Some(intent) = self.transfer_intents.try_get(&rotxn, key)? {
+            return matches(&intent).then_some(intent.transaction).ok_or_else(
+                || Error::IdempotencyConflict {
+                    key: key.to_owned(),
+                },
+            );
+        }
+        drop(rotxn);
+        let transaction =
+            self.create_transfer(address, value, fee, memo.clone())?;
+        let intent = TransferIntent {
+            address,
+            value_sats: value.to_sat(),
+            fee_sats: fee.to_sat(),
+            memo: memo.clone(),
+            transaction,
+        };
+        let mut rwtxn = self.env.write_txn()?;
+        if let Some(existing) = self.transfer_intents.try_get(&rwtxn, key)? {
+            return matches(&existing)
+                .then_some(existing.transaction)
+                .ok_or_else(|| Error::IdempotencyConflict {
+                    key: key.to_owned(),
+                });
+        }
+        self.transfer_intents.put(&mut rwtxn, key, &intent)?;
+        rwtxn.commit()?;
+        Ok(intent.transaction)
     }
 
     /// Create a transaction that updates mutable data for an owned BitName
@@ -1022,6 +1080,7 @@ impl Watchable<()> for Wallet {
             stxos,
             bitname_reservations,
             known_bitnames,
+            transfer_intents,
             vk_to_index,
             _version: _,
         } = self;
@@ -1036,6 +1095,7 @@ impl Watchable<()> for Wallet {
             stxos.watch().clone(),
             bitname_reservations.watch().clone(),
             known_bitnames.watch().clone(),
+            transfer_intents.watch().clone(),
             vk_to_index.watch().clone(),
         ];
         let streams = StreamMap::from_iter(
@@ -1179,6 +1239,57 @@ mod test {
                 if matches!(updates.paymail_fee_sats, Update::Set(2_000))
         ));
 
+        let _unused = std::fs::remove_dir_all(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn idempotent_transfer_survives_restart_and_rejects_key_reuse()
+    -> anyhow::Result<()> {
+        let test_dir = test_wallet_dir("idempotent_transfer")?;
+        let wallet = Wallet::new(&test_dir)?;
+        wallet.set_seed(&[6u8; 64])?;
+        let funding_address = wallet.get_new_address()?;
+        let destination = wallet.get_new_address()?;
+        wallet.put_utxos(&HashMap::from([(
+            OutPoint::Regular {
+                txid: Txid([7u8; 32]),
+                vout: 0,
+            },
+            FilledOutput::new_bitcoin_value(
+                funding_address,
+                Amount::from_sat(1_000),
+            ),
+        )]))?;
+        let first = wallet.create_idempotent_transfer(
+            "message-id",
+            destination,
+            Amount::from_sat(1),
+            Amount::from_sat(100),
+            Some(vec![1, 2, 3]),
+        )?;
+        drop(wallet);
+        let wallet = Wallet::new(&test_dir)?;
+        let retry = wallet.create_idempotent_transfer(
+            "message-id",
+            destination,
+            Amount::from_sat(1),
+            Amount::from_sat(100),
+            Some(vec![1, 2, 3]),
+        )?;
+        assert_eq!(first.txid(), retry.txid());
+        assert!(
+            wallet
+                .create_idempotent_transfer(
+                    "message-id",
+                    destination,
+                    Amount::from_sat(2),
+                    Amount::from_sat(100),
+                    Some(vec![1, 2, 3]),
+                )
+                .is_err()
+        );
+        drop(wallet);
         let _unused = std::fs::remove_dir_all(&test_dir);
         Ok(())
     }

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, net::SocketAddr};
+use std::{borrow::Cow, collections::HashMap, net::SocketAddr, sync::Mutex};
 
 use bitcoin::Amount;
 use jsonrpsee::{
@@ -44,6 +44,7 @@ where
 
 pub struct RpcServerImpl {
     app: App,
+    transfer_lock: Mutex<()>,
 }
 
 #[async_trait]
@@ -468,7 +469,12 @@ impl RpcServer for RpcServerImpl {
         value_sats: u64,
         fee_sats: u64,
         memo: Option<String>,
+        idempotency_key: Option<String>,
     ) -> RpcResult<Txid> {
+        let _guard = self
+            .transfer_lock
+            .lock()
+            .map_err(|_| custom_err_msg("transfer lock poisoned"))?;
         let memo = match memo {
             None => None,
             Some(memo) => {
@@ -476,18 +482,26 @@ impl RpcServer for RpcServerImpl {
                 Some(hex)
             }
         };
-        let tx = self
-            .app
-            .wallet
-            .create_transfer(
-                dest,
-                Amount::from_sat(value_sats),
-                Amount::from_sat(fee_sats),
-                memo,
-            )
-            .map_err(custom_err)?;
+        let value = Amount::from_sat(value_sats);
+        let fee = Amount::from_sat(fee_sats);
+        let tx = if let Some(key) = idempotency_key {
+            self.app
+                .wallet
+                .create_idempotent_transfer(&key, dest, value, fee, memo)
+        } else {
+            self.app.wallet.create_transfer(dest, value, fee, memo)
+        }
+        .map_err(custom_err)?;
         let txid = tx.txid();
-        self.app.sign_and_send(tx).map_err(custom_err)?;
+        if self
+            .app
+            .node
+            .try_get_transaction(txid)
+            .map_err(custom_err)?
+            .is_none()
+        {
+            self.app.sign_and_send(tx).map_err(custom_err)?;
+        }
         Ok(txid)
     }
 
@@ -609,7 +623,13 @@ pub async fn run_server(
         .await?;
 
     let addr = server.local_addr()?;
-    let handle = server.start(RpcServerImpl { app }.into_rpc());
+    let handle = server.start(
+        RpcServerImpl {
+            app,
+            transfer_lock: Mutex::new(()),
+        }
+        .into_rpc(),
+    );
 
     // In this example we don't care about doing shutdown so let's it run forever.
     // You may use the `ServerHandle` to shut it down or manage it yourself.
