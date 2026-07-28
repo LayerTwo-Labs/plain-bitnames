@@ -508,6 +508,14 @@ impl Dbs {
         bitname_data: &crate::types::MutableBitNameData,
         height: u32,
     ) -> Result<(), Error> {
+        // The registered name must be unregistered. This is enforced by
+        // `validate_bitnames` and by the per-block uniqueness check in
+        // `block::prevalidate`; erroring here rather than overwriting the
+        // existing BitName guards against any unvalidated connection path,
+        // since an overwrite is not invertible by `revert_registration`.
+        if self.bitnames.try_get(rwtxn, &bitname)?.is_some() {
+            return Err(Error::AlreadyRegistered { bitname });
+        }
         // Find the reservation to burn: the spent reservation whose commitment
         // equals keyed_hash(revealed_nonce, name_hash). This is enforced by
         // `validate_bitnames`; returning an error here rather than panicking

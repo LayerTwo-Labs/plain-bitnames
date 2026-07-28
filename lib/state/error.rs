@@ -20,6 +20,8 @@ use crate::types::{
 pub enum BitName {
     #[error("Bitname {bitname} already registered as an ICANN name")]
     AlreadyIcann { bitname: BitNameId },
+    #[error("BitName {bitname} already registered")]
+    AlreadyRegistered { bitname: BitNameId },
     #[error(transparent)]
     Db(Box<db::Error>),
     #[error("Missing BitName {bitname}")]
@@ -194,6 +196,8 @@ pub enum Error {
     ConnectWithdrawalBundleSubmitted(#[from] ConnectWithdrawalBundleSubmitted),
     #[error(transparent)]
     Db(Box<sneed::Error>),
+    #[error("bitname {name_hash} registered more than once within a block")]
+    DuplicateBitNameRegistration { name_hash: BitNameId },
     #[error("failed to fill tx output contents: invalid transaction")]
     FillTxOutputContentsFailed,
     #[error("invalid ICANN name: {plain_name}")]
