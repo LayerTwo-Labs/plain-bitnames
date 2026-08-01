@@ -10,9 +10,18 @@ use crate::{
         AmountOverflowError, Authorization, Body, FilledOutput,
         FilledOutputContent, FilledTransaction, GetAddress as _, GetValue as _,
         Header, InPoint, MerkleRoot, OutPoint, OutPointKey, OutputContent,
-        SpentOutput, TxData, Verify as _,
+        SpentOutput, TxData, Verify as _, constants,
+        transaction::WithdrawalValueRule,
     },
 };
+
+fn withdrawal_rule_for_block(header: &Header) -> WithdrawalValueRule {
+    if constants::LEGACY_WITHDRAWAL_ACCOUNTING_BLOCKS.contains(&header.hash()) {
+        WithdrawalValueRule::PayoutOnly
+    } else {
+        WithdrawalValueRule::PayoutAndMainchainFee
+    }
+}
 
 /// Calculate total number of inputs across all transactions in a block body
 fn calculate_total_inputs(body: &Body) -> usize {
@@ -71,17 +80,25 @@ pub fn validate(
     }
 
     // Process transactions for fee validation
+    let withdrawal_rule = withdrawal_rule_for_block(header);
     for filled_tx in &filled_txs {
         total_fees = total_fees
-            .checked_add(state.validate_filled_transaction(rotxn, filled_tx)?)
+            .checked_add(
+                state.validate_filled_transaction_with_withdrawal_rule(
+                    rotxn,
+                    filled_tx,
+                    withdrawal_rule,
+                )?,
+            )
             .ok_or(AmountOverflowError)?;
     }
     if coinbase_value > total_fees {
         return Err(Error::NotEnoughFees);
     }
-    let merkle_root = Body::compute_merkle_root(
+    let merkle_root = Body::compute_merkle_root_with_withdrawal_rule(
         body.coinbase.as_slice(),
         filled_txs.as_slice(),
+        withdrawal_rule,
     )?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
@@ -175,19 +192,25 @@ pub fn prevalidate(
     }
 
     // Process transactions for fee validation
+    let withdrawal_rule = withdrawal_rule_for_block(header);
     for filled_transaction in &filled_transactions {
         total_fees = total_fees
             .checked_add(
-                state.validate_filled_transaction(rotxn, filled_transaction)?,
+                state.validate_filled_transaction_with_withdrawal_rule(
+                    rotxn,
+                    filled_transaction,
+                    withdrawal_rule,
+                )?,
             )
             .ok_or(AmountOverflowError)?;
     }
     if coinbase_value > total_fees {
         return Err(Error::NotEnoughFees);
     }
-    let computed_merkle_root = Body::compute_merkle_root(
+    let computed_merkle_root = Body::compute_merkle_root_with_withdrawal_rule(
         body.coinbase.as_slice(),
         filled_transactions.as_slice(),
+        withdrawal_rule,
     )?;
     if computed_merkle_root != header.merkle_root {
         let err = Error::InvalidBody {

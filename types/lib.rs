@@ -600,6 +600,21 @@ impl Body {
     where
         FilledTx: Borrow<FilledTransaction> + Sync,
     {
+        Self::compute_merkle_root_with_withdrawal_rule(
+            coinbase,
+            txs,
+            transaction::WithdrawalValueRule::PayoutAndMainchainFee,
+        )
+    }
+
+    pub fn compute_merkle_root_with_withdrawal_rule<FilledTx>(
+        coinbase: &[Output],
+        txs: &[FilledTx],
+        withdrawal_rule: transaction::WithdrawalValueRule,
+    ) -> Result<MerkleRoot, ComputeMerkleRootError>
+    where
+        FilledTx: Borrow<FilledTransaction> + Sync,
+    {
         let CbmtNode {
             commitment: txs_root,
             ..
@@ -619,12 +634,20 @@ impl Body {
                 .enumerate()
                 .map(|(idx, tx)| {
                     let tx = tx.borrow();
-                    let fees = tx.get_fee().map_err(|err| {
-                        ComputeMerkleRootError::FeeComputation {
+                    let fees = tx
+                        .fee_with_withdrawal_rule(withdrawal_rule)
+                        .map_err(|err| ComputeMerkleRootError::FeeComputation {
                             txid: tx.transaction.txid(),
-                            source: err,
-                        }
-                    })?;
+                            source: match err {
+                                transaction::ComputeFeeError::Underfunded => {
+                                    GetFeeError::AmountUnderflow
+                                }
+                                transaction::ComputeFeeError::ValueInOverflow(_)
+                                | transaction::ComputeFeeError::ValueOutOverflow(_) => {
+                                    GetFeeError::AmountOverflow
+                                }
+                            },
+                        })?;
                     let canonical_size = tx.transaction.canonical_size();
                     let leaf_pre_commitment = CbmtLeafPreCommitment {
                         fee: fees,

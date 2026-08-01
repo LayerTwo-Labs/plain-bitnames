@@ -224,7 +224,7 @@ mod test {
         transaction::{
             Content, FilledContent, FilledOutput, FilledTransaction,
             GetValue as _, OUTPOINT_KEY_SIZE, OutPoint, OutPointKey, Output,
-            Transaction, output_content,
+            Transaction, WithdrawalValueRule, output_content,
         },
     };
 
@@ -304,6 +304,73 @@ mod test {
             withdrawal_tx(value + main_fee).get_fee().unwrap(),
             bitcoin::Amount::ZERO
         );
+    }
+
+    #[test]
+    fn historical_withdrawal_changes_validity_at_activation() {
+        let withdrawal = Output {
+            address: Address::ALL_ZEROS,
+            content: Content::Withdrawal(output_content::WithdrawalContent {
+                value: bitcoin::Amount::from_sat(2_000_000),
+                main_fee: bitcoin::Amount::from_sat(10_000),
+                main_address: "tb1qg2muwvd42czzxnh2ewrgt67rfmudzcatz9lmh4"
+                    .parse()
+                    .unwrap(),
+            }),
+            memo: Vec::new(),
+        };
+        let change = Output {
+            address: Address::ALL_ZEROS,
+            content: Content::Bitcoin(output_content::BitcoinContent(
+                bitcoin::Amount::from_sat(2_999_990),
+            )),
+            memo: Vec::new(),
+        };
+        let funding = FilledOutput {
+            address: Address::ALL_ZEROS,
+            content: FilledContent::Bitcoin(output_content::BitcoinContent(
+                bitcoin::Amount::from_sat(5_000_000),
+            )),
+            memo: Vec::new(),
+        };
+        let historical = FilledTransaction {
+            transaction: Transaction {
+                outputs: vec![withdrawal.clone(), change],
+                ..Default::default()
+            },
+            spent_utxos: vec![funding.clone()],
+        };
+
+        assert_eq!(
+            historical
+                .fee_with_withdrawal_rule(WithdrawalValueRule::PayoutOnly,)
+                .unwrap(),
+            bitcoin::Amount::from_sat(10)
+        );
+        assert!(matches!(
+            historical.fee(),
+            Err(super::ComputeFeeError::Underfunded)
+        ));
+
+        let corrected = FilledTransaction {
+            transaction: Transaction {
+                outputs: vec![
+                    withdrawal,
+                    Output {
+                        address: Address::ALL_ZEROS,
+                        content: Content::Bitcoin(
+                            output_content::BitcoinContent(
+                                bitcoin::Amount::from_sat(2_989_990),
+                            ),
+                        ),
+                        memo: Vec::new(),
+                    },
+                ],
+                ..Default::default()
+            },
+            spent_utxos: vec![funding],
+        };
+        assert_eq!(corrected.fee().unwrap(), bitcoin::Amount::from_sat(10));
     }
 }
 
@@ -673,6 +740,17 @@ pub enum ComputeFeeError {
     ValueOutOverflow(#[source] AmountOverflowError),
 }
 
+/// Consensus rule used to value withdrawal outputs.
+///
+/// Drivenet history created before the mainchain-fee accounting change valued
+/// a withdrawal at its payout only. Current transactions must also fund the
+/// mainchain fee paid from the sidechain treasury.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WithdrawalValueRule {
+    PayoutOnly,
+    PayoutAndMainchainFee,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct FilledTransaction {
     pub transaction: Transaction,
@@ -804,9 +882,25 @@ impl FilledTransaction {
 
     /// returns the total value in the outputs
     pub fn value_out(&self) -> Result<bitcoin::Amount, AmountOverflowError> {
+        self.value_out_with_withdrawal_rule(
+            WithdrawalValueRule::PayoutAndMainchainFee,
+        )
+    }
+
+    /// Returns total output value under an explicit withdrawal accounting rule.
+    pub fn value_out_with_withdrawal_rule(
+        &self,
+        rule: WithdrawalValueRule,
+    ) -> Result<bitcoin::Amount, AmountOverflowError> {
         self.outputs()
             .iter()
-            .map(GetValue::get_value)
+            .map(|output| match (&output.content, rule) {
+                (
+                    Content::Withdrawal(withdrawal),
+                    WithdrawalValueRule::PayoutOnly,
+                ) => withdrawal.value,
+                _ => output.get_value(),
+            })
             .checked_sum()
             .ok_or(AmountOverflowError)
     }
@@ -814,11 +908,23 @@ impl FilledTransaction {
     /// returns the difference between the value spent and value out, if it is
     /// non-negative.
     pub fn fee(&self) -> Result<bitcoin::Amount, ComputeFeeError> {
+        self.fee_with_withdrawal_rule(
+            WithdrawalValueRule::PayoutAndMainchainFee,
+        )
+    }
+
+    /// Returns the transaction fee under an explicit withdrawal accounting
+    /// rule. This exists to make historical consensus activation testable; new
+    /// mempool transactions always use [`Self::fee`].
+    pub fn fee_with_withdrawal_rule(
+        &self,
+        rule: WithdrawalValueRule,
+    ) -> Result<bitcoin::Amount, ComputeFeeError> {
         let spent_value = self
             .spent_value()
             .map_err(ComputeFeeError::ValueInOverflow)?;
         let value_out = self
-            .value_out()
+            .value_out_with_withdrawal_rule(rule)
             .map_err(ComputeFeeError::ValueOutOverflow)?;
         if spent_value < value_out {
             Err(ComputeFeeError::Underfunded)

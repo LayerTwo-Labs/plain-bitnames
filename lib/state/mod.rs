@@ -14,7 +14,7 @@ use crate::{
         GetValue as _, Header, InPoint, M6id, MerkleRoot, OutPoint,
         OutPointKey, SpentOutput, Transaction, VERSION, Verify as _, Version,
         WithdrawalBundle, WithdrawalBundleStatus, constants, hashes,
-        proto::mainchain::TwoWayPegData,
+        proto::mainchain::TwoWayPegData, transaction::WithdrawalValueRule,
     },
     util::Watchable,
 };
@@ -494,6 +494,19 @@ impl State {
         rotxn: &RoTxn,
         tx: &FilledTransaction,
     ) -> Result<bitcoin::Amount, Error> {
+        self.validate_filled_transaction_with_withdrawal_rule(
+            rotxn,
+            tx,
+            WithdrawalValueRule::PayoutAndMainchainFee,
+        )
+    }
+
+    pub(crate) fn validate_filled_transaction_with_withdrawal_rule(
+        &self,
+        rotxn: &RoTxn,
+        tx: &FilledTransaction,
+        withdrawal_rule: WithdrawalValueRule,
+    ) -> Result<bitcoin::Amount, Error> {
         let () = self.validate_reservations(tx)?;
         let () = self.validate_bitnames(rotxn, tx)?;
         let () = self.validate_batch_icann(tx)?;
@@ -506,7 +519,7 @@ impl State {
                 });
             }
         }
-        let fee = tx.fee()?;
+        let fee = tx.fee_with_withdrawal_rule(withdrawal_rule)?;
         Ok(fee)
     }
 
@@ -709,6 +722,7 @@ mod test {
             MutableBitNameData, OutPoint, OutPointKey, Output, OutputContent,
             SpentOutput, Transaction, TxData, Txid, VerifyingKey,
             WithdrawalOutputContent,
+            transaction::{ComputeFeeError, WithdrawalValueRule},
         },
     };
 
@@ -932,6 +946,68 @@ mod test {
             state.validate_filled_transaction(&rotxn, &tx),
             Err(crate::state::Error::SpendWithdrawalOutput { .. })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn consensus_validator_reproduces_withdrawal_activation_transition()
+    -> anyhow::Result<()> {
+        let (_temp_dir, env, state) = fresh_state("withdrawal-activation")?;
+        let input = FilledOutput::new_bitcoin_value(
+            Address::ALL_ZEROS,
+            bitcoin::Amount::from_sat(5_000_000),
+        );
+        let withdrawal = Output::new(
+            Address::ALL_ZEROS,
+            OutputContent::Withdrawal(WithdrawalOutputContent {
+                value: bitcoin::Amount::from_sat(2_000_000),
+                main_fee: bitcoin::Amount::from_sat(10_000),
+                main_address: "tb1qg2muwvd42czzxnh2ewrgt67rfmudzcatz9lmh4"
+                    .parse()?,
+            }),
+        );
+        let historical = FilledTransaction {
+            transaction: Transaction::new(
+                vec![OutPoint::Regular {
+                    txid: [1; 32].into(),
+                    vout: 0,
+                }],
+                vec![
+                    withdrawal.clone(),
+                    bitcoin_filled_output(Address::ALL_ZEROS, 2_999_990).into(),
+                ],
+            ),
+            spent_utxos: vec![input.clone()],
+        };
+        let rotxn = env.read_txn()?;
+
+        assert_eq!(
+            state.validate_filled_transaction_with_withdrawal_rule(
+                &rotxn,
+                &historical,
+                WithdrawalValueRule::PayoutOnly,
+            )?,
+            bitcoin::Amount::from_sat(10)
+        );
+        assert!(matches!(
+            state.validate_filled_transaction(&rotxn, &historical),
+            Err(Error::ComputeFee(ComputeFeeError::Underfunded))
+        ));
+
+        let corrected = FilledTransaction {
+            transaction: Transaction::new(
+                historical.transaction.inputs,
+                vec![
+                    withdrawal,
+                    bitcoin_filled_output(Address::ALL_ZEROS, 2_989_990).into(),
+                ],
+            ),
+            spent_utxos: vec![input],
+        };
+        assert_eq!(
+            state.validate_filled_transaction(&rotxn, &corrected)?,
+            bitcoin::Amount::from_sat(10)
+        );
         Ok(())
     }
 
