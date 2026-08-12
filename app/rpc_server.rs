@@ -17,7 +17,7 @@ use plain_bitnames::types::{
     WithdrawalBundle,
     authorization::{self, Dst, Signature},
     keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
-    net::Peer,
+    net::{Peer, PeerAddress},
     wallet::Balance,
 };
 use plain_bitnames_app_rpc_api::{self as rpc_api, node::TxInfo};
@@ -86,11 +86,17 @@ impl rpc_api::open_api::RpcServer for RpcServerImpl<true> {
 
 #[async_trait]
 impl rpc_api::node::PrivateRpcServer for RpcServerImpl<true> {
-    async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
-        self.app.node.connect_peer(addr).map_err(custom_err)
+    async fn connect_peer(&self, addr: PeerAddress) -> RpcResult<()> {
+        let resolved_addr = plain_bitnames::net::resolve_peer_address(addr)
+            .await
+            .map_err(custom_err)?;
+        self.app
+            .node
+            .connect_peer(resolved_addr)
+            .map_err(custom_err)
     }
 
-    async fn forget_peer(&self, addr: SocketAddr) -> RpcResult<()> {
+    async fn forget_peer(&self, addr: PeerAddress) -> RpcResult<()> {
         match self.app.node.forget_peer(&addr) {
             Ok(_) => Ok(()),
             Err(err) => Err(custom_err(err)),

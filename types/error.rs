@@ -190,3 +190,11 @@ pub enum Bech32mDecode {
     #[error("Wrong Bech32 variant. Only Bech32m is accepted.")]
     WrongVariant,
 }
+
+#[derive(Debug, Error)]
+pub enum ParsePeerAddress {
+    #[error("missing port")]
+    MissingPort,
+    #[error(transparent)]
+    Parse(#[from] url::ParseError),
+}

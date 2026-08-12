@@ -25,6 +25,7 @@ pub struct Config {
     pub network: Network,
     pub network_magic_override:
         Option<plain_bitnames::net::peer_message::MagicBytes>,
+    pub peers: Vec<plain_bitnames::types::net::PeerAddress>,
     pub private_rpc_addr: SocketAddr,
     pub rpc_addr: SocketAddr,
     #[cfg(feature = "zmq")]
@@ -169,6 +170,11 @@ pub(super) struct Cli {
     /// Manually provide the network magic bytes
     #[arg(long, value_parser = parse_network_magic)]
     network_magic: Option<[u8; 4]>,
+    /// Additional peers to dial on startup, as `host:port`. May be given
+    /// more than once, and is dialed in addition to the network's built-in
+    /// seed peers.
+    #[arg(long = "add-peer")]
+    peers: Vec<plain_bitnames::types::net::PeerAddress>,
     /// Socket address to host the private RPC server
     #[arg(default_value_t = DEFAULT_RPC_ADDR, long, short)]
     private_rpc_addr: SocketAddr,
@@ -224,6 +230,7 @@ impl Cli {
             net_addr: self.net_addr,
             network: self.network,
             network_magic_override: self.network_magic,
+            peers: self.peers,
             private_rpc_addr: self.private_rpc_addr,
             rpc_addr: self.rpc_addr,
             #[cfg(feature = "zmq")]

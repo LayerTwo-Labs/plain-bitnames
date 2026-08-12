@@ -19,10 +19,7 @@ pub mod open_api {
 }
 
 pub mod node {
-    use std::{
-        collections::{HashMap, HashSet},
-        net::SocketAddr,
-    };
+    use std::collections::{HashMap, HashSet};
 
     use jsonrpsee::{core::RpcResult, proc_macros::rpc};
     use l2l_openapi::open_api;
@@ -36,7 +33,7 @@ pub mod node {
         WithdrawalBundle, WithdrawalOutputContent,
         authorization::Signature,
         hashes::BitName,
-        net::{Peer, PeerConnectionStatus},
+        net::{Peer, PeerAddress, PeerConnectionStatus},
         schema as bitnames_schema,
     };
     use serde::{Deserialize, Serialize};
@@ -50,24 +47,12 @@ pub mod node {
         /// Connect to a peer
         #[open_api_method(output_schema(ToSchema))]
         #[method(name = "connect_peer")]
-        async fn connect_peer(
-            &self,
-            #[open_api_method_arg(schema(
-                ToSchema = "bitnames_schema::SocketAddr"
-            ))]
-            addr: SocketAddr,
-        ) -> RpcResult<()>;
+        async fn connect_peer(&self, addr: PeerAddress) -> RpcResult<()>;
 
         /// Delete peer from known_peers DB.
         /// Connections to the peer are not terminated.
         #[method(name = "forget_peer")]
-        async fn forget_peer(
-            &self,
-            #[open_api_method_arg(schema(
-                PartialSchema = "bitnames_schema::SocketAddr"
-            ))]
-            addr: SocketAddr,
-        ) -> RpcResult<()>;
+        async fn forget_peer(&self, addr: PeerAddress) -> RpcResult<()>;
 
         /// Invalidate a block, potentially re-orging to a valid ancestor of
         /// the current tip.

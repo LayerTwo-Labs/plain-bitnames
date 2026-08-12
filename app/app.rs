@@ -277,15 +277,18 @@ impl App {
         let local_pool = LocalPoolHandle::new(1);
         tracing::debug!("Initializing node...");
         let node = runtime.block_on(Node::new(
-            config.net_addr,
-            &config.datadir,
+            plain_bitnames::node::Config {
+                datadir: &config.datadir,
+                bind_addr: config.net_addr,
+                magic_bytes_override: config.network_magic_override,
+                peers: &config.peers,
+                network: config.network,
+                #[cfg(feature = "zmq")]
+                zmq_addr: config.zmq_addr,
+            },
             cusf_mainchain,
             cusf_mainchain_wallet,
-            config.network_magic_override,
-            config.network,
             &runtime,
-            #[cfg(feature = "zmq")]
-            config.zmq_addr,
         ))?;
         let utxos = {
             let mut utxos = wallet.get_utxos()?;
