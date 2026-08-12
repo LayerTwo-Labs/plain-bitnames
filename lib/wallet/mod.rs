@@ -19,14 +19,16 @@ use thiserror::Error;
 use tokio_stream::{StreamMap, wrappers::WatchStream};
 
 use crate::{
-    authorization::{self, Authorization, Signature, get_address},
     types::{
         Address, AmountOverflowError, AuthorizedTransaction,
         BitcoinOutputContent, EncryptionPubKey, FilledOutput, GetValue, Hash,
         InPoint, MutableBitNameData, OutPoint, OutPointKey, Output,
         OutputContent, SpentOutput, Transaction, TxData, VERSION, VerifyingKey,
         Version, WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
-        hashes::BitName, keys::Ecies, wallet::Balance,
+        authorization::{self, Authorization, Signature, get_address},
+        hashes::BitName,
+        keys::Ecies,
+        wallet::Balance,
     },
     util::Watchable,
 };
@@ -884,10 +886,8 @@ impl Wallet {
                     address: spent_utxo.address,
                 })?;
             let tx_signing_key = self.get_tx_signing_key(&rotxn, index)?;
-            let signature = crate::authorization::sign_tx_esk(
-                &tx_signing_key,
-                &transaction,
-            )?;
+            let signature =
+                authorization::sign_tx_esk(&tx_signing_key, &transaction)?;
             let vk = ed25519_dalek::VerifyingKey::from(&tx_signing_key);
             authorizations.push(Authorization {
                 verifying_key: vk.into(),
@@ -955,7 +955,7 @@ impl Wallet {
 }
 
 impl Watchable<()> for Wallet {
-    type WatchStream = impl Stream<Item = ()>;
+    type WatchStream = std::pin::Pin<Box<dyn Stream<Item = ()> + Send>>;
 
     /// Get a signal that notifies whenever the wallet changes
     fn watch(&self) -> Self::WatchStream {
@@ -991,11 +991,11 @@ impl Watchable<()> for Wallet {
             watchables.into_iter().map(WatchStream::new).enumerate(),
         );
         let streams_len = streams.len();
-        streams.ready_chunks(streams_len).map(|signals| {
+        Box::pin(streams.ready_chunks(streams_len).map(|signals| {
             assert_ne!(signals.len(), 0);
             #[allow(clippy::unused_unit)]
             ()
-        })
+        }))
     }
 }
 
