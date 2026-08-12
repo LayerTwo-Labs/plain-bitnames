@@ -8,12 +8,10 @@ use std::{
 use clap::{Parser, Subcommand};
 use http::HeaderMap;
 use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
-use plain_bitnames::{
+use plain_bitnames::types::{
+    Address, BitName, BlockHash, EncryptionPubKey, MutableBitNameData,
+    THIS_SIDECHAIN, VerifyingKey,
     authorization::{Dst, Signature},
-    types::{
-        Address, BitName, BlockHash, EncryptionPubKey, MutableBitNameData,
-        THIS_SIDECHAIN, VerifyingKey,
-    },
 };
 use plain_bitnames_app_rpc_api::{
     self as rpc_api,

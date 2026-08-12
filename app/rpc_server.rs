@@ -10,18 +10,15 @@ use jsonrpsee::{
     server::Server,
     types::ErrorObject,
 };
-
-use plain_bitnames::{
+use plain_bitnames::types::{
+    Address, Authorization, BitName, BitNameData, Block, BlockHash,
+    EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
+    PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
+    WithdrawalBundle,
     authorization::{self, Dst, Signature},
-    types::{
-        Address, Authorization, BitName, BitNameData, Block, BlockHash,
-        EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
-        PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
-        WithdrawalBundle,
-        keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
-        net::Peer,
-        wallet::Balance,
-    },
+    keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
+    net::Peer,
+    wallet::Balance,
 };
 use plain_bitnames_app_rpc_api::{self as rpc_api, node::TxInfo};
 use tower_http::{

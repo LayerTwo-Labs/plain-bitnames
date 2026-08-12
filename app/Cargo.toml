@@ -20,7 +20,6 @@ fallible-iterator = { workspace = true }
 futures = { workspace = true }
 http = { workspace = true }
 human-size = { workspace = true }
-include_path = { workspace = true }
 itertools = { workspace = true }
 jsonrpsee = { workspace = true, features = ["server"] }
 mimalloc = { workspace = true, features = ["v3"] }
