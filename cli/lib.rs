@@ -10,7 +10,7 @@ use http::HeaderMap;
 use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
 use plain_bitnames::types::{
     Address, BitName, BlockHash, EncryptionPubKey, MutableBitNameData,
-    THIS_SIDECHAIN, VerifyingKey,
+    THIS_SIDECHAIN, Txid, VerifyingKey,
     authorization::{Dst, Signature},
 };
 use plain_bitnames_app_rpc_api::{
@@ -148,6 +148,9 @@ pub enum Command {
     GetWalletMasterXVk,
     /// Get wallet UTXOs
     GetWalletUtxos,
+    /// Invalidate a block, potentially re-orging to a valid ancestor of the
+    /// current tip.
+    InvalidateBlock { block_hash: BlockHash },
     /// Get the height of the latest failed withdrawal bundle
     LatestFailedWithdrawalBundleHeight,
     /// List peers
@@ -174,6 +177,8 @@ pub enum Command {
         #[command(flatten)]
         bitname_data: Box<MutableBitNameData>,
     },
+    /// Remove a tx from the mempool
+    RemoveFromMempool { txid: Txid },
     /// Reserve a BitName
     ReserveBitname { plaintext_name: String },
     /// Resolve a commitment from a BitName
@@ -468,6 +473,10 @@ where
             let utxos = rpc_client.get_wallet_utxos().await?;
             serde_json::to_string_pretty(&utxos)?
         }
+        Command::InvalidateBlock { block_hash } => {
+            let () = rpc_client.invalidate_block(block_hash).await?;
+            String::default()
+        }
         Command::LatestFailedWithdrawalBundleHeight => {
             let height =
                 rpc_client.latest_failed_withdrawal_bundle_height().await?;
@@ -514,6 +523,10 @@ where
                 .register_bitname(plaintext_name, Some(*bitname_data))
                 .await?;
             format!("{txid}")
+        }
+        Command::RemoveFromMempool { txid } => {
+            let () = rpc_client.remove_from_mempool(txid).await?;
+            String::default()
         }
         Command::ReserveBitname { plaintext_name } => {
             let txid = rpc_client.reserve_bitname(plaintext_name).await?;

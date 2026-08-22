@@ -97,6 +97,17 @@ impl rpc_api::node::PrivateRpcServer for RpcServerImpl<true> {
         }
     }
 
+    async fn invalidate_block(&self, block_hash: BlockHash) -> RpcResult<()> {
+        self.app
+            .node
+            .invalidate_block(block_hash)
+            .map_err(custom_err)
+    }
+
+    async fn remove_from_mempool(&self, txid: Txid) -> RpcResult<()> {
+        self.app.node.remove_from_mempool(txid).map_err(custom_err)
+    }
+
     async fn stop(&self) {
         std::process::exit(0);
     }
