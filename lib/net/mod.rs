@@ -143,6 +143,8 @@ pub fn make_server_endpoint(
 pub type PeerInfoRx =
     mpsc::UnboundedReceiver<(SocketAddr, Option<PeerConnectionInfo>)>;
 
+const ALPHANET_SEED_NODE_ADDRS: &[SocketAddr] = &[];
+
 const SIGNET_SEED_NODE_ADDRS: &[SocketAddr] = {
     const SIGNET_MINING_SERVER: SocketAddr = SocketAddr::new(
         std::net::IpAddr::V4(std::net::Ipv4Addr::new(172, 105, 148, 135)),
@@ -167,6 +169,7 @@ const FORKNET_SEED_NODE_ADDRS: &[SocketAddr] = {
 
 const fn seed_node_addrs(network: Network) -> &'static [SocketAddr] {
     match network {
+        Network::Alphanet => ALPHANET_SEED_NODE_ADDRS,
         Network::Signet => SIGNET_SEED_NODE_ADDRS,
         Network::Regtest => &[],
         Network::Forknet => FORKNET_SEED_NODE_ADDRS,
