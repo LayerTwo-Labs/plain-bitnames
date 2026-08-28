@@ -30,7 +30,9 @@ pub use error::{
     WithdrawalBundle as WithdrawalBundleError,
 };
 pub mod hashes;
-pub use hashes::{BitName, BlockHash, Hash, M6id, MerkleRoot, Txid};
+pub use hashes::{
+    BitName, BlockHash, Hash, M6id, MerkleRoot, NonZeroBitcoinBlockHash, Txid,
+};
 pub mod keys;
 pub use keys::{
     EncryptionPubKey, VerifyingKey, XEncryptionSecretKey, XPubKey,
