@@ -2,7 +2,7 @@
 
 use rayon::prelude::*;
 use sneed::{RoTxn, RwTxn};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::{
     state::{Error, PrevalidatedBlock, State, error},
@@ -68,6 +68,19 @@ pub fn validate(
     all_input_keys.par_sort_unstable();
     if all_input_keys.windows(2).any(|w| w[0] == w[1]) {
         return Err(Error::UtxoDoubleSpent);
+    }
+
+    // `validate_bitnames` only checks that a registered name is unregistered
+    // in the pre-block DB, so two registrations for the same name within a
+    // single block would both connect, overwriting the canonical BitName row.
+    // Reject them here, as with double-spent outpoints.
+    let mut registration_name_hashes = HashSet::new();
+    for filled_tx in &filled_txs {
+        if let Some(name_hash) = filled_tx.registration_name_hash()
+            && !registration_name_hashes.insert(name_hash)
+        {
+            return Err(Error::DuplicateBitNameRegistration { name_hash });
+        }
     }
 
     // Process transactions for fee validation
@@ -172,6 +185,19 @@ pub fn prevalidate(
     all_input_keys.par_sort_unstable();
     if all_input_keys.windows(2).any(|w| w[0] == w[1]) {
         return Err(Error::UtxoDoubleSpent);
+    }
+
+    // `validate_bitnames` only checks that a registered name is unregistered
+    // in the pre-block DB, so two registrations for the same name within a
+    // single block would both connect, overwriting the canonical BitName row.
+    // Reject them here, as with double-spent outpoints.
+    let mut registration_name_hashes = HashSet::new();
+    for filled_transaction in &filled_transactions {
+        if let Some(name_hash) = filled_transaction.registration_name_hash()
+            && !registration_name_hashes.insert(name_hash)
+        {
+            return Err(Error::DuplicateBitNameRegistration { name_hash });
+        }
     }
 
     // Process transactions for fee validation
@@ -658,6 +684,7 @@ mod test {
     use crate::{
         authorization::{self, SigningKey},
         state::{
+            Error,
             block::{connect, disconnect_tip, validate},
             test::fresh_state,
         },
@@ -809,6 +836,109 @@ mod test {
         let mut rwtxn = env.write_txn()?;
         let () =
             disconnect_tip(&state, &mut rwtxn, &update_header, &update_body)?;
+        Ok(())
+    }
+
+    /// A block containing two registrations for the same BitName must be
+    /// rejected. Otherwise both connect, the second overwrites the canonical
+    /// BitName, and disconnecting the block fails when the first registration
+    /// is reverted, wedging the node during a reorg.
+    #[test]
+    fn validate_rejects_duplicate_registration_within_block()
+    -> anyhow::Result<()> {
+        let (env, state) = fresh_state("duplicate_registration_within_block")?;
+        let signing_key = SigningKey::from_bytes(&[11; 32]);
+        let verifying_key = signing_key.verifying_key().into();
+        let address = authorization::get_address(&verifying_key);
+
+        let name_hash: Hash = [1; 32];
+        let bitname = BitName(name_hash);
+        // Two distinct nonces over the same name imply two distinct
+        // commitments, and so two distinct valid reservations.
+        let reservations: Vec<_> = [[2; 32], [3; 32]]
+            .into_iter()
+            .enumerate()
+            .map(|(idx, revealed_nonce): (usize, Hash)| {
+                let commitment: Hash =
+                    blake3::keyed_hash(&revealed_nonce, &name_hash).into();
+                let txid = [4 + idx as u8; 32].into();
+                let outpoint = OutPoint::Regular { txid, vout: 0 };
+                (revealed_nonce, commitment, txid, outpoint)
+            })
+            .collect();
+
+        {
+            let mut rwtxn = env.write_txn()?;
+            for (_, commitment, txid, outpoint) in &reservations {
+                state
+                    .bitnames
+                    .put_reservation(&mut rwtxn, txid, commitment)?;
+                state.utxos.put(
+                    &mut rwtxn,
+                    &OutPointKey::from_outpoint(outpoint),
+                    &FilledOutput {
+                        address,
+                        content: FilledOutputContent::BitNameReservation(
+                            *txid,
+                            *commitment,
+                        ),
+                        memo: Vec::new(),
+                    },
+                )?;
+            }
+            rwtxn.commit()?;
+        }
+
+        let mut authorized_txs = Vec::new();
+        let mut filled_txs = Vec::new();
+        for (revealed_nonce, _, _, outpoint) in &reservations {
+            let registration_tx = Transaction {
+                inputs: vec![*outpoint],
+                outputs: vec![Output::new(address, OutputContent::BitName)],
+                memo: Vec::new(),
+                data: Some(TxData::BitNameRegistration {
+                    name_hash: bitname,
+                    revealed_nonce: *revealed_nonce,
+                    bitname_data: Box::new(MutableBitNameData::default()),
+                }),
+            };
+            let filled_tx = {
+                let rotxn = env.read_txn()?;
+                state.fill_transaction(&rotxn, &registration_tx)?
+            };
+            authorized_txs.push(authorization::authorize(
+                &[(address, &signing_key)],
+                registration_tx,
+            )?);
+            filled_txs.push(filled_tx);
+        }
+
+        // Each registration is individually valid.
+        {
+            let rotxn = env.read_txn()?;
+            state
+                .validate_filled_transaction(&rotxn, &filled_txs[0])
+                .expect("a single registration should validate");
+            state
+                .validate_filled_transaction(&rotxn, &filled_txs[1])
+                .expect("a single registration should validate");
+        }
+
+        let body = Body::new(authorized_txs, Vec::new());
+        let merkle_root = Body::compute_merkle_root(&[], &filled_txs)?;
+        let block_header = header(None, merkle_root);
+
+        let rotxn = env.read_txn()?;
+        let err = validate(&state, &rotxn, &block_header, &body)
+            .expect_err("block with duplicate registrations must be rejected");
+        anyhow::ensure!(
+            matches!(
+                err,
+                Error::DuplicateBitNameRegistration { name_hash }
+                    if name_hash == bitname
+            ),
+            "unexpected error: {err:?}"
+        );
         Ok(())
     }
 }
