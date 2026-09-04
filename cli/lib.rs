@@ -115,6 +115,9 @@ pub enum Command {
     GetBlock { block_hash: BlockHash },
     /// Get the current block count
     GetBlockcount,
+    /// Get the block hash at the specified height in the active chain, if it
+    /// exists
+    GetBlockHash { height: u32 },
     /// Assemble a block to blind merge mine, without requesting BMM for it
     GetBlockTemplate,
     /// Get mainchain blocks that commit to a specified block hash
@@ -340,6 +343,10 @@ where
             let accepted =
                 rpc_client.connect_block(block, main_block_hash).await?;
             format!("{accepted}")
+        }
+        Command::GetBlockHash { height } => {
+            let block_hash = rpc_client.get_block_hash(height).await?;
+            serde_json::to_string_pretty(&block_hash)?
         }
         Command::ConnectPeer { addr } => {
             let () = rpc_client.connect_peer(addr).await?;

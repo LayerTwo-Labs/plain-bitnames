@@ -122,6 +122,17 @@ pub mod node {
         #[method(name = "get_block")]
         async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block>;
 
+        /// Get the block hash at the specified height in the active chain,
+        /// if it exists
+        #[open_api_method(output_schema(
+            PartialSchema = "schema::Optional<BlockHash>"
+        ))]
+        #[method(name = "get_block_hash")]
+        async fn get_block_hash(
+            &self,
+            height: u32,
+        ) -> RpcResult<Option<BlockHash>>;
+
         /// Get mainchain blocks that commit to a specified block hash
         #[open_api_method(output_schema(
             PartialSchema = "schema::BitcoinBlockHash"
