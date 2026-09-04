@@ -34,18 +34,16 @@ pub mod node {
         authorization::Signature,
         hashes::BitName,
         net::{Peer, PeerAddress, PeerConnectionStatus},
-        schema as bitnames_schema,
     };
     use serde::{Deserialize, Serialize};
     use utoipa::ToSchema;
 
     use crate::{open_api, schema};
 
-    #[open_api(ref_schemas[])]
+    #[open_api]
     #[rpc(client, server, server_bounds(Self: open_api::RpcServer))]
     pub trait PrivateRpc {
         /// Connect to a peer
-        #[open_api_method(output_schema(ToSchema))]
         #[method(name = "connect_peer")]
         async fn connect_peer(&self, addr: PeerAddress) -> RpcResult<()>;
 
@@ -63,7 +61,6 @@ pub mod node {
         ) -> RpcResult<()>;
 
         /// Remove a tx from the mempool
-        #[open_api_method(output_schema(ToSchema))]
         #[method(name = "remove_from_mempool")]
         async fn remove_from_mempool(&self, txid: Txid) -> RpcResult<()>;
 
@@ -86,9 +83,9 @@ pub mod node {
         Header, InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint,
         Output, OutputContent, PeerConnectionStatus, Signature, SpentOutput,
         Transaction, TransactionData, Txid, TxIn, VerifyingKey,
-        WithdrawalOutputContent, bitnames_schema::BitcoinAddr,
-        bitnames_schema::BitcoinBlockHash, bitnames_schema::BitcoinOutPoint,
-        bitnames_schema::BitcoinTransaction, bitnames_schema::SocketAddr,
+        WithdrawalOutputContent, schema::BitcoinAddr,
+        schema::BitcoinBlockHash, schema::BitcoinOutPoint,
+        schema::BitcoinTransaction, schema::SocketAddr,
     ])]
     #[rpc(client, server, server_bounds(Self: open_api::RpcServer))]
     pub trait Rpc {
@@ -115,7 +112,7 @@ pub mod node {
             &self,
             block: Block,
             #[open_api_method_arg(schema(
-                PartialSchema = "bitnames_schema::BitcoinBlockHash"
+                PartialSchema = "schema::BitcoinBlockHash"
             ))]
             main_block_hash: bitcoin::BlockHash,
         ) -> RpcResult<bool>;
@@ -127,7 +124,7 @@ pub mod node {
 
         /// Get mainchain blocks that commit to a specified block hash
         #[open_api_method(output_schema(
-            PartialSchema = "bitnames_schema::BitcoinBlockHash"
+            PartialSchema = "schema::BitcoinBlockHash"
         ))]
         #[method(name = "get_bmm_inclusions")]
         async fn get_bmm_inclusions(
@@ -137,7 +134,7 @@ pub mod node {
 
         /// Get the best known mainchain block hash
         #[open_api_method(output_schema(
-            PartialSchema = "schema::Optional<bitnames_schema::BitcoinBlockHash>"
+            PartialSchema = "schema::Optional<schema::BitcoinBlockHash>"
         ))]
         #[method(name = "get_best_mainchain_block_hash")]
         async fn get_best_mainchain_block_hash(
@@ -251,7 +248,6 @@ pub mod wallet {
         WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
         authorization::{Dst, Signature},
         hashes::BitName,
-        schema as bitnames_schema,
         wallet::Balance,
     };
     use serde::{Deserialize, Serialize};
@@ -276,8 +272,8 @@ pub mod wallet {
         Body, EncryptionPubKey, FilledOutput, FilledOutputContent, Header,
         MerkleRoot, MutableBitNameData, OutPoint, Output, OutputContent,
         Signature, Transaction, TransactionData, Txid, VerifyingKey,
-        WithdrawalOutputContent, bitnames_schema::BitcoinAddr,
-        bitnames_schema::BitcoinBlockHash, bitnames_schema::BitcoinOutPoint,
+        WithdrawalOutputContent, schema::BitcoinAddr,
+        schema::BitcoinBlockHash, schema::BitcoinOutPoint,
     ])]
     #[rpc(client, server, server_bounds(Self: open_api::RpcServer))]
     pub trait Rpc {
@@ -314,7 +310,7 @@ pub mod wallet {
         async fn create_withdrawal(
             &self,
             #[open_api_method_arg(schema(
-                PartialSchema = "bitnames_schema::BitcoinAddr"
+                PartialSchema = "schema::BitcoinAddr"
             ))]
             mainchain_address: bitcoin::Address<
                 bitcoin::address::NetworkUnchecked,
