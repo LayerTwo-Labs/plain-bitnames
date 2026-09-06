@@ -5,7 +5,6 @@ use blake3::Hasher;
 use borsh::{BorshDeserialize, BorshSerialize};
 use const_hex::FromHex;
 use serde::{Deserialize, Serialize};
-use utoipa::ToSchema;
 
 pub type Hash = [u8; blake3::OUT_LEN];
 
@@ -280,11 +279,8 @@ impl utoipa::ToSchema for BitName {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize, ToSchema,
-)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[repr(transparent)]
-#[schema(value_type = crate::schema::BitcoinOutPoint)]
 #[serde(transparent)]
 pub struct M6id(pub bitcoin::Txid);
 
@@ -292,6 +288,28 @@ impl std::fmt::Display for M6id {
     #[inline(always)]
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
+    }
+}
+
+impl FromStr for M6id {
+    type Err = <bitcoin::Txid as FromStr>::Err;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let inner = bitcoin::Txid::from_str(s)?;
+        Ok(Self(inner))
+    }
+}
+
+impl utoipa::PartialSchema for M6id {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        let obj =
+            utoipa::openapi::Object::with_type(utoipa::openapi::Type::String);
+        utoipa::openapi::RefOr::T(utoipa::openapi::Schema::Object(obj))
+    }
+}
+
+impl utoipa::ToSchema for M6id {
+    fn name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("M6id")
     }
 }
 

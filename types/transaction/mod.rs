@@ -431,6 +431,12 @@ impl Transaction {
         }
     }
 
+    /// Canonical encoding as bytes. The canonical encoding is used for hashing,
+    /// but other encodings may be used at eg. networking, rpc levels.
+    pub fn canonical_bytes(&self) -> borsh::io::Result<Vec<u8>> {
+        borsh::to_vec(&self)
+    }
+
     /// Canonical size in bytes. The canonical encoding is used for hashing,
     /// But other encodings may be used at eg. networking, rpc levels.
     pub fn canonical_size(&self) -> u64 {

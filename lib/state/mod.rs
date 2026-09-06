@@ -1,10 +1,9 @@
 //! Sidechain state as of the current sidechain tip
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use fallible_iterator::FallibleIterator as _;
 use heed::types::SerdeBincode;
-use serde::{Deserialize, Serialize};
 use sneed::{
     DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey,
     db::error as db_error,
@@ -20,6 +19,7 @@ use crate::{
         authorization::{self, Authorization},
         constants, hashes,
         proto::mainchain::TwoWayPegData,
+        state::WithdrawalBundleInfo,
     },
     util::Watchable,
 };
@@ -43,20 +43,6 @@ pub struct PrevalidatedBlock {
     pub total_fees: bitcoin::Amount,
     pub coinbase_value: bitcoin::Amount,
     pub next_height: u32, // Precomputed next height to avoid DB read in write txn
-}
-
-/// Information we have regarding a withdrawal bundle
-#[derive(Debug, Deserialize, Serialize)]
-enum WithdrawalBundleInfo {
-    /// Withdrawal bundle is known
-    Known(WithdrawalBundle),
-    /// Withdrawal bundle is unknown but unconfirmed / failed
-    Unknown,
-    /// If an unknown withdrawal bundle is confirmed, ALL UTXOs are
-    /// considered spent.
-    UnknownConfirmed {
-        spend_utxos: BTreeMap<OutPoint, FilledOutput>,
-    },
 }
 
 type WithdrawalBundlesDb = DatabaseUnique<
@@ -281,6 +267,22 @@ impl State {
                 panic!("missing failure status for {latest_failed_m6id}")
             });
         Ok(Some((failed_height, latest_failed_m6id)))
+    }
+
+    pub fn try_get_withdrawal_bundle(
+        &self,
+        rotxn: &RoTxn,
+        m6id: &M6id,
+    ) -> Result<
+        Option<(WithdrawalBundleInfo, WithdrawalBundleStatus)>,
+        db_error::TryGet,
+    > {
+        let Some((bundle_info, bundle_status)) =
+            self.withdrawal_bundles.try_get(rotxn, m6id)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((bundle_info, bundle_status.latest().value)))
     }
 
     fn fill_transaction(

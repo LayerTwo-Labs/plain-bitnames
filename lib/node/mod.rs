@@ -22,10 +22,11 @@ use crate::{
         Address, AmountOverflowError, AmountUnderflowError, Authorized,
         AuthorizedTransaction, BitName, BitNameData, Block, BlockHash,
         BmmResult, Body, FilledOutput, FilledTransaction, GetValue, Header,
-        Network, OutPoint, OutPointKey, SpentOutput, Tip, Transaction, TxIn,
-        Txid, WithdrawalBundle,
+        M6id, Network, OutPoint, OutPointKey, SpentOutput, Tip, Transaction,
+        TxIn, Txid, WithdrawalBundle, WithdrawalBundleStatus,
         net::{Peer, PeerAddress, ResolvedPeerAddress},
         proto::{self, mainchain},
+        state::WithdrawalBundleInfo,
     },
     util::Watchable,
 };
@@ -669,6 +670,19 @@ where
         } else {
             Ok(None)
         }
+    }
+
+    pub fn try_get_withdrawal_bundle(
+        &self,
+        m6id: &M6id,
+    ) -> Result<Option<(WithdrawalBundleInfo, WithdrawalBundleStatus)>, Error>
+    {
+        let rotxn = self.env.read_txn()?;
+        let res = self
+            .state
+            .try_get_withdrawal_bundle(&rotxn, m6id)
+            .map_err(state::Error::from)?;
+        Ok(res)
     }
 
     pub fn try_get_pending_withdrawal_bundle(

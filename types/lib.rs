@@ -40,6 +40,7 @@ pub use keys::{
 };
 pub mod net;
 pub mod schema;
+pub mod state;
 pub mod transaction;
 pub use transaction::{
     Authorized, AuthorizedTransaction, BatchIcannRegistrationData,
@@ -87,6 +88,15 @@ impl Header {
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub enum WithdrawalBundleEventStatus {
+    Confirmed,
+    Failed,
+    Submitted,
+}
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema,
+)]
 pub enum WithdrawalBundleStatus {
     Confirmed,
     /// Formerly pending bundle
@@ -98,13 +108,6 @@ pub enum WithdrawalBundleStatus {
     /// It may not be possible to account for this withdrawal bundle, if it
     /// double-spends UTXOs.
     SubmittedUnexpected,
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub enum WithdrawalBundleEventStatus {
-    Confirmed,
-    Failed,
-    Submitted,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
