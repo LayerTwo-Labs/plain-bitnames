@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
+    net::SocketAddr,
     ops::Range,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -30,8 +32,6 @@ use tonic_health::{
     ServingStatus,
     pb::{HealthCheckRequest, health_client::HealthClient},
 };
-
-use crate::cli::Config;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -109,6 +109,21 @@ pub struct BlockTemplate {
     pub body: types::Body,
     /// Fees collected by the transactions in the block
     pub fees: bitcoin::Amount,
+}
+
+#[derive(Debug)]
+pub struct Config {
+    pub add_peers: HashSet<plain_bitnames::types::net::PeerAddress>,
+    pub datadir: PathBuf,
+    pub mainchain_grpc_url: url::Url,
+    pub mnemonic_seed_phrase_path: Option<PathBuf>,
+    pub net_addr: SocketAddr,
+    pub network: plain_bitnames::types::Network,
+    pub network_magic_override:
+        Option<plain_bitnames::net::peer_message::MagicBytes>,
+    pub server_names: HashSet<String>,
+    #[cfg(feature = "zmq")]
+    pub zmq_addr: SocketAddr,
 }
 
 #[derive(Clone)]
@@ -218,7 +233,7 @@ impl App {
         Ok(res)
     }
 
-    pub fn new(config: &Config) -> Result<Self, Error> {
+    pub fn new(config: Config) -> Result<Self, Error> {
         // Node launches some tokio tasks for p2p networking, that is why we need a tokio runtime
         // here.
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -278,11 +293,12 @@ impl App {
         tracing::debug!("Initializing node...");
         let node = runtime.block_on(Node::new(
             plain_bitnames::node::Config {
-                datadir: &config.datadir,
+                add_peers: config.add_peers,
                 bind_addr: config.net_addr,
+                datadir: config.datadir,
                 magic_bytes_override: config.network_magic_override,
-                peers: &config.peers,
                 network: config.network,
+                server_names: config.server_names,
                 #[cfg(feature = "zmq")]
                 zmq_addr: config.zmq_addr,
             },

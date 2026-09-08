@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     net::SocketAddr,
-    path::Path,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -42,13 +42,14 @@ use net_task::ZmqPubHandler;
 pub type FilledTransactionWithPosition =
     (Authorized<FilledTransaction>, Option<TxIn>);
 
-#[derive(Clone, Debug)]
-pub struct Config<'a> {
-    pub datadir: &'a Path,
+#[derive(Debug)]
+pub struct Config {
+    pub datadir: PathBuf,
     pub bind_addr: SocketAddr,
     pub magic_bytes_override: Option<crate::net::peer_message::MagicBytes>,
     pub network: Network,
-    pub peers: &'a [PeerAddress],
+    pub add_peers: HashSet<PeerAddress>,
+    pub server_names: HashSet<String>,
     #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
 }
@@ -81,7 +82,7 @@ where
     MainchainTransport: proto::Transport,
 {
     pub async fn new(
-        config: Config<'_>,
+        config: Config,
         cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
         cusf_mainchain_wallet: Option<
             mainchain::WalletClient<MainchainTransport>,
@@ -100,7 +101,8 @@ where
             bind_addr,
             magic_bytes_override,
             network,
-            peers,
+            add_peers,
+            server_names,
             #[cfg(feature = "zmq")]
             zmq_addr,
         } = config;
@@ -160,7 +162,8 @@ where
             network,
             state.clone(),
             bind_addr,
-            peers.iter().cloned().collect(),
+            add_peers,
+            server_names,
         )?;
         let net_task_handle = NetTaskHandle::new(
             runtime,
