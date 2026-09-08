@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     path::Path,
 };
 
@@ -443,22 +443,53 @@ impl Wallet {
         fee: bitcoin::Amount,
         memo: Option<Vec<u8>>,
     ) -> Result<Transaction, Error> {
+        self.create_transaction_many(
+            &BTreeMap::from([(address, value)]),
+            fee,
+            memo,
+        )
+    }
+
+    /// Pay each address in `dests`, and pay the change to a new address
+    pub fn create_transaction_many(
+        &self,
+        dests: &BTreeMap<Address, bitcoin::Amount>,
+        fee: bitcoin::Amount,
+        memo: Option<Vec<u8>>,
+    ) -> Result<Transaction, Error> {
+        if dests.is_empty() {
+            return Err(Error::NoTransferDestination);
+        }
+        let value = dests
+            .values()
+            .try_fold(bitcoin::Amount::ZERO, |total, value| {
+                total.checked_add(*value)
+            })
+            .ok_or(AmountOverflowError)?;
         let (total, coins) = self
             .select_coins(value.checked_add(fee).ok_or(AmountOverflowError)?)?;
         let change = total - value - fee;
         let inputs = coins.into_keys().collect::<Vec<_>>();
-        let mut outputs = vec![Output {
-            address,
-            content: OutputContent::Bitcoin(BitcoinOutputContent(value)),
-            memo: memo.unwrap_or_default(),
-        }];
+        let mut outputs: Vec<Output> = dests
+            .iter()
+            .map(|(address, value)| Output {
+                address: *address,
+                content: OutputContent::Bitcoin(BitcoinOutputContent(*value)),
+                memo: Vec::new(),
+            })
+            .collect();
         if change != Amount::ZERO {
             outputs.push(Output::new(
                 self.get_new_address()?,
                 OutputContent::Bitcoin(BitcoinOutputContent(change)),
             ))
         }
-        Ok(Transaction::new(inputs.into(), outputs.into()))
+        Ok(Transaction {
+            inputs: inputs.into(),
+            outputs: outputs.into(),
+            data: None,
+            memo: memo.unwrap_or_default(),
+        })
     }
 
     /// given a regular transaction, add a bitname reservation.

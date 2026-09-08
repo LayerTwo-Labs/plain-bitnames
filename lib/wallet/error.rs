@@ -116,6 +116,8 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("no index for address {address}")]
     NoIndex { address: Address },
+    #[error("no transfer destination")]
+    NoTransferDestination,
     #[error(transparent)]
     NoSeed(#[from] NoSeed),
     #[error("could not find bitname reservation for `{plain_name}`")]
