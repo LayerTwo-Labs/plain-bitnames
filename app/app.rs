@@ -122,6 +122,7 @@ pub struct Config {
     pub network_magic_override:
         Option<plain_bitnames::net::peer_message::MagicBytes>,
     pub server_names: HashSet<String>,
+    pub wallet_dir: PathBuf,
     #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
 }
@@ -239,11 +240,7 @@ impl App {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
-        tracing::info!(
-            "Instantiating wallet with data directory: {}",
-            config.datadir.display()
-        );
-        let wallet = Wallet::new(&config.datadir.join("wallet.mdb"))?;
+        let wallet = Wallet::new(&config.wallet_dir.join("wallet.mdb"))?;
         if let Some(seed_phrase_path) = &config.mnemonic_seed_phrase_path {
             let mnemonic = std::fs::read_to_string(seed_phrase_path)?;
             let () = wallet.set_seed_from_mnemonic(mnemonic.as_str())?;

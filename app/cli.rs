@@ -30,6 +30,7 @@ pub struct Config {
     pub private_rpc_addr: SocketAddr,
     pub rpc_addr: SocketAddr,
     pub server_names: HashSet<String>,
+    pub wallet_dir: PathBuf,
     #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
 }
@@ -53,6 +54,7 @@ impl Config {
             private_rpc_addr,
             rpc_addr,
             server_names,
+            wallet_dir,
             #[cfg(feature = "zmq")]
             zmq_addr,
         } = self;
@@ -83,6 +85,7 @@ impl Config {
             %private_rpc_addr,
             %rpc_addr,
             ?server_names,
+            wallet_dir = %wallet_dir.display(),
             zmq_addr = if cfg!(feature = "zmq") {
                 Some(tracing::field::display(zmq_addr))
             } else {
@@ -199,7 +202,8 @@ pub(super) struct Cli {
     /// seed peers.
     #[arg(long = "add-peer")]
     add_peers: Vec<plain_bitnames::types::net::PeerAddress>,
-    /// Data directory for storing blockchain and wallet data
+    /// Data directory for storing blockchain data.
+    /// Wallet data is stored here by default.
     #[command(flatten)]
     datadir: DatadirArg,
     /// Log level for logs that get written to file
@@ -246,6 +250,9 @@ pub(super) struct Cli {
     /// This option can be specified multiple times.
     #[arg(long = "server-name")]
     server_names: Vec<String>,
+    /// Data directory for storing wallet data
+    #[arg(long)]
+    wallet_dir: Option<PathBuf>,
     /// ZMQ pub/sub address
     #[cfg(feature = "zmq")]
     #[arg(default_value_t = DEFAULT_ZMQ_ADDR, long, short)]
@@ -263,12 +270,12 @@ impl Cli {
 
     pub fn get_config(self) -> anyhow::Result<Config> {
         let mainchain_grpc_url = self.mainchain_grpc_url();
+        let datadir = self.datadir.0;
         let log_dir = match self.log_dir {
             None => {
                 let version_dir_name =
                     format!("v{}", env!("CARGO_PKG_VERSION"));
-                let log_dir =
-                    self.datadir.0.join("logs").join(version_dir_name);
+                let log_dir = datadir.join("logs").join(version_dir_name);
                 Some(log_dir)
             }
             Some(log_dir) => {
@@ -284,9 +291,10 @@ impl Cli {
         } else {
             saturating_pred_level(self.log_level)
         };
+        let wallet_dir = self.wallet_dir.unwrap_or_else(|| datadir.clone());
         Ok(Config {
             add_peers: HashSet::from_iter(self.add_peers),
-            datadir: self.datadir.0,
+            datadir,
             file_log_level: self.file_log_level,
             headless: self.headless,
             log_dir,
@@ -299,6 +307,7 @@ impl Cli {
             private_rpc_addr: self.private_rpc_addr,
             rpc_addr: self.rpc_addr,
             server_names: HashSet::from_iter(self.server_names),
+            wallet_dir,
             #[cfg(feature = "zmq")]
             zmq_addr: self.zmq_addr,
         })

@@ -218,6 +218,7 @@ fn main() -> anyhow::Result<()> {
         network: config.network,
         network_magic_override: config.network_magic_override,
         server_names: config.server_names,
+        wallet_dir: config.wallet_dir,
         #[cfg(feature = "zmq")]
         zmq_addr: config.zmq_addr,
     };
