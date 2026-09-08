@@ -34,6 +34,65 @@ pub struct Config {
     pub zmq_addr: SocketAddr,
 }
 
+impl Config {
+    /// Log all fields at info level
+    #[track_caller]
+    pub fn log_all_fields(&self, msg: &str) {
+        let Self {
+            add_peers,
+            datadir,
+            file_log_level,
+            headless,
+            log_dir,
+            log_level,
+            mainchain_grpc_url,
+            mnemonic_seed_phrase_path,
+            net_addr,
+            network,
+            network_magic_override,
+            private_rpc_addr,
+            rpc_addr,
+            server_names,
+            #[cfg(feature = "zmq")]
+            zmq_addr,
+        } = self;
+        let add_peers = std::fmt::from_fn(|f| {
+            f.debug_set()
+                .entries(add_peers.iter().map(|peer_addr| {
+                    std::fmt::from_fn(|f| std::fmt::Display::fmt(peer_addr, f))
+                }))
+                .finish()
+        });
+        tracing::info!(
+            %add_peers,
+            datadir = %datadir.display(),
+            %headless,
+            log_dir = log_dir.as_ref().map(|path|
+                tracing::field::display(path.display())
+            ),
+            %log_level,
+            %file_log_level,
+            %mainchain_grpc_url,
+            mnemonic_seed_phrase_path = mnemonic_seed_phrase_path.as_ref()
+                .map(|path| tracing::field::display(path.display())),
+            %net_addr,
+            %network,
+            network_magic_override = network_magic_override.map(|magic|
+                tracing::field::display(const_hex::encode(magic))
+            ),
+            %private_rpc_addr,
+            %rpc_addr,
+            ?server_names,
+            zmq_addr = if cfg!(feature = "zmq") {
+                Some(tracing::field::display(zmq_addr))
+            } else {
+                None
+            },
+            msg,
+        )
+    }
+}
+
 const fn ipv4_socket_addr(ipv4_octets: [u8; 4], port: u16) -> SocketAddr {
     let [a, b, c, d] = ipv4_octets;
     let ipv4 = Ipv4Addr::new(a, b, c, d);

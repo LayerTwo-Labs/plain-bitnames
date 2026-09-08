@@ -207,6 +207,7 @@ fn main() -> anyhow::Result<()> {
         config.log_dir.as_deref(),
         config.log_level,
     )?;
+    let () = config.log_all_fields("Loaded config");
     let (app_tx, app_rx) = oneshot::channel::<anyhow::Error>();
     let app_config = app::Config {
         add_peers: config.add_peers,
