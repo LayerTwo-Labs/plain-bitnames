@@ -13,7 +13,7 @@ use plain_bitnames_app_rpc_api::node::RpcClient as _;
 
 use crate::{
     block_template::block_template_trial,
-    ibd::ibd_trial,
+    ibd::{ibd_trial, reorg_across_deposit_trial},
     register_bitname::register_bitname_trial,
     setup::{Init, PostSetup},
     unknown_withdrawal::unknown_withdrawal_trial,
@@ -180,6 +180,11 @@ pub fn tests(
             failure_collector.clone(),
         ),
         register_bitname_trial(
+            bin_paths.clone(),
+            file_registry.clone(),
+            failure_collector.clone(),
+        ),
+        reorg_across_deposit_trial(
             bin_paths.clone(),
             file_registry.clone(),
             failure_collector.clone(),
