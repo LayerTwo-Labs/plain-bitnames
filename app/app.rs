@@ -19,8 +19,8 @@ use plain_bitnames::{
         proto::mainchain::{
             self,
             generated::{
-                mining_service_server, validator_service_server,
-                wallet_service_server,
+                block_producer_service_server, mining_service_server,
+                validator_service_server, wallet_service_server,
             },
         },
     },
@@ -96,6 +96,7 @@ fn update(
 }
 
 struct ProtoSupport {
+    block_producer: bool,
     miner: bool,
     wallet: bool,
 }
@@ -195,17 +196,16 @@ impl App {
     async fn check_proto_support(
         transport: tonic::transport::channel::Channel,
     ) -> Result<ProtoSupport, tonic::Status> {
-        let mut health_client = HealthClient::new(transport);
+        let mut client = HealthClient::new(transport);
 
+        let block_producer_service_name =
+            block_producer_service_server::SERVICE_NAME;
         let mining_service_name = mining_service_server::SERVICE_NAME;
         let validator_service_name = validator_service_server::SERVICE_NAME;
         let wallet_service_name = wallet_service_server::SERVICE_NAME;
         // The validator service MUST exist. We therefore error out here directly.
-        if !Self::check_status_serving(
-            &mut health_client,
-            validator_service_name,
-        )
-        .await?
+        if !Self::check_status_serving(&mut client, validator_service_name)
+            .await?
         {
             return Err(tonic::Status::aborted(format!(
                 "{validator_service_name} is not supported in mainchain client",
@@ -213,21 +213,29 @@ impl App {
         }
         tracing::info!("Verified existence of {}", validator_service_name);
 
-        // The mining and wallet services are optional.
+        // The block producer, mining and wallet services are optional.
+        let has_block_producer_service = Self::check_status_serving(
+            &mut client,
+            block_producer_service_name,
+        )
+        .await?;
         let has_mining_service =
-            Self::check_status_serving(&mut health_client, mining_service_name)
+            Self::check_status_serving(&mut client, mining_service_name)
                 .await?;
         let has_wallet_service =
-            Self::check_status_serving(&mut health_client, wallet_service_name)
+            Self::check_status_serving(&mut client, wallet_service_name)
                 .await?;
         tracing::info!(
+            %has_block_producer_service,
             %has_mining_service,
             %has_wallet_service,
-            "Checked existence of {}, {}",
+            "Checked existence of {}, {}, {}",
+            block_producer_service_name,
             mining_service_name,
             wallet_service_name,
         );
         let res = ProtoSupport {
+            block_producer: has_block_producer_service,
             miner: has_mining_service,
             wallet: has_wallet_service,
         };
@@ -256,8 +264,17 @@ impl App {
         .unwrap()
         .concurrency_limit(256)
         .connect_lazy();
-        let (cusf_mainchain, cusf_mainchain_miner, cusf_mainchain_wallet) = {
-            let ProtoSupport { miner, wallet } = runtime
+        let (
+            cusf_mainchain,
+            cusf_mainchain_miner,
+            cusf_mainchain_wallet,
+            cusf_mainchain_block_producer,
+        ) = {
+            let ProtoSupport {
+                block_producer,
+                miner,
+                wallet,
+            } = runtime
                 .block_on(Self::check_proto_support(transport.clone()))
                 .map_err(|err| Error::VerifyMainchainServices {
                     url: Box::new(config.mainchain_grpc_url.clone()),
@@ -273,8 +290,18 @@ impl App {
             } else {
                 None
             };
+            let block_producer_client = if block_producer {
+                Some(mainchain::BlockProducerClient::new(transport.clone()))
+            } else {
+                None
+            };
             let validator_client = mainchain::ValidatorClient::new(transport);
-            (validator_client, mining_client, wallet_client)
+            (
+                validator_client,
+                mining_client,
+                wallet_client,
+                block_producer_client,
+            )
         };
         let miner = cusf_mainchain_wallet
             .clone()
@@ -300,7 +327,7 @@ impl App {
                 zmq_addr: config.zmq_addr,
             },
             cusf_mainchain,
-            cusf_mainchain_wallet,
+            cusf_mainchain_block_producer,
             &runtime,
         ))?;
         let utxos = {
