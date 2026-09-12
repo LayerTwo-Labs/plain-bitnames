@@ -1,9 +1,10 @@
 use std::{
     collections::{HashMap, HashSet, hash_map},
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     sync::Arc,
 };
 
+pub use crate::types::net::TorProxyStatus;
 use fallible_iterator::FallibleIterator;
 use futures::{StreamExt, channel::mpsc};
 use heed::types::{SerdeBincode, Unit};
@@ -165,12 +166,104 @@ const FORKNET_SEED_NODE_ADDRS: &[SocketAddr] = {
     &[BIP300_XYZ]
 };
 
-const fn seed_node_addrs(network: Network) -> &'static [SocketAddr] {
+const fn seed_node_addrs(
+    network: Network,
+    tor_proxy_mode: bool,
+) -> &'static [SocketAddr] {
+    if tor_proxy_mode {
+        return &[];
+    }
     match network {
         Network::Signet => SIGNET_SEED_NODE_ADDRS,
         Network::Regtest => &[],
         Network::Forknet => FORKNET_SEED_NODE_ADDRS,
     }
+}
+
+fn loopback_addr(addr: SocketAddr) -> SocketAddr {
+    let ip = match addr.ip() {
+        IpAddr::V4(_) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(_) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+    };
+    SocketAddr::new(ip, addr.port())
+}
+
+fn peer_address_allowed(
+    tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
+    addr: SocketAddr,
+) -> bool {
+    !tor_proxy_mode
+        || tor_proxy_peer
+            .map_or_else(|| addr.ip().is_loopback(), |trusted| addr == trusted)
+}
+
+fn is_connected_tunnel_peer(
+    tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
+    addr: SocketAddr,
+    status: PeerConnectionStatus,
+) -> bool {
+    tor_proxy_mode
+        && peer_address_allowed(true, tor_proxy_peer, addr)
+        && status == PeerConnectionStatus::Connected
+}
+
+fn validate_peer_address(
+    tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
+    addr: SocketAddr,
+) -> Result<(), Error> {
+    if addr.ip().is_unspecified() {
+        return Err(Error::UnspecfiedPeerIP(addr.ip()));
+    }
+    if !peer_address_allowed(tor_proxy_mode, tor_proxy_peer, addr) {
+        return Err(if tor_proxy_peer.is_some() {
+            Error::UntrustedTorProxyPeer(addr)
+        } else {
+            Error::NonLoopbackPeerInTorProxyMode(addr)
+        });
+    }
+    Ok(())
+}
+
+fn queue_transaction_to_peers(
+    active_peers: &HashMap<SocketAddr, PeerConnectionHandle>,
+    tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
+    exclude: &HashSet<SocketAddr>,
+    tx: &AuthorizedTransaction,
+) -> usize {
+    let mut queued_peers = 0;
+    for (addr, peer_connection_handle) in active_peers {
+        if exclude.contains(addr)
+            || !peer_address_allowed(tor_proxy_mode, tor_proxy_peer, *addr)
+        {
+            continue;
+        }
+        match peer_connection_handle.connection_status() {
+            PeerConnectionStatus::Connecting => {
+                tracing::trace!(%addr, "skipping peer at {addr} because it is not fully connected");
+                continue;
+            }
+            PeerConnectionStatus::Connected => {}
+        }
+        let request: PeerRequest = peer::message::PushTransactionRequest {
+            transaction: tx.clone(),
+        }
+        .into();
+        if peer_connection_handle
+            .internal_message_tx
+            .unbounded_send(request.into())
+            .is_ok()
+        {
+            queued_peers += 1;
+        } else {
+            let txid = tx.transaction.txid();
+            tracing::warn!("Failed to push tx {txid} to peer at {addr}")
+        }
+    }
+    queued_peers
 }
 
 // Keep track of peer state
@@ -194,6 +287,8 @@ pub struct Net {
     peer_info_tx:
         mpsc::UnboundedSender<(SocketAddr, Option<PeerConnectionInfo>)>,
     known_peers: DatabaseUnique<SerdeBincode<SocketAddr>, Unit>,
+    tor_proxy_mode: bool,
+    tor_proxy_peer: Option<SocketAddr>,
     _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
@@ -255,22 +350,39 @@ impl Net {
             .collect()
     }
 
+    pub fn tor_proxy_status(&self) -> TorProxyStatus {
+        let connected_tunnel_peers = self
+            .active_peers
+            .read()
+            .iter()
+            .filter(|(addr, connection)| {
+                is_connected_tunnel_peer(
+                    self.tor_proxy_mode,
+                    self.tor_proxy_peer,
+                    **addr,
+                    connection.connection_status(),
+                )
+            })
+            .count()
+            .try_into()
+            .unwrap_or(u32::MAX);
+        TorProxyStatus {
+            tor_proxy_mode: self.tor_proxy_mode,
+            connected_tunnel_peers,
+        }
+    }
+
     #[instrument(skip_all, fields(addr), err(Debug))]
     pub fn connect_peer(
         &self,
         env: sneed::Env<heed::WithoutTls>,
         addr: SocketAddr,
     ) -> Result<(), Error> {
+        // Reconnects and manual RPC connections both flow through this check.
+        validate_peer_address(self.tor_proxy_mode, self.tor_proxy_peer, addr)?;
         if self.active_peers.read().contains_key(&addr) {
             tracing::error!("already connected");
             return Err(error::AlreadyConnected(addr).into());
-        }
-        // This check happens within Quinn with a
-        // generic "invalid remote address". We run the
-        // same check, and provide a friendlier error
-        // message.
-        if addr.ip().is_unspecified() {
-            return Err(Error::UnspecfiedPeerIP(addr.ip()));
         }
         let connecting = self.server.connect(addr, "localhost")?;
         let mut rwtxn = env.write_txn().map_err(EnvError::from)?;
@@ -314,6 +426,7 @@ impl Net {
             .map_err(|err| DbError::from(err).into())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: &sneed::Env<heed::WithoutTls>,
         archive: Archive,
@@ -321,7 +434,14 @@ impl Net {
         network: Network,
         state: State,
         bind_addr: SocketAddr,
+        tor_proxy_mode: bool,
+        tor_proxy_peer: Option<SocketAddr>,
     ) -> Result<(Self, PeerInfoRx), Error> {
+        let bind_addr = if tor_proxy_mode {
+            loopback_addr(bind_addr)
+        } else {
+            bind_addr
+        };
         let (server, _) = make_server_endpoint(bind_addr)?;
         let active_peers = Arc::new(RwLock::new(HashMap::new()));
         let mut rwtxn = env.write_txn()?;
@@ -331,7 +451,9 @@ impl Net {
                 None => {
                     let known_peers =
                         DatabaseUnique::create(env, &mut rwtxn, "known_peers")?;
-                    for seed_node_addr in seed_node_addrs(network) {
+                    for seed_node_addr in
+                        seed_node_addrs(network, tor_proxy_mode)
+                    {
                         known_peers.put(&mut rwtxn, seed_node_addr, &())?;
                     }
                     known_peers
@@ -353,6 +475,8 @@ impl Net {
             active_peers,
             peer_info_tx,
             known_peers,
+            tor_proxy_mode,
+            tor_proxy_peer,
             _version: version,
         };
         #[allow(clippy::let_and_return)]
@@ -362,6 +486,20 @@ impl Net {
                 .known_peers
                 .iter(&rotxn)
                 .map_err(DbError::from)?
+                .filter(|(peer_addr, _)| {
+                    let allowed = peer_address_allowed(
+                        tor_proxy_mode,
+                        tor_proxy_peer,
+                        *peer_addr,
+                    );
+                    if !allowed {
+                        tracing::info!(
+                            %peer_addr,
+                            "ignoring persisted direct peer in Tor proxy mode"
+                        );
+                    }
+                    Ok(allowed)
+                })
                 .collect()
                 .map_err(DbError::from)?;
             known_peers
@@ -426,6 +564,18 @@ impl Net {
         };
         let addr = connection.addr();
         tracing::trace!(%addr, "accepted incoming connection");
+        // Incoming sidecar streams use ephemeral loopback source ports; only
+        // outbound submission/reconnect trust is pinned to tor_proxy_peer.
+        if !peer_address_allowed(self.tor_proxy_mode, None, addr) {
+            tracing::warn!(
+                %addr,
+                "refusing non-loopback connection in Tor proxy mode"
+            );
+            connection
+                .inner
+                .close(quinn::VarInt::from_u32(2), b"direct peer forbidden");
+            return Ok(None);
+        }
         if self.active_peers.read().contains_key(&addr) {
             tracing::info!(
                 %addr, "already peered, refusing duplicate",
@@ -467,6 +617,10 @@ impl Net {
         Ok(Some(addr))
     }
 
+    pub(crate) fn peer_address_allowed(&self, addr: SocketAddr) -> bool {
+        peer_address_allowed(self.tor_proxy_mode, self.tor_proxy_peer, addr)
+    }
+
     /// Attempt to push an internal message to the specified peer
     /// Returns `true` if successful
     pub fn push_internal_message(
@@ -495,33 +649,219 @@ impl Net {
     }
 
     /// Push a tx to all active peers, except those in the provided set
+    #[must_use]
     pub fn push_tx(
         &self,
         exclude: HashSet<SocketAddr>,
         tx: &AuthorizedTransaction,
-    ) {
-        self.active_peers
-            .read()
-            .iter()
-            .filter(|(addr, _)| !exclude.contains(addr))
-            .for_each(|(addr, peer_connection_handle)| {
-                match peer_connection_handle.connection_status() {
-                    PeerConnectionStatus::Connecting => {
-                        tracing::trace!(%addr, "skipping peer at {addr} because it is not fully connected");
-                        return;
-                    }
-                    PeerConnectionStatus::Connected => {}
-                }
-                let request: PeerRequest = peer::message::PushTransactionRequest {
-                    transaction: tx.clone(),
-                }.into();
-                if let Err(_send_err) = peer_connection_handle
-                    .internal_message_tx
-                    .unbounded_send(request.into())
-                {
-                    let txid = tx.transaction.txid();
-                    tracing::warn!("Failed to push tx {txid} to peer at {addr}")
-                }
+    ) -> usize {
+        let active_peers = self.active_peers.read();
+        queue_transaction_to_peers(
+            &active_peers,
+            self.tor_proxy_mode,
+            self.tor_proxy_peer,
+            &exclude,
+            tx,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tor_proxy_mode_forces_bind_address_to_loopback() {
+        assert_eq!(
+            loopback_addr("0.0.0.0:4002".parse().unwrap()),
+            "127.0.0.1:4002".parse().unwrap()
+        );
+        assert_eq!(
+            loopback_addr("[2001:db8::1]:4102".parse().unwrap()),
+            "[::1]:4102".parse().unwrap()
+        );
+    }
+
+    #[test]
+    fn tor_proxy_mode_disables_seed_peers() {
+        assert!(seed_node_addrs(Network::Signet, true).is_empty());
+        assert!(!seed_node_addrs(Network::Signet, false).is_empty());
+    }
+
+    #[test]
+    fn tor_proxy_mode_rejects_direct_peer_addresses() {
+        let addr = "192.0.2.1:4002".parse().unwrap();
+        assert!(matches!(
+            validate_peer_address(true, None, addr),
+            Err(Error::NonLoopbackPeerInTorProxyMode(rejected))
+                if rejected == addr
+        ));
+    }
+
+    #[test]
+    fn tor_proxy_mode_filters_persisted_direct_peers() {
+        let persisted = [
+            "127.0.0.1:4002".parse().unwrap(),
+            "192.0.2.1:4002".parse().unwrap(),
+            "[::1]:4002".parse().unwrap(),
+            "[2001:db8::1]:4002".parse().unwrap(),
+        ];
+        let filtered: Vec<_> = persisted
+            .into_iter()
+            .filter(|addr| peer_address_allowed(true, None, *addr))
+            .collect();
+
+        assert_eq!(
+            filtered,
+            [
+                "127.0.0.1:4002".parse().unwrap(),
+                "[::1]:4002".parse().unwrap(),
+            ]
+        );
+    }
+
+    #[test]
+    fn tor_proxy_mode_allows_loopback_udp_tunnel_peers() {
+        for addr in ["127.0.0.1:4002", "[::1]:4002"] {
+            assert!(
+                validate_peer_address(true, None, addr.parse().unwrap())
+                    .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn tor_proxy_status_requires_a_connected_tunnel_for_submission() {
+        let ready = TorProxyStatus {
+            tor_proxy_mode: true,
+            connected_tunnel_peers: 1,
+        };
+        assert!(
+            TorProxyStatus {
+                tor_proxy_mode: false,
+                connected_tunnel_peers: 0,
+            }
+            .allows_transaction_submission()
+        );
+        assert!(
+            !TorProxyStatus {
+                tor_proxy_mode: true,
+                connected_tunnel_peers: 0,
+            }
+            .allows_transaction_submission()
+        );
+        assert!(ready.allows_transaction_submission());
+        assert_eq!(
+            serde_json::to_value(ready).unwrap(),
+            serde_json::json!({
+                "tor_proxy_mode": true,
+                "connected_tunnel_peers": 1,
             })
+        );
+    }
+
+    #[test]
+    fn only_connected_loopback_peers_count_as_tunnels() {
+        let loopback = "127.0.0.1:4002".parse().unwrap();
+        let direct = "192.0.2.1:4002".parse().unwrap();
+
+        assert!(is_connected_tunnel_peer(
+            true,
+            None,
+            loopback,
+            PeerConnectionStatus::Connected
+        ));
+        assert!(!is_connected_tunnel_peer(
+            true,
+            None,
+            loopback,
+            PeerConnectionStatus::Connecting
+        ));
+        assert!(!is_connected_tunnel_peer(
+            true,
+            None,
+            direct,
+            PeerConnectionStatus::Connected
+        ));
+        assert!(!is_connected_tunnel_peer(
+            false,
+            None,
+            loopback,
+            PeerConnectionStatus::Connected
+        ));
+    }
+
+    #[test]
+    fn queued_peer_count_only_reports_successful_allowed_delivery() {
+        tokio::runtime::Runtime::new().unwrap().block_on(async {
+            let transaction = AuthorizedTransaction {
+                transaction: crate::types::Transaction::default(),
+                authorizations: Vec::new(),
+            };
+            let loopback = "127.0.0.1:4002".parse().unwrap();
+
+            let (connected, _connected_rx) =
+                peer::test_connection_handle(PeerConnectionStatus::Connected);
+            let connected_peers = HashMap::from([(loopback, connected)]);
+            assert_eq!(
+                queue_transaction_to_peers(
+                    &connected_peers,
+                    true,
+                    None,
+                    &HashSet::new(),
+                    &transaction,
+                ),
+                1
+            );
+
+            let (closed, closed_rx) =
+                peer::test_connection_handle(PeerConnectionStatus::Connected);
+            drop(closed_rx);
+            let closed_peers = HashMap::from([(loopback, closed)]);
+            assert_eq!(
+                queue_transaction_to_peers(
+                    &closed_peers,
+                    true,
+                    None,
+                    &HashSet::new(),
+                    &transaction,
+                ),
+                0
+            );
+
+            let direct = "192.0.2.1:4002".parse().unwrap();
+            let (direct_peer, _direct_rx) =
+                peer::test_connection_handle(PeerConnectionStatus::Connected);
+            assert_eq!(
+                queue_transaction_to_peers(
+                    &HashMap::from([(direct, direct_peer)]),
+                    false,
+                    None,
+                    &HashSet::new(),
+                    &transaction,
+                ),
+                1
+            );
+        });
+    }
+
+    #[test]
+    fn direct_mode_still_allows_non_loopback_peers() {
+        let addr = "192.0.2.1:4002".parse().unwrap();
+        assert!(validate_peer_address(false, None, addr).is_ok());
+    }
+
+    #[test]
+    fn tor_proxy_mode_allows_only_the_configured_tunnel() {
+        let trusted = "127.0.0.1:4100".parse().unwrap();
+        assert!(validate_peer_address(true, Some(trusted), trusted).is_ok());
+        assert!(matches!(
+            validate_peer_address(
+                true,
+                Some(trusted),
+                "127.0.0.1:4200".parse().unwrap()
+            ),
+            Err(Error::UntrustedTorProxyPeer(_))
+        ));
     }
 }

@@ -1,3 +1,6 @@
+use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
+
 pub mod peer {
     use std::net::SocketAddr;
 
@@ -27,3 +30,19 @@ pub mod peer {
     }
 }
 pub use peer::{ConnectionStatus as PeerConnectionStatus, Peer};
+
+#[derive(
+    Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema,
+)]
+pub struct TorProxyStatus {
+    pub tor_proxy_mode: bool,
+    /// Connected loopback peers, which are the only peers permitted in Tor
+    /// proxy mode.
+    pub connected_tunnel_peers: u32,
+}
+
+impl TorProxyStatus {
+    pub fn allows_transaction_submission(self) -> bool {
+        !self.tor_proxy_mode || self.connected_tunnel_peers > 0
+    }
+}

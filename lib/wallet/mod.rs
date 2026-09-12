@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
@@ -22,11 +23,12 @@ use crate::{
     authorization::{self, Authorization, Signature, get_address},
     types::{
         Address, AmountOverflowError, AuthorizedTransaction,
-        BitcoinOutputContent, EncryptionPubKey, FilledOutput, GetValue, Hash,
-        InPoint, MutableBitNameData, OutPoint, OutPointKey, Output,
-        OutputContent, SpentOutput, Transaction, TxData, VERSION, VerifyingKey,
-        Version, WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
-        hashes::BitName, keys::Ecies, wallet::Balance,
+        BitNameDataUpdates, BitcoinOutputContent, EncryptionPubKey,
+        FilledOutput, GetValue, Hash, InPoint, MutableBitNameData, OutPoint,
+        OutPointKey, Output, OutputContent, SpentOutput, Transaction, TxData,
+        VERSION, VerifyingKey, Version, WithdrawalOutputContent,
+        XEncryptionSecretKey, XVerifyingKey, hashes::BitName, keys::Ecies,
+        wallet::Balance,
     },
     util::Watchable,
 };
@@ -36,6 +38,15 @@ pub use error::Error;
 
 mod util;
 use util::KnownBip32Path;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct TransferIntent {
+    address: Address,
+    value_sats: u64,
+    fee_sats: u64,
+    memo: Option<Vec<u8>>,
+    transaction: Transaction,
+}
 
 #[derive(Debug, Error)]
 #[error("Message signature verification key {vk} does not exist")]
@@ -74,13 +85,14 @@ pub struct Wallet {
     bitname_reservations: DatabaseUnique<SerdeBincode<[u8; 32]>, Str>,
     /// Associates BitNames with plaintext names
     known_bitnames: DatabaseUnique<SerdeBincode<BitName>, Str>,
+    transfer_intents: DatabaseUnique<Str, SerdeBincode<TransferIntent>>,
     /// Map each verifying key to it's index
     vk_to_index: DatabaseUnique<SerdeBincode<VerifyingKey>, U32<BigEndian>>,
     _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 12;
+    pub const NUM_DBS: u32 = 13;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
@@ -131,6 +143,8 @@ impl Wallet {
             DatabaseUnique::create(&env, &mut rwtxn, "bitname_reservations")?;
         let known_bitnames =
             DatabaseUnique::create(&env, &mut rwtxn, "known_bitnames")?;
+        let transfer_intents =
+            DatabaseUnique::create(&env, &mut rwtxn, "transfer_intents")?;
         let vk_to_index =
             DatabaseUnique::create(&env, &mut rwtxn, "vk_to_index")?;
         let version = DatabaseUnique::create(&env, &mut rwtxn, "version")?;
@@ -150,6 +164,7 @@ impl Wallet {
             stxos,
             bitname_reservations,
             known_bitnames,
+            transfer_intents,
             vk_to_index,
             _version: version,
         })
@@ -552,6 +567,87 @@ impl Wallet {
         Ok(Transaction::new(inputs, outputs))
     }
 
+    pub fn create_idempotent_transfer(
+        &self,
+        key: &str,
+        address: Address,
+        value: bitcoin::Amount,
+        fee: bitcoin::Amount,
+        memo: Option<Vec<u8>>,
+    ) -> Result<Transaction, Error> {
+        let matches = |intent: &TransferIntent| {
+            intent.address == address
+                && intent.value_sats == value.to_sat()
+                && intent.fee_sats == fee.to_sat()
+                && intent.memo == memo
+        };
+        let rotxn = self.env.read_txn()?;
+        if let Some(intent) = self.transfer_intents.try_get(&rotxn, key)? {
+            return matches(&intent).then_some(intent.transaction).ok_or_else(
+                || Error::IdempotencyConflict {
+                    key: key.to_owned(),
+                },
+            );
+        }
+        drop(rotxn);
+        let transaction =
+            self.create_transfer(address, value, fee, memo.clone())?;
+        let intent = TransferIntent {
+            address,
+            value_sats: value.to_sat(),
+            fee_sats: fee.to_sat(),
+            memo: memo.clone(),
+            transaction,
+        };
+        let mut rwtxn = self.env.write_txn()?;
+        if let Some(existing) = self.transfer_intents.try_get(&rwtxn, key)? {
+            return matches(&existing)
+                .then_some(existing.transaction)
+                .ok_or_else(|| Error::IdempotencyConflict {
+                    key: key.to_owned(),
+                });
+        }
+        self.transfer_intents.put(&mut rwtxn, key, &intent)?;
+        rwtxn.commit()?;
+        Ok(intent.transaction)
+    }
+
+    /// Create a transaction that updates mutable data for an owned BitName
+    /// while retaining ownership at the existing BitName output address.
+    pub fn create_bitname_update(
+        &self,
+        bitname: BitName,
+        updates: BitNameDataUpdates,
+        fee: bitcoin::Amount,
+    ) -> Result<Transaction, Error> {
+        let (bitname_outpoint, bitname_output) = self
+            .get_bitnames()?
+            .into_iter()
+            .find(|(_, output)| output.bitname() == Some(&bitname))
+            .ok_or(Error::BitNameNotOwned { bitname })?;
+
+        let (total, coins) = self.select_coins(fee)?;
+        let change = total - fee;
+        let mut inputs: Vec<_> = coins.into_keys().collect();
+        inputs.push(bitname_outpoint);
+
+        let mut outputs = Vec::with_capacity(2);
+        if change != Amount::ZERO {
+            outputs.push(Output::new(
+                self.get_new_address()?,
+                OutputContent::Bitcoin(BitcoinOutputContent(change)),
+            ));
+        }
+        // Keep the BitName output last. State transition logic defines the last
+        // spent/recreated BitName as the record being updated.
+        outputs
+            .push(Output::new(bitname_output.address, OutputContent::BitName));
+
+        let mut transaction = Transaction::new(inputs, outputs);
+        transaction.data = Some(TxData::BitNameUpdate(Box::new(updates)));
+        Ok(transaction)
+    }
+
     /// given a regular transaction, add a bitname reservation.
     /// given a bitname reservation tx, change the reserved name.
     /// panics if the tx is not regular or a bitname reservation tx.
@@ -767,6 +863,24 @@ impl Wallet {
         Ok(())
     }
 
+    /// Replace the wallet's unspent set with the authoritative node view.
+    ///
+    /// Unlike `put_utxos`, this removes outputs that disappeared during a
+    /// reorg instead of leaving them available for coin selection.
+    pub fn replace_utxos(
+        &self,
+        utxos: &HashMap<OutPoint, FilledOutput>,
+    ) -> Result<(), Error> {
+        let mut rwtxn = self.env.write_txn()?;
+        self.utxos.clear(&mut rwtxn)?;
+        for (outpoint, output) in utxos {
+            self.utxos
+                .put(&mut rwtxn, &OutPointKey::from(outpoint), output)?;
+        }
+        rwtxn.commit()?;
+        Ok(())
+    }
+
     pub fn get_balance(&self) -> Result<Balance, Error> {
         let mut balance = Balance::default();
         let rotxn = self.env.read_txn()?;
@@ -971,6 +1085,7 @@ impl Watchable<()> for Wallet {
             stxos,
             bitname_reservations,
             known_bitnames,
+            transfer_intents,
             vk_to_index,
             _version: _,
         } = self;
@@ -985,6 +1100,7 @@ impl Watchable<()> for Wallet {
             stxos.watch().clone(),
             bitname_reservations.watch().clone(),
             known_bitnames.watch().clone(),
+            transfer_intents.watch().clone(),
             vk_to_index.watch().clone(),
         ];
         let streams = StreamMap::from_iter(
@@ -1001,15 +1117,28 @@ impl Watchable<()> for Wallet {
 
 #[cfg(test)]
 mod test {
-    use crate::wallet::Wallet;
+    use std::collections::HashMap;
 
-    #[test]
-    fn test_get_or_generate_last_address() -> anyhow::Result<()> {
+    use bitcoin::Amount;
+
+    use crate::{
+        types::{
+            BitName, BitNameDataUpdates, FilledOutput, FilledOutputContent,
+            GetValue, OutPoint, OutputContent, TxData, Txid, Update,
+        },
+        wallet::Wallet,
+    };
+
+    fn test_wallet_dir(test_name: &str) -> anyhow::Result<std::path::PathBuf> {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos();
-        let test_dir =
-            std::env::temp_dir().join(format!("bitnames_test_wallet_{nanos}"));
+        Ok(std::env::temp_dir().join(format!("bitnames_{test_name}_{nanos}")))
+    }
+
+    #[test]
+    fn test_get_or_generate_last_address() -> anyhow::Result<()> {
+        let test_dir = test_wallet_dir("test_wallet")?;
 
         // Ensure clean state
         if test_dir.exists() {
@@ -1047,6 +1176,158 @@ mod test {
         assert_eq!(addr3, addr4);
 
         // Clean up
+        let _unused = std::fs::remove_dir_all(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn create_bitname_update_retains_owner_and_pays_fee() -> anyhow::Result<()>
+    {
+        let test_dir = test_wallet_dir("update_bitname")?;
+        let wallet = Wallet::new(&test_dir)?;
+        wallet.set_seed(&[2u8; 64])?;
+
+        let owner_address = wallet.get_new_address()?;
+        let funding_address = wallet.get_new_address()?;
+        let bitname = BitName([3u8; 32]);
+        let bitname_outpoint = OutPoint::Regular {
+            txid: Txid([4u8; 32]),
+            vout: 0,
+        };
+        let funding_outpoint = OutPoint::Regular {
+            txid: Txid([5u8; 32]),
+            vout: 0,
+        };
+        wallet.put_utxos(&HashMap::from([
+            (
+                bitname_outpoint,
+                FilledOutput {
+                    address: owner_address,
+                    content: FilledOutputContent::BitName(bitname),
+                    memo: Vec::new(),
+                },
+            ),
+            (
+                funding_outpoint,
+                FilledOutput::new_bitcoin_value(
+                    funding_address,
+                    Amount::from_sat(1_000),
+                ),
+            ),
+        ]))?;
+
+        let updates = BitNameDataUpdates {
+            commitment: Update::Retain,
+            socket_addr_v4: Update::Retain,
+            socket_addr_v6: Update::Retain,
+            encryption_pubkey: Update::Retain,
+            signing_pubkey: Update::Retain,
+            paymail_fee_sats: Update::Set(2_000),
+        };
+        let transaction = wallet.create_bitname_update(
+            bitname,
+            updates,
+            Amount::from_sat(100),
+        )?;
+
+        assert_eq!(transaction.inputs.len(), 2);
+        assert!(transaction.inputs.contains(&bitname_outpoint));
+        assert!(transaction.inputs.contains(&funding_outpoint));
+        assert_eq!(transaction.outputs.len(), 2);
+        assert_eq!(transaction.outputs[0].get_value(), Amount::from_sat(900));
+        let bitname_output = transaction.outputs.last().unwrap();
+        assert_eq!(bitname_output.address, owner_address);
+        assert!(matches!(bitname_output.content, OutputContent::BitName));
+        assert!(matches!(
+            transaction.data,
+            Some(TxData::BitNameUpdate(updates))
+                if matches!(updates.paymail_fee_sats, Update::Set(2_000))
+        ));
+
+        let _unused = std::fs::remove_dir_all(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn replace_utxos_removes_reorged_outputs() -> anyhow::Result<()> {
+        let test_dir = test_wallet_dir("replace_utxos")?;
+        let wallet = Wallet::new(&test_dir)?;
+        wallet.set_seed(&[9u8; 64])?;
+        let address = wallet.get_new_address()?;
+        let stale = OutPoint::Regular {
+            txid: Txid([10u8; 32]),
+            vout: 0,
+        };
+        let current = OutPoint::Regular {
+            txid: Txid([11u8; 32]),
+            vout: 0,
+        };
+        wallet.put_utxos(&HashMap::from([(
+            stale,
+            FilledOutput::new_bitcoin_value(address, Amount::from_sat(100)),
+        )]))?;
+        wallet.replace_utxos(&HashMap::from([(
+            current,
+            FilledOutput::new_bitcoin_value(address, Amount::from_sat(200)),
+        )]))?;
+        let utxos = wallet.get_utxos()?;
+        assert!(!utxos.contains_key(&stale));
+        assert_eq!(
+            utxos.get(&current).unwrap().get_value(),
+            Amount::from_sat(200)
+        );
+        drop(wallet);
+        let _unused = std::fs::remove_dir_all(&test_dir);
+        Ok(())
+    }
+
+    #[test]
+    fn idempotent_transfer_survives_restart_and_rejects_key_reuse()
+    -> anyhow::Result<()> {
+        let test_dir = test_wallet_dir("idempotent_transfer")?;
+        let wallet = Wallet::new(&test_dir)?;
+        wallet.set_seed(&[6u8; 64])?;
+        let funding_address = wallet.get_new_address()?;
+        let destination = wallet.get_new_address()?;
+        wallet.put_utxos(&HashMap::from([(
+            OutPoint::Regular {
+                txid: Txid([7u8; 32]),
+                vout: 0,
+            },
+            FilledOutput::new_bitcoin_value(
+                funding_address,
+                Amount::from_sat(1_000),
+            ),
+        )]))?;
+        let first = wallet.create_idempotent_transfer(
+            "message-id",
+            destination,
+            Amount::from_sat(1),
+            Amount::from_sat(100),
+            Some(vec![1, 2, 3]),
+        )?;
+        drop(wallet);
+        let wallet = Wallet::new(&test_dir)?;
+        let retry = wallet.create_idempotent_transfer(
+            "message-id",
+            destination,
+            Amount::from_sat(1),
+            Amount::from_sat(100),
+            Some(vec![1, 2, 3]),
+        )?;
+        assert_eq!(first.txid(), retry.txid());
+        assert!(
+            wallet
+                .create_idempotent_transfer(
+                    "message-id",
+                    destination,
+                    Amount::from_sat(2),
+                    Amount::from_sat(100),
+                    Some(vec![1, 2, 3]),
+                )
+                .is_err()
+        );
+        drop(wallet);
         let _unused = std::fs::remove_dir_all(&test_dir);
         Ok(())
     }

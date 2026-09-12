@@ -124,6 +124,10 @@ let_underscore_drop = "deny"
 git = "https://gitlab.com/A-Manning/leonhard-llc-ops.git"
 branch = "temp-dir-leak"
 
+[patch.crates-io.wayland-scanner]
+git = "https://github.com/ekulkisnek/wayland-rs"
+rev = "6953f3cfb140b9d3c8b770d12d0f771f3de855f5"
+
 # Have to use a patch here. Depending directly on the fork breaks macros.
 [patch.crates-io.tracing-appender]
 git = "https://github.com/torkelrogstad/tokio-tracing.git"

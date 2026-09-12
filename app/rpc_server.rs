@@ -13,11 +13,12 @@ use jsonrpsee::{
 
 use plain_bitnames::{
     authorization::{self, Dst, Signature},
+    net::TorProxyStatus,
     types::{
-        Address, Authorization, BitName, BitNameData, Block, BlockHash,
-        EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
-        PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
-        WithdrawalBundle,
+        Address, Authorization, BitName, BitNameData, BitNameDataUpdates,
+        BitNameResolution, Block, BlockHash, EncryptionPubKey, FilledOutput,
+        MutableBitNameData, OutPoint, PaymailEntry, PointedOutput, SpentOutput,
+        Transaction, Txid, VerifyingKey, WithdrawalBundle,
         keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
         net::Peer,
         wallet::Balance,
@@ -60,9 +61,9 @@ impl rpc_api::open_api::RpcServer for PrivateOnlyRpcServerImpl {
 }
 
 #[derive(Clone)]
-#[repr(transparent)]
 pub struct RpcServerImpl<const ENABLE_PRIVATE_API: bool> {
     app: App,
+    transfer_lock: std::sync::Arc<std::sync::Mutex<()>>,
 }
 
 #[async_trait]
@@ -140,6 +141,33 @@ impl<const ENABLE_PRIVATE_API: bool> rpc_api::node::RpcServer
             })
             .await
             .unwrap()
+    }
+
+    async fn bitname_data_at_position(
+        &self,
+        bitname: BitName,
+        block_hash: BlockHash,
+        tx_index: u32,
+    ) -> RpcResult<BitNameData> {
+        self.app
+            .node
+            .get_bitname_data_at_block_position(&bitname, block_hash, tx_index)
+            .map_err(custom_err)
+    }
+
+    async fn resolve_bitname(
+        &self,
+        bitname: BitName,
+    ) -> RpcResult<BitNameResolution> {
+        self.app.resolve_bitname(bitname).map_err(custom_err)
+    }
+
+    async fn get_paymail_entries(&self) -> RpcResult<Vec<PaymailEntry>> {
+        self.app.get_paymail_entries(None).map_err(custom_err)
+    }
+
+    async fn tor_proxy_status(&self) -> RpcResult<TorProxyStatus> {
+        Ok(self.app.node.tor_proxy_status())
     }
 
     async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block> {
@@ -603,6 +631,59 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
             .map_err(custom_err)
     }
 
+    async fn update_bitname(
+        &self,
+        bitname: BitName,
+        updates: BitNameDataUpdates,
+        fee_sats: u64,
+    ) -> RpcResult<Txid> {
+        self.app
+            .update_bitname(bitname, updates, Amount::from_sat(fee_sats))
+            .map_err(custom_err)
+    }
+
+    async fn transfer(
+        &self,
+        dest: Address,
+        value_sats: u64,
+        fee_sats: u64,
+        memo: Option<String>,
+        idempotency_key: Option<String>,
+    ) -> RpcResult<Txid> {
+        let _guard = self
+            .transfer_lock
+            .lock()
+            .map_err(|_| custom_err_msg("transfer lock poisoned"))?;
+        let memo = match memo {
+            None => None,
+            Some(memo) => {
+                let hex = const_hex::decode(memo).map_err(custom_err)?;
+                Some(hex)
+            }
+        };
+        let value = Amount::from_sat(value_sats);
+        let fee = Amount::from_sat(fee_sats);
+        let tx = if let Some(key) = idempotency_key {
+            self.app
+                .wallet
+                .create_idempotent_transfer(&key, dest, value, fee, memo)
+        } else {
+            self.app.wallet.create_transfer(dest, value, fee, memo)
+        }
+        .map_err(custom_err)?;
+        let txid = tx.txid();
+        if self
+            .app
+            .node
+            .try_get_transaction(txid)
+            .map_err(custom_err)?
+            .is_none()
+        {
+            self.app.sign_and_send(tx).map_err(custom_err)?;
+        }
+        Ok(txid)
+    }
+
     async fn sign_transaction(
         &self,
         transaction: plain_bitnames::types::Transaction,
@@ -737,7 +818,10 @@ pub async fn run_server(
         let private_rpc_server_addr = private_rpc_server.local_addr()?;
 
         let rpc_server_handle = {
-            let rpc_server_impl = RpcServerImpl::<false> { app: app.clone() };
+            let rpc_server_impl = RpcServerImpl::<false> {
+                app: app.clone(),
+                transfer_lock: Default::default(),
+            };
             let mut rpc_module =
                 rpc_api::open_api::RpcServer::into_rpc(rpc_server_impl.clone());
             rpc_module
@@ -745,7 +829,10 @@ pub async fn run_server(
             server.start(rpc_module)
         };
         let private_only_rpc_server_handle = {
-            let rpc_server_impl = RpcServerImpl::<true> { app };
+            let rpc_server_impl = RpcServerImpl::<true> {
+                app,
+                transfer_lock: Default::default(),
+            };
             let mut rpc_module = rpc_api::open_api::RpcServer::into_rpc(
                 PrivateOnlyRpcServerImpl,
             );
@@ -768,7 +855,10 @@ pub async fn run_server(
         });
         (task_handle, server_addrs)
     } else {
-        let rpc_server_impl = RpcServerImpl::<true> { app };
+        let rpc_server_impl = RpcServerImpl::<true> {
+            app,
+            transfer_lock: Default::default(),
+        };
         let mut rpc_module =
             rpc_api::open_api::RpcServer::into_rpc(rpc_server_impl.clone());
         rpc_module.merge(rpc_api::node::PrivateRpcServer::into_rpc(

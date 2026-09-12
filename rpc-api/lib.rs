@@ -28,15 +28,16 @@ pub mod node {
     use l2l_openapi::open_api;
     use plain_bitnames_types::{
         Address, Authorization, Authorized, BatchIcannRegistrationData,
-        BitNameData, BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent,
-        Block, BlockHash, Body, EncryptionPubKey, FilledOutput,
-        FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
-        MutableBitNameData, OutPoint, Output, OutputContent, PointedOutput,
-        SpentOutput, Transaction, TransactionData, TxIn, Txid, VerifyingKey,
-        WithdrawalBundle, WithdrawalOutputContent,
+        BitNameData, BitNameDataUpdates, BitNameResolution, BitNameSeqId,
+        BitcoinOutputContent, Block, BlockHash, Body, EncryptionPubKey,
+        FilledOutput, FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
+        MutableBitNameData, OutPoint, Output, OutputContent, PaymailEntry,
+        PaymailRecipient, PointedOutput, SpentOutput, Transaction,
+        TransactionData, TxIn, Txid, VerifyingKey, WithdrawalBundle,
+        WithdrawalOutputContent,
         authorization::Signature,
         hashes::BitName,
-        net::{Peer, PeerConnectionStatus},
+        net::{Peer, PeerConnectionStatus, TorProxyStatus},
         schema as bitnames_schema,
     };
     use serde::{Deserialize, Serialize};
@@ -83,10 +84,10 @@ pub mod node {
 
     #[open_api(ref_schemas[
         Address, Authorization, BatchIcannRegistrationData,
-        BitcoinOutputContent, BitName, BitNameDataUpdates, BitNameSeqId,
+        BitcoinOutputContent, BitName, BitNameData, BitNameDataUpdates, BitNameSeqId,
         BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
         Header, InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint,
-        Output, OutputContent, PeerConnectionStatus, Signature, SpentOutput,
+        Output, OutputContent, PaymailRecipient, PeerConnectionStatus, Signature, SpentOutput,
         Transaction, TransactionData, Txid, TxIn, VerifyingKey,
         WithdrawalOutputContent, bitnames_schema::BitcoinAddr,
         bitnames_schema::BitcoinBlockHash, bitnames_schema::BitcoinOutPoint,
@@ -121,6 +122,30 @@ pub mod node {
             ))]
             main_block_hash: bitcoin::BlockHash,
         ) -> RpcResult<bool>;
+
+        /// Retrieve BitName data at a confirmed transaction position.
+        #[method(name = "bitname_data_at_position")]
+        async fn bitname_data_at_position(
+            &self,
+            bitname: BitName,
+            block_hash: BlockHash,
+            tx_index: u32,
+        ) -> RpcResult<BitNameData>;
+
+        /// Resolve the current owner and mutable data of a BitName.
+        #[method(name = "resolve_bitname")]
+        async fn resolve_bitname(
+            &self,
+            bitname: BitName,
+        ) -> RpcResult<BitNameResolution>;
+
+        /// List attributed mailbox outputs, including spent and underpaid entries.
+        #[method(name = "get_paymail_entries")]
+        async fn get_paymail_entries(&self) -> RpcResult<Vec<PaymailEntry>>;
+
+        /// Report whether the configured Tor tunnel can accept transactions.
+        #[method(name = "tor_proxy_status")]
+        async fn tor_proxy_status(&self) -> RpcResult<TorProxyStatus>;
 
         /// Get block data
         #[open_api_method(output_schema(ToSchema))]
@@ -442,6 +467,26 @@ pub mod wallet {
             address: Address,
             msg: String,
         ) -> RpcResult<Authorization>;
+
+        /// Update mutable BitName data and submit the transaction.
+        #[method(name = "update_bitname")]
+        async fn update_bitname(
+            &self,
+            bitname: BitName,
+            updates: BitNameDataUpdates,
+            fee_sats: u64,
+        ) -> RpcResult<Txid>;
+
+        /// Create and submit a transfer, replaying the same transaction on keyed retries.
+        #[method(name = "transfer")]
+        async fn transfer(
+            &self,
+            dest: Address,
+            value: u64,
+            fee: u64,
+            memo: Option<String>,
+            idempotency_key: Option<String>,
+        ) -> RpcResult<Txid>;
 
         /// Sign a transaction, and optionally broadcast it.
         #[method(name = "sign_transaction")]

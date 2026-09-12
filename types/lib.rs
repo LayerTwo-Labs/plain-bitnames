@@ -36,6 +36,8 @@ pub use keys::{
     EncryptionPubKey, VerifyingKey, XEncryptionSecretKey, XPubKey,
     XVerifyingKey,
 };
+mod paymail;
+pub use paymail::{BitNameResolution, PaymailEntry, PaymailRecipient};
 pub mod net;
 pub mod schema;
 pub mod transaction;

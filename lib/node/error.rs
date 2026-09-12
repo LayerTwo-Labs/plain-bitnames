@@ -109,6 +109,11 @@ pub mod net_task {
     from(env::WriteTxn, env::Error)
 )]
 pub enum Error {
+    #[error("block {block_hash} is not on the current canonical chain")]
+    NonCanonicalBlock { block_hash: crate::types::BlockHash },
+    #[error("Tor proxy mode has no connected tunnel peer")]
+    TorProxyUnavailable,
+
     #[error("address parse error")]
     AddrParse(#[from] std::net::AddrParseError),
     #[error(transparent)]

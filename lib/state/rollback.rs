@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use nonempty::NonEmpty;
 use serde::{Deserialize, Serialize};
 
@@ -104,8 +106,48 @@ impl<T> RollBack<TxidStamped<T>> {
             .find(|txid_stamped| txid_stamped.height <= height)
     }
 
+    /// Returns the value as it was after the transaction at `tx_index` in a
+    /// block. This avoids applying a later update from the same block.
+    pub fn at_block_position(
+        &self,
+        height: u32,
+        tx_index: u32,
+        tx_indexes: &HashMap<Txid, u32>,
+    ) -> Option<&TxidStamped<T>> {
+        self.0.iter().rev().find(|txid_stamped| {
+            txid_stamped.height < height
+                || (txid_stamped.height == height
+                    && tx_indexes
+                        .get(&txid_stamped.txid)
+                        .is_some_and(|update_index| *update_index <= tx_index))
+        })
+    }
+
     /// returns the most recent value, along with it's txid
     pub fn latest(&self) -> &TxidStamped<T> {
         self.0.last()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn block_position_excludes_later_update_in_same_block() {
+        let first_txid = Txid([1; 32]);
+        let later_txid = Txid([2; 32]);
+        let mut history = RollBack::<TxidStamped<i32>>::new(10, first_txid, 7);
+        history.push(20, later_txid, 7);
+        let tx_indexes = HashMap::from([(first_txid, 1), (later_txid, 3)]);
+
+        assert_eq!(
+            history.at_block_position(7, 2, &tx_indexes).unwrap().data,
+            10
+        );
+        assert_eq!(
+            history.at_block_position(7, 3, &tx_indexes).unwrap().data,
+            20
+        );
     }
 }

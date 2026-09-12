@@ -6,8 +6,8 @@ use thiserror::Error;
 use transitive::Transitive;
 
 use crate::types::{
-    Address, AmountOverflowError, AmountUnderflowError, EncryptionPubKey,
-    VerifyingKey,
+    Address, AmountOverflowError, AmountUnderflowError, BitName,
+    EncryptionPubKey, VerifyingKey,
 };
 
 #[derive(Debug, Error)]
@@ -107,6 +107,8 @@ pub enum Error {
     Authorization(#[from] crate::types::AuthorizationError),
     #[error("bip32 error")]
     Bip32(#[from] bitcoin::bip32::Error),
+    #[error("BitName {bitname} is not owned by this wallet")]
+    BitNameNotOwned { bitname: BitName },
     #[error(transparent)]
     Db(#[from] db::Error),
     #[error("Database env error")]
@@ -119,6 +121,10 @@ pub enum Error {
     EpkDoesNotExist(#[from] EpkDoesNotExist),
     #[error("io error")]
     Io(#[from] std::io::Error),
+    #[error(
+        "idempotency key `{key}` was already used for a different transfer"
+    )]
+    IdempotencyConflict { key: String },
     #[error("no index for address {address}")]
     NoIndex { address: Address },
     #[error(transparent)]

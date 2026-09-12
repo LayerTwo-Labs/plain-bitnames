@@ -101,6 +101,12 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error("peer connection not found for {0}")]
     MissingPeerConnection(SocketAddr),
+    /// Direct peers are forbidden when P2P is restricted to loopback tunnel
+    /// sidecars.
+    #[error("non-loopback peer '{0}' is forbidden in Tor proxy mode")]
+    NonLoopbackPeerInTorProxyMode(SocketAddr),
+    #[error("peer '{0}' is not the trusted Tor tunnel peer")]
+    UntrustedTorProxyPeer(SocketAddr),
     /// Unspecified peer IP addresses cannot be connected to.
     /// `0.0.0.0` is one example of an "unspecified" IP.
     #[error("unspecified peer ip address (cannot connect to '{0}')")]
