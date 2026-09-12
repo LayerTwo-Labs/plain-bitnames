@@ -32,6 +32,9 @@ pub struct BitNameData {
     /// optional ipv6 addr
     pub(in crate::state) socket_addr_v6:
         RollBack<TxidStamped<Option<SocketAddrV6>>>,
+    /// optional `host:port`, resolved by DNS
+    pub(in crate::state) socket_addr_host:
+        RollBack<TxidStamped<Option<String>>>,
     /// optional pubkey used for encryption
     pub(in crate::state) encryption_pubkey:
         RollBack<TxidStamped<Option<EncryptionPubKey>>>,
@@ -68,6 +71,11 @@ impl BitNameData {
                 txid,
                 height,
             ),
+            socket_addr_host: RollBack::<TxidStamped<_>>::new(
+                bitname_data.socket_addr_host,
+                txid,
+                height,
+            ),
             encryption_pubkey: RollBack::<TxidStamped<_>>::new(
                 bitname_data.encryption_pubkey,
                 txid,
@@ -99,6 +107,7 @@ impl BitNameData {
             is_icann: _,
             socket_addr_v4,
             socket_addr_v6,
+            socket_addr_host,
             encryption_pubkey,
             signing_pubkey,
             paymail_fee_sats,
@@ -129,6 +138,12 @@ impl BitNameData {
         apply_field_update(
             socket_addr_v6,
             updates.socket_addr_v6,
+            txid,
+            height,
+        );
+        apply_field_update(
+            socket_addr_host,
+            updates.socket_addr_host,
             txid,
             height,
         );
@@ -196,6 +211,7 @@ impl BitNameData {
             is_icann: _,
             socket_addr_v4,
             socket_addr_v6,
+            socket_addr_host,
             encryption_pubkey,
             signing_pubkey,
             paymail_fee_sats,
@@ -225,6 +241,12 @@ impl BitNameData {
             height,
         );
         revert_field_update(
+            socket_addr_host,
+            updates.socket_addr_host,
+            txid,
+            height,
+        );
+        revert_field_update(
             socket_addr_v6,
             updates.socket_addr_v6,
             txid,
@@ -246,6 +268,11 @@ impl BitNameData {
             commitment: self.commitment.at_block_height(height)?.data,
             socket_addr_v4: self.socket_addr_v4.at_block_height(height)?.data,
             socket_addr_v6: self.socket_addr_v6.at_block_height(height)?.data,
+            socket_addr_host: self
+                .socket_addr_host
+                .at_block_height(height)?
+                .data
+                .clone(),
             encryption_pubkey: self
                 .encryption_pubkey
                 .at_block_height(height)?
@@ -268,6 +295,7 @@ impl BitNameData {
             commitment: self.commitment.latest().data,
             socket_addr_v4: self.socket_addr_v4.latest().data,
             socket_addr_v6: self.socket_addr_v6.latest().data,
+            socket_addr_host: self.socket_addr_host.latest().data.clone(),
             encryption_pubkey: self.encryption_pubkey.latest().data,
             signing_pubkey: self.signing_pubkey.latest().data,
             paymail_fee_sats: self.paymail_fee_sats.latest().data,

@@ -27,6 +27,8 @@ pub struct TrySetBitNameData {
     pub socket_addr_v4: TrySetOption<SocketAddrV4>,
     /// optional ipv6 addr
     pub socket_addr_v6: TrySetOption<SocketAddrV6>,
+    /// optional `host:port`, resolved by DNS
+    pub socket_addr_host: TrySetOption<String>,
     /// optional pubkey used for encryption
     pub encryption_pubkey: TrySetOption<EncryptionPubKey>,
     /// optional pubkey used for signing messages
@@ -80,6 +82,10 @@ impl TryFrom<TrySetBitNameData> for MutableBitNameData {
             .socket_addr_v6
             .0
             .map_err(|err| format!("Cannot parse ipv6 address: \"{err}\""))?;
+        let socket_addr_host = try_set
+            .socket_addr_host
+            .0
+            .map_err(|err| format!("Cannot parse host address: \"{err}\""))?;
         let encryption_pubkey = try_set.encryption_pubkey.0.map_err(|err| {
             format!("Cannot parse encryption pubkey: \"{err}\"")
         })?;
@@ -95,6 +101,7 @@ impl TryFrom<TrySetBitNameData> for MutableBitNameData {
             commitment,
             socket_addr_v4,
             socket_addr_v6,
+            socket_addr_host,
             encryption_pubkey,
             signing_pubkey,
             paymail_fee_sats,
@@ -242,6 +249,17 @@ impl TxCreator {
                     SocketAddrV6::to_string,
                 )
         });
+        let host_resp = ui.horizontal(|ui| {
+            ui.monospace("Host Address:       ")
+                | Self::show_option_field_default(
+                    ui,
+                    "bitname_data_host",
+                    "example.com:3000".to_owned(),
+                    &mut bitname_data.socket_addr_host,
+                    Ok::<String, std::convert::Infallible>,
+                    String::to_string,
+                )
+        });
         let encryption_pubkey_resp = ui.horizontal(|ui| {
             let default_pubkey =
                 EncryptionPubKey::from(<[u8; 32] as Default>::default());
@@ -281,6 +299,7 @@ impl TxCreator {
         commitment_resp.join()
             | ipv4_resp.join()
             | ipv6_resp.join()
+            | host_resp.join()
             | encryption_pubkey_resp.join()
             | signing_pubkey_resp.join()
             | paymail_fee_resp.join()

@@ -685,6 +685,7 @@ mod test {
             commitment: Update::Retain,
             socket_addr_v4: Update::Retain,
             socket_addr_v6: Update::Retain,
+            socket_addr_host: Update::Retain,
             encryption_pubkey: Update::Retain,
             signing_pubkey: Update::Retain,
             paymail_fee_sats: Update::Retain,
@@ -778,6 +779,7 @@ mod test {
 
         let mut updates = all_retained_updates();
         updates.commitment = Update::Set([9; 32]);
+        updates.socket_addr_host = Update::Set("example.com:6002".to_owned());
         let update_tx = Transaction {
             inputs: vec![bitname_outpoint],
             outputs: vec![Output::new(address, OutputContent::BitName)],

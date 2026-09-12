@@ -31,10 +31,14 @@ fn show_bitname_data(
         commitment,
         socket_addr_v4,
         socket_addr_v6,
+        socket_addr_host,
         encryption_pubkey,
         signing_pubkey,
         paymail_fee_sats,
     } = mutable_data;
+    let socket_addr_host = socket_addr_host
+        .clone()
+        .unwrap_or_else(|| "Not set".to_owned());
     let commitment = commitment.map_or("Not set".to_owned(), const_hex::encode);
     let socket_addr_v4 = socket_addr_v4
         .map_or("Not set".to_owned(), |socket_addr_v4| {
@@ -72,6 +76,13 @@ fn show_bitname_data(
             ui.monospace_selectable_singleline(
                 false,
                 format!("IPv6 Address: {socket_addr_v6}"),
+            )
+        })
+        .join()
+        | ui.horizontal(|ui| {
+            ui.monospace_selectable_singleline(
+                false,
+                format!("Host: {socket_addr_host}"),
             )
         })
         .join()
