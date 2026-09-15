@@ -245,6 +245,7 @@ pub fn connect_prevalidated(
     // Use precomputed height and merkle root (validation already done in prevalidate)
     let height = prevalidated.next_height;
     let merkle_root = prevalidated.computed_merkle_root;
+    let coinbase_txid = header.compute_coinbase_txid();
 
     // Accumulate DB mutations to apply in sorted key order for better locality
     let mut utxo_deletes: BTreeMap<OutPointKey, ()> = BTreeMap::new();
@@ -254,7 +255,7 @@ pub fn connect_prevalidated(
     // Handle coinbase outputs (accumulate puts)
     for (vout, output) in body.coinbase.outputs.iter().enumerate() {
         let outpoint = OutPoint::Coinbase {
-            merkle_root: header.merkle_root,
+            txid: coinbase_txid,
             vout: vout as u32,
         };
         let filled_content = match output.content.clone() {
@@ -403,9 +404,10 @@ pub fn connect(
         };
         return Err(Error::InvalidHeader(err));
     }
+    let coinbase_txid = header.compute_coinbase_txid();
     for (vout, output) in body.coinbase.outputs.iter().enumerate() {
         let outpoint = OutPoint::Coinbase {
-            merkle_root: header.merkle_root,
+            txid: coinbase_txid,
             vout: vout as u32,
         };
         let filled_content = match output.content.clone() {
@@ -523,10 +525,11 @@ pub fn disconnect_tip(
     body: &Body,
 ) -> Result<(), Error> {
     let tip_hash = state.tip.try_get(rwtxn, &())?.ok_or(Error::NoTip)?;
-    if tip_hash != header.hash() {
+    let block_hash = header.hash();
+    if tip_hash != block_hash {
         let err = error::InvalidHeader::BlockHash {
             expected: tip_hash,
-            computed: header.hash(),
+            computed: block_hash,
         };
         return Err(Error::InvalidHeader(err));
     }
@@ -609,22 +612,25 @@ pub fn disconnect_tip(
     })?;
     filled_txs.reverse();
     // delete coinbase UTXOs, last-to-first
-    body.coinbase
-        .outputs
-        .iter()
-        .enumerate()
-        .rev()
-        .try_for_each(|(vout, _output)| {
-            let outpoint = OutPoint::Coinbase {
-                merkle_root: header.merkle_root,
-                vout: vout as u32,
-            };
-            if state.utxos.delete(rwtxn, &OutPointKey::from(&outpoint))? {
-                Ok::<_, Error>(())
-            } else {
-                Err(error::NoUtxo { outpoint }.into())
-            }
-        })?;
+    {
+        let coinbase_txid = header.compute_coinbase_txid();
+        body.coinbase
+            .outputs
+            .iter()
+            .enumerate()
+            .rev()
+            .try_for_each(|(vout, _output)| {
+                let outpoint = OutPoint::Coinbase {
+                    txid: coinbase_txid,
+                    vout: vout as u32,
+                };
+                if state.utxos.delete(rwtxn, &OutPointKey::from(&outpoint))? {
+                    Ok::<_, Error>(())
+                } else {
+                    Err(error::NoUtxo { outpoint }.into())
+                }
+            })?;
+    }
     let merkle_root =
         Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
     if merkle_root != header.merkle_root {

@@ -163,11 +163,11 @@ pub mod node {
             use plain_bitnames_types::{
                 Address, Authorization, BatchIcannRegistrationData, BitName,
                 BitNameDataUpdates, BitcoinOutputContent, Block, BlockHash,
-                Body, Coinbase, EncryptionPubKey, Header, MerkleRoot,
-                MutableBitNameData, OutPoint, Output, OutputContent,
-                Transaction, TransactionData, Txid, VerifyingKey,
-                WithdrawalOutputContent, authorization::Signature,
-                transaction::Outputs,
+                Body, Coinbase, CoinbaseTxid, EncryptionPubKey, Header,
+                MerkleRoot, MutableBitNameData, OutPoint, Output,
+                OutputContent, Transaction, TransactionData, Txid,
+                VerifyingKey, WithdrawalOutputContent,
+                authorization::Signature, transaction::Outputs,
             };
             use serde::Serialize;
             use typewit::const_marker::Bool;
@@ -205,11 +205,12 @@ pub mod node {
                 Address, Authorization, BatchIcannRegistrationData,
                 BitcoinOutputContent, BitName, BitNameDataUpdates, Block,
                 BlockHash, BlockVerbose, Body, BodyVerbose, Coinbase,
-                EncryptionPubKey, Header, MerkleRoot, MutableBitNameData,
-                OutPoint, Output, OutputContent, Outputs, Signature,
-                Transaction, TransactionData, TransactionVerbose, Txid,
-                VerifyingKey, WithdrawalOutputContent, schema::BitcoinAddr,
-                schema::BitcoinBlockHash, schema::BitcoinOutPoint,
+                CoinbaseTxid, EncryptionPubKey, Header, MerkleRoot,
+                MutableBitNameData, OutPoint, Output, OutputContent, Outputs,
+                Signature, Transaction, TransactionData, TransactionVerbose,
+                Txid, VerifyingKey, WithdrawalOutputContent,
+                schema::BitcoinAddr, schema::BitcoinBlockHash,
+                schema::BitcoinOutPoint,
             ])]
             #[rpc(server, server_bounds(Self: private::Sealed))]
             pub trait Rpc {

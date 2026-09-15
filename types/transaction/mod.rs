@@ -9,7 +9,10 @@ use crate::{
     AmountOverflowError, BitNameDataUpdates, ComputeFeeError, GetValue,
     MutableBitNameData,
     authorization::{Authorization, Signature},
-    hashes::{self, BitName, Hash, M6id, MerkleRoot, Txid},
+    hashes::{
+        self, BitName, Hash, InputsMerkleRoot, M6id, OutputsMerkleRoot,
+        TxMerkleRoot, Txid,
+    },
     util,
 };
 
@@ -138,7 +141,7 @@ impl Transaction {
 
     pub(crate) fn compute_merkle_root(
         &self,
-    ) -> Result<MerkleRoot, outputs::error::ComputeMerkleRoot> {
+    ) -> Result<TxMerkleRoot, outputs::error::ComputeMerkleRoot> {
         let Self {
             inputs,
             outputs,
@@ -148,8 +151,8 @@ impl Transaction {
         // Borsh encoding for hashing
         #[derive(BorshSerialize)]
         struct HashComponents<'a> {
-            inputs_commitment: MerkleRoot,
-            outputs_commitment: MerkleRoot,
+            inputs_commitment: InputsMerkleRoot,
+            outputs_commitment: OutputsMerkleRoot,
             memo: &'a [u8],
             data: &'a Option<TransactionData>,
         }

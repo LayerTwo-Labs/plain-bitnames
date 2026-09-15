@@ -10,7 +10,9 @@ use crate::{
     authorization::Authorization,
     block::coinbase::Coinbase,
     error,
-    hashes::{self, Hash, MerkleRoot},
+    hashes::{
+        self, CoinbaseMerkleRoot, CoinbaseTxid, Hash, MerkleRoot, TxMerkleRoot,
+    },
     transaction::{
         AuthorizedTransaction, FilledTransaction, OutPoint, Output, Transaction,
     },
@@ -26,7 +28,7 @@ struct CbmtLeafPreCommitment {
     #[borsh(serialize_with = "util::borsh::serialize::bitcoin_amount")]
     fee: bitcoin::Amount,
     canonical_size: u64,
-    tx_merkle_root: MerkleRoot,
+    tx_merkle_root: TxMerkleRoot,
 }
 
 /// Hash to get a [`CbmtNode`] inner commitment for an internal node
@@ -237,10 +239,16 @@ impl Body {
         let coinbase_commitment = coinbase
             .compute_merkle_root()
             .map_err(error::compute_merkle_root::Inner::CoinbaseMerkleRoot)?;
-        let root = hashes::hash_with_scratch_buffer(&(
+        // Borsh encoding for hashing
+        #[derive(BorshSerialize)]
+        struct HashComponents {
+            coinbase_commitment: CoinbaseMerkleRoot,
+            txs_commitment: Hash,
+        }
+        let root = hashes::hash_with_scratch_buffer(&HashComponents {
             coinbase_commitment,
             txs_commitment,
-        ))
+        })
         .into();
         Ok(root)
     }
@@ -307,26 +315,28 @@ impl Body {
     }
 
     pub fn get_outputs(
+        coinbase_txid: CoinbaseTxid,
         coinbase: &Coinbase,
         txs: &[FilledTransaction],
-    ) -> Result<Option<HashMap<OutPoint, Output>>, error::ComputeMerkleRoot>
-    {
-        let mut outputs = HashMap::new();
-        let merkle_root = Self::compute_merkle_root(coinbase, txs)?;
+    ) -> HashMap<OutPoint, Output> {
+        let mut res = HashMap::new();
         for (vout, output) in coinbase.outputs.iter().enumerate() {
             let vout = vout as u32;
-            let outpoint = OutPoint::Coinbase { merkle_root, vout };
-            outputs.insert(outpoint, output.clone());
+            let outpoint = OutPoint::Coinbase {
+                txid: coinbase_txid,
+                vout,
+            };
+            res.insert(outpoint, output.clone());
         }
         for transaction in txs {
             let txid = transaction.txid();
             for (vout, output) in transaction.outputs().iter().enumerate() {
                 let vout = vout as u32;
                 let outpoint = OutPoint::Regular { txid, vout };
-                outputs.insert(outpoint, output.clone());
+                res.insert(outpoint, output.clone());
             }
         }
-        Ok(Some(outputs))
+        res
     }
 
     pub fn get_coinbase_value(

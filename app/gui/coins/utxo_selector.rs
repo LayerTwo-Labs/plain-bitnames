@@ -75,8 +75,8 @@ pub fn show_utxo(
         OutPoint::Deposit(outpoint) => {
             ("deposit", format!("{}", outpoint.txid), outpoint.vout)
         }
-        OutPoint::Coinbase { merkle_root, vout } => {
-            ("coinbase", format!("{merkle_root}"), *vout)
+        OutPoint::Coinbase { txid, vout } => {
+            ("coinbase", format!("{txid}"), *vout)
         }
     };
     let hash = &hash[0..8];

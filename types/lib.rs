@@ -31,7 +31,8 @@ pub use error::{
 };
 pub mod hashes;
 pub use hashes::{
-    BitName, BlockHash, Hash, M6id, MerkleRoot, NonZeroBitcoinBlockHash, Txid,
+    BitName, BlockHash, CoinbaseTxid, Hash, M6id, MerkleRoot,
+    NonZeroBitcoinBlockHash, Txid,
 };
 pub mod keys;
 pub use keys::{
