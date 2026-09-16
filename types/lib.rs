@@ -21,6 +21,7 @@ pub use bitname_seq_id::BitNameSeqId;
 pub mod block;
 pub use block::{Block, Body, Coinbase, Header};
 pub mod constants;
+pub mod ecies;
 pub mod error;
 pub use error::{
     AmountOverflow as AmountOverflowError,
@@ -35,10 +36,7 @@ pub use hashes::{
     NonZeroBitcoinBlockHash, Txid,
 };
 pub mod keys;
-pub use keys::{
-    EncryptionPubKey, VerifyingKey, XEncryptionSecretKey, XPubKey,
-    XVerifyingKey,
-};
+pub use keys::PublicKey;
 pub mod net;
 pub mod schema;
 pub mod state;

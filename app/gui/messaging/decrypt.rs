@@ -1,6 +1,8 @@
+use std::str::FromStr;
+
 use eframe::egui;
 
-use plain_bitnames::types::EncryptionPubKey;
+use plain_bitnames::types::{bitname_data::XPublicKey, keys::PublicKey};
 
 use crate::{
     app::App,
@@ -11,8 +13,8 @@ use crate::{
 pub struct DecryptMessage {
     // Encryption pubkey or BitName
     receiver_input: String,
-    // none if not yet set, otherwise result of parsing/resolving receiver pubkey
-    receiver_pubkey: Option<anyhow::Result<EncryptionPubKey>>,
+    // none if not yet set, otherwise result of parsing/resolving receiver xpubkey
+    receiver_pubkey: Option<anyhow::Result<PublicKey>>,
     ciphertext: String,
     // none if not yet computed, otherwise result of attempting to decrypt
     plaintext_bytes: Option<anyhow::Result<Vec<u8>>>,
@@ -43,28 +45,26 @@ impl DecryptMessage {
         let receiver_input_response =
             ui.add(egui::TextEdit::singleline(&mut self.receiver_input));
         if receiver_input_response.changed() {
-            let receiver_pubkey: anyhow::Result<EncryptionPubKey> = {
+            let receiver_xpubkey: anyhow::Result<XPublicKey> = {
                 if let Ok(bitname) = borsh_deserialize_hex(&self.receiver_input)
                 {
                     app.node
                         .get_current_bitname_data(&bitname)
                         .map_err(anyhow::Error::from)
                         .and_then(|bitname_data| {
-                            bitname_data.mutable_data.encryption_pubkey.ok_or(
+                            bitname_data.mutable_data.xpubkey.ok_or(
                                 anyhow::anyhow!(
-                                "No encryption pubkey exists for this BitName"
-                        ),
+                                    "No xpubkey exists for this BitName"
+                                ),
                             )
                         })
                 } else {
-                    EncryptionPubKey::bech32m_decode(&self.receiver_input)
-                        .map_err(|_| {
-                            anyhow::anyhow!(
-                                "Failed to parse BitName or Encryption Pubkey"
-                            )
-                        })
+                    XPublicKey::from_str(&self.receiver_input).map_err(|_| {
+                        anyhow::anyhow!("Failed to parse BitName or XPubkey")
+                    })
                 }
             };
+            let receiver_pubkey = receiver_xpubkey.map(|xpk| xpk.pubkey);
             self.receiver_pubkey = Some(receiver_pubkey);
         }
         let ciphertext_response = egui::Panel::left("ciphertext message")

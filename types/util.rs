@@ -26,6 +26,8 @@ pub(crate) mod borsh {
     pub mod serialize {
         use borsh::BorshSerialize;
 
+        use frost_ristretto255::VerifyingKey;
+
         pub fn bitcoin_address<V, W>(
             bitcoin_address: &bitcoin::Address<V>,
             writer: &mut W,
@@ -74,24 +76,36 @@ pub(crate) mod borsh {
             BorshSerialize::serialize(&(txid_bytes, vout), writer)
         }
 
-        pub fn ed25519_vk<W>(
-            vk: &ed25519_dalek::VerifyingKey,
+        #[inline(always)]
+        pub fn compressed_ristretto_point<W>(
+            compressed: &curve25519_dalek::ristretto::CompressedRistretto,
             writer: &mut W,
         ) -> borsh::io::Result<()>
         where
             W: borsh::io::Write,
         {
-            BorshSerialize::serialize(vk.as_bytes(), writer)
+            borsh::BorshSerialize::serialize(compressed.as_bytes(), writer)
         }
 
-        pub fn x25519_pubkey<W>(
-            pk: &x25519_dalek::PublicKey,
+        #[inline(always)]
+        pub fn ristretto_point<W>(
+            point: &curve25519_dalek::RistrettoPoint,
             writer: &mut W,
         ) -> borsh::io::Result<()>
         where
             W: borsh::io::Write,
         {
-            BorshSerialize::serialize(pk.as_bytes(), writer)
+            compressed_ristretto_point(&point.compress(), writer)
+        }
+
+        pub fn verifying_key<W>(
+            vk: &VerifyingKey,
+            writer: &mut W,
+        ) -> borsh::io::Result<()>
+        where
+            W: borsh::io::Write,
+        {
+            ristretto_point(&vk.to_element(), writer)
         }
     }
 }

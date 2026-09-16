@@ -9,6 +9,61 @@ pub struct AmountOverflow;
 pub struct AmountUnderflow;
 
 #[derive(Debug, Error)]
+#[error("Non-canonical Ristretto point encoding")]
+pub struct NonCanonicalRistrettoPointEncoding;
+
+pub mod signature {
+    use thiserror::Error;
+
+    use crate::error::NonCanonicalRistrettoPointEncoding;
+
+    #[derive(Debug, Error)]
+    pub enum FromBytes {
+        #[error(transparent)]
+        R(#[from] NonCanonicalRistrettoPointEncoding),
+        #[error("Non-canonical Ristretto scalar encoding")]
+        Z,
+    }
+
+    #[derive(Debug, Error)]
+    pub enum FromHex {
+        #[error(transparent)]
+        FromBytes(FromBytes),
+        #[error(transparent)]
+        Hex(#[from] const_hex::FromHexError),
+    }
+
+    impl<E> From<E> for FromHex
+    where
+        FromBytes: From<E>,
+    {
+        fn from(err: E) -> Self {
+            Self::FromBytes(err.into())
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum Authorization {
+    #[error("borsh serialization error")]
+    BorshSerialize(#[from] borsh::io::Error),
+    #[error("not enough authorizations")]
+    NotEnoughAuthorizations,
+    #[error("signature verification error")]
+    SignatureVerification(#[from] frost_ristretto255::Error),
+    #[error("too many authorizations")]
+    TooManyAuthorizations,
+    #[error(
+        "wrong key for address: address = {address},
+             hash(verifying_key) = {hash_verifying_key}"
+    )]
+    WrongKeyForAddress {
+        address: crate::Address,
+        hash_verifying_key: crate::Address,
+    },
+}
+
+#[derive(Debug, Error)]
 pub enum ComputeFee {
     #[error("underfunded (value in < value out)")]
     Underfunded,
@@ -73,26 +128,6 @@ pub mod withdrawal_bundle {
     pub struct Error(#[from] Inner);
 }
 pub use withdrawal_bundle::Error as WithdrawalBundle;
-
-#[derive(Debug, thiserror::Error)]
-pub enum Authorization {
-    #[error("borsh serialization error")]
-    BorshSerialize(#[from] borsh::io::Error),
-    #[error("ed25519 error")]
-    Ed25519(#[from] ed25519_dalek::SignatureError),
-    #[error("not enough authorizations")]
-    NotEnoughAuthorizations,
-    #[error("too many authorizations")]
-    TooManyAuthorizations,
-    #[error(
-        "wrong key for address: address = {address},
-         hash(verifying_key) = {hash_verifying_key}"
-    )]
-    WrongKeyForAddress {
-        address: crate::Address,
-        hash_verifying_key: crate::Address,
-    },
-}
 
 #[derive(Debug, Error)]
 pub enum ParseAddress {
@@ -196,7 +231,7 @@ pub enum Bech32mDecode {
     #[error("Invalid bytes (`{}`)", const_hex::encode(.bytes))]
     InvalidBytes {
         bytes: [u8; 32],
-        source: Box<ed25519_dalek::SignatureError>,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     #[error(transparent)]
     WrongHrp(#[from] Box<WrongHrp>),

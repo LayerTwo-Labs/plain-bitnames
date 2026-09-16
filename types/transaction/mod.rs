@@ -52,8 +52,7 @@ pub struct BatchIcannRegistrationData {
     /// Plaintext names of the bitnames to be registered as ICANN domains
     pub plain_names: Vec<String>,
     /// Signature over the batch icann registration tx
-    #[schema(schema_with = <String as utoipa::PartialSchema>::schema)]
-    pub signature: Signature,
+    pub signature: Box<Signature>,
 }
 
 #[allow(clippy::enum_variant_names)]
@@ -150,17 +149,17 @@ impl Transaction {
         } = self;
         // Borsh encoding for hashing
         #[derive(BorshSerialize)]
-        struct HashComponents<'a> {
+        struct HashComponents {
             inputs_commitment: InputsMerkleRoot,
             outputs_commitment: OutputsMerkleRoot,
-            memo: &'a [u8],
-            data: &'a Option<TransactionData>,
+            memo_digest: Hash,
+            data_digest: Hash,
         }
         let digest = hashes::hash_with_scratch_buffer(&HashComponents {
             inputs_commitment: inputs.compute_merkle_root(),
             outputs_commitment: outputs.compute_merkle_root()?,
-            memo,
-            data,
+            memo_digest: hashes::hash(memo),
+            data_digest: hashes::hash(data),
         });
         Ok(digest.into())
     }

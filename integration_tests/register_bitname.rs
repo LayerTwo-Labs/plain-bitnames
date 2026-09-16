@@ -81,15 +81,15 @@ async fn register_bitname_task(
         .reserve_bitname(PLAINTEXT_NAME.to_owned())
         .await?;
     post_setup.bmm_single(&mut enforcer_post_setup).await?;
-    tracing::info!("Generating verifying key");
-    let vk = post_setup.rpc_client.get_new_verifying_key().await?;
+    tracing::info!("Generating xpubkey");
+    let xpk = post_setup.rpc_client.get_new_xpubkey().await?;
     tracing::info!("Registering BitName");
     let _: Txid = post_setup
         .rpc_client
         .register_bitname(
             PLAINTEXT_NAME.to_owned(),
             Some(MutableBitNameData {
-                signing_pubkey: Some(vk),
+                xpubkey: Some(xpk),
                 ..Default::default()
             }),
         )

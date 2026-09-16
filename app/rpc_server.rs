@@ -12,11 +12,12 @@ use jsonrpsee::{
 };
 use plain_bitnames::types::{
     Address, Authorization, BitName, BitNameData, Block, BlockHash,
-    EncryptionPubKey, FilledOutput, M6id, MutableBitNameData, OutPoint,
-    PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
-    WithdrawalBundle,
-    authorization::{self, Dst, Signature},
-    keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
+    FilledOutput, M6id, MutableBitNameData, OutPoint, PointedOutput,
+    SpentOutput, Transaction, Txid, WithdrawalBundle,
+    authorization::{self, Dst, Signature, VerifyingKey},
+    bitname_data::XPublicKey,
+    ecies,
+    keys::PublicKey,
     net::{Peer, PeerAddress},
     wallet::Balance,
 };
@@ -517,24 +518,23 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
 
     async fn decrypt_msg(
         &self,
-        encryption_pubkey: EncryptionPubKey,
+        pubkey: PublicKey,
         msg: String,
     ) -> RpcResult<String> {
         let ciphertext = const_hex::decode(msg).map_err(custom_err)?;
         self.app
             .wallet
-            .decrypt_msg(&encryption_pubkey, &ciphertext)
+            .decrypt_msg(&pubkey, &ciphertext)
             .map(const_hex::encode)
             .map_err(custom_err)
     }
 
     async fn encrypt_msg(
         &self,
-        encryption_pubkey: EncryptionPubKey,
+        recipient_pubkey: PublicKey,
         msg: String,
     ) -> RpcResult<String> {
-        Ecies::new(encryption_pubkey.0)
-            .encrypt(msg.as_bytes())
+        ecies::encrypt(rand::rng(), &recipient_pubkey, msg.as_bytes())
             .map(const_hex::encode)
             .map_err(|err| custom_err(anyhow::anyhow!("{err:?}")))
     }
@@ -583,12 +583,8 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
         self.app.wallet.get_new_address().map_err(custom_err)
     }
 
-    async fn get_new_encryption_key(&self) -> RpcResult<EncryptionPubKey> {
-        self.app.wallet.get_new_encryption_key().map_err(custom_err)
-    }
-
-    async fn get_new_verifying_key(&self) -> RpcResult<VerifyingKey> {
-        self.app.wallet.get_new_verifying_key().map_err(custom_err)
+    async fn get_new_xpubkey(&self) -> RpcResult<XPublicKey> {
+        self.app.wallet.get_new_xpubkey().map_err(custom_err)
     }
 
     async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>> {
@@ -598,21 +594,11 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
         Ok(res)
     }
 
-    async fn get_wallet_master_xesk(&self) -> RpcResult<XEncryptionSecretKey> {
+    async fn get_wallet_master_xpk(&self) -> RpcResult<XPublicKey> {
         let rotxn = self.app.wallet.env.read_txn().map_err(custom_err)?;
-        let master_xesk = self
-            .app
-            .wallet
-            .get_master_xesk(&rotxn)
-            .map_err(custom_err)?;
-        Ok(master_xesk)
-    }
-
-    async fn get_wallet_master_xvk(&self) -> RpcResult<XVerifyingKey> {
-        let rotxn = self.app.wallet.env.read_txn().map_err(custom_err)?;
-        let master_xvk =
-            self.app.wallet.get_master_xvk(&rotxn).map_err(custom_err)?;
-        Ok(master_xvk)
+        let master_xpk =
+            self.app.wallet.get_master_xpk(&rotxn).map_err(custom_err)?;
+        Ok(master_xpk)
     }
 
     async fn get_wallet_utxos(
@@ -690,12 +676,12 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
 
     async fn sign_arbitrary_msg(
         &self,
-        verifying_key: VerifyingKey,
+        pubkey: PublicKey,
         msg: String,
     ) -> RpcResult<Signature> {
         self.app
             .wallet
-            .sign_arbitrary_msg(&verifying_key, &msg)
+            .sign_arbitrary_msg(rand::rng(), &pubkey, &msg)
             .map_err(custom_err)
     }
 
@@ -706,7 +692,7 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
     ) -> RpcResult<Authorization> {
         self.app
             .wallet
-            .sign_arbitrary_msg_as_addr(&address, &msg)
+            .sign_arbitrary_msg_as_addr(rand::rng(), &address, &msg)
             .map_err(custom_err)
     }
 
@@ -715,8 +701,11 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
         transaction: plain_bitnames::types::Transaction,
         broadcast: Option<bool>,
     ) -> RpcResult<plain_bitnames::types::AuthorizedTransaction> {
-        let authorized =
-            self.app.wallet.authorize(transaction).map_err(custom_err)?;
+        let authorized = self
+            .app
+            .wallet
+            .authorize(rand::rng(), transaction)
+            .map_err(custom_err)?;
         if let Some(true) = broadcast {
             let () = self
                 .app
@@ -729,12 +718,13 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
     async fn verify_signature(
         &self,
         signature: Signature,
-        verifying_key: VerifyingKey,
+        pubkey: PublicKey,
         dst: Dst,
         msg: String,
     ) -> RpcResult<bool> {
+        let verifying_key = VerifyingKey::new(pubkey.0);
         let res = authorization::verify(
-            signature,
+            &signature,
             &verifying_key,
             dst,
             msg.as_bytes(),

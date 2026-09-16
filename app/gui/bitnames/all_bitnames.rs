@@ -31,9 +31,8 @@ fn show_bitname_data(
         commitment,
         socket_addr_v4,
         socket_addr_v6,
-        encryption_pubkey,
-        signing_pubkey,
         paymail_fee_sats,
+        xpubkey,
     } = mutable_data;
     let commitment = commitment.map_or("Not set".to_owned(), const_hex::encode);
     let socket_addr_v4 = socket_addr_v4
@@ -44,12 +43,9 @@ fn show_bitname_data(
         .map_or("Not set".to_owned(), |socket_addr_v6| {
             socket_addr_v6.to_string()
         });
-    let encryption_pubkey =
-        encryption_pubkey.map_or("Not set".to_owned(), |epk| epk.to_string());
-    let signing_pubkey =
-        signing_pubkey.map_or("Not set".to_owned(), |svk| svk.to_string());
     let paymail_fee_sats = paymail_fee_sats
         .map_or("Not set".to_owned(), |paymail_fee| paymail_fee.to_string());
+    let xpubkey = xpubkey.map_or("Not set".to_owned(), |epk| epk.to_string());
     ui.horizontal(|ui| {
         ui.monospace_selectable_singleline(false, format!("Seq ID: {seq_id}"))
     })
@@ -77,22 +73,15 @@ fn show_bitname_data(
         .join()
         | ui.horizontal(|ui| {
             ui.monospace_selectable_singleline(
-                true,
-                format!("Encryption Pubkey: {encryption_pubkey}"),
-            )
-        })
-        .join()
-        | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(
-                true,
-                format!("Signing Pubkey: {signing_pubkey}"),
-            )
-        })
-        .join()
-        | ui.horizontal(|ui| {
-            ui.monospace_selectable_singleline(
                 false,
                 format!("Paymail fee: {paymail_fee_sats}"),
+            )
+        })
+        .join()
+        | ui.horizontal(|ui| {
+            ui.monospace_selectable_singleline(
+                true,
+                format!("XPublicKey: {xpubkey}"),
             )
         })
         .join()

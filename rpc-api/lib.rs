@@ -29,11 +29,11 @@ pub mod node {
     use plain_bitnames_types::{
         Address, Authorization, Authorized, BatchIcannRegistrationData,
         BitNameData, BitNameDataUpdates, BitNameSeqId, BitcoinOutputContent,
-        Block, BlockHash, Body, EncryptionPubKey, FilledOutput,
-        FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
-        MutableBitNameData, OutPoint, Output, OutputContent, PointedOutput,
-        SpentOutput, Transaction, TransactionData, TxIn, Txid, VerifyingKey,
-        WithdrawalBundle, WithdrawalBundleStatus, WithdrawalOutputContent,
+        Block, BlockHash, Body, FilledOutput, FilledOutputContent, Header,
+        InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint, Output,
+        OutputContent, PointedOutput, SpentOutput, Transaction,
+        TransactionData, TxIn, Txid, WithdrawalBundle, WithdrawalBundleStatus,
+        WithdrawalOutputContent,
         authorization::Signature,
         hashes::BitName,
         net::{Peer, PeerAddress, PeerConnectionStatus},
@@ -163,11 +163,11 @@ pub mod node {
             use plain_bitnames_types::{
                 Address, Authorization, BatchIcannRegistrationData, BitName,
                 BitNameDataUpdates, BitcoinOutputContent, Block, BlockHash,
-                Body, Coinbase, CoinbaseTxid, EncryptionPubKey, Header,
-                MerkleRoot, MutableBitNameData, OutPoint, Output,
-                OutputContent, Transaction, TransactionData, Txid,
-                VerifyingKey, WithdrawalOutputContent,
-                authorization::Signature, transaction::Outputs,
+                Body, Coinbase, CoinbaseTxid, Header, MerkleRoot,
+                MutableBitNameData, OutPoint, Output, OutputContent,
+                Transaction, TransactionData, Txid, WithdrawalOutputContent,
+                authorization::Signature, bitname_data::XPublicKey,
+                keys::PublicKey, transaction::Outputs,
             };
             use serde::Serialize;
             use typewit::const_marker::Bool;
@@ -205,12 +205,11 @@ pub mod node {
                 Address, Authorization, BatchIcannRegistrationData,
                 BitcoinOutputContent, BitName, BitNameDataUpdates, Block,
                 BlockHash, BlockVerbose, Body, BodyVerbose, Coinbase,
-                CoinbaseTxid, EncryptionPubKey, Header, MerkleRoot,
-                MutableBitNameData, OutPoint, Output, OutputContent, Outputs,
-                Signature, Transaction, TransactionData, TransactionVerbose,
-                Txid, VerifyingKey, WithdrawalOutputContent,
-                schema::BitcoinAddr, schema::BitcoinBlockHash,
-                schema::BitcoinOutPoint,
+                CoinbaseTxid, Header, MerkleRoot, MutableBitNameData, OutPoint,
+                Output, OutputContent, Outputs, PublicKey, Signature,
+                Transaction, TransactionData, TransactionVerbose, Txid,
+                WithdrawalOutputContent, XPublicKey, schema::BitcoinAddr,
+                schema::BitcoinBlockHash, schema::BitcoinOutPoint,
             ])]
             #[rpc(server, server_bounds(Self: private::Sealed))]
             pub trait Rpc {
@@ -284,11 +283,11 @@ pub mod node {
         ref_schemas[
             Address, Authorization, BatchIcannRegistrationData,
             BitcoinOutputContent, BitName, BitNameDataUpdates, BitNameSeqId,
-            BlockHash, Body, EncryptionPubKey, FilledOutput,
+            BlockHash, Body, FilledOutput,
             FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
             MutableBitNameData, OutPoint, Output, OutputContent, Outputs,
             PeerConnectionStatus, Signature, SpentOutput, Transaction,
-            TransactionData, Txid, TxIn, VerifyingKey, WithdrawalBundle,
+            TransactionData, Txid, TxIn, WithdrawalBundle,
             WithdrawalBundleInfo, WithdrawalBundleStatus,
             WithdrawalOutputContent, schema::BitcoinAddr,
             schema::BitcoinBlockHash, schema::BitcoinOutPoint,
@@ -474,12 +473,14 @@ pub mod wallet {
     use plain_bitnames_types::{
         Address, Authorization, Authorized, BatchIcannRegistrationData,
         BitNameDataUpdates, BitcoinOutputContent, Block, BlockHash, Body,
-        Coinbase, EncryptionPubKey, FilledOutput, FilledOutputContent, Header,
+        Coinbase, CoinbaseTxid, FilledOutput, FilledOutputContent, Header,
         MerkleRoot, MutableBitNameData, OutPoint, Output, OutputContent,
-        PointedOutput, Transaction, TransactionData, Txid, VerifyingKey,
-        WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
+        PointedOutput, Transaction, TransactionData, Txid,
+        WithdrawalOutputContent,
         authorization::{Dst, Signature},
+        bitname_data::XPublicKey,
         hashes::BitName,
+        keys::PublicKey,
         transaction::Outputs,
         wallet::Balance,
     };
@@ -502,11 +503,11 @@ pub mod wallet {
     #[open_api(ref_schemas[
         Address, Authorization, BatchIcannRegistrationData,
         BitcoinOutputContent, BitName, BitNameDataUpdates, Block, BlockHash,
-        Body, Coinbase, EncryptionPubKey, FilledOutput, FilledOutputContent,
+        Body, Coinbase, CoinbaseTxid, FilledOutput, FilledOutputContent,
         Header, MerkleRoot, MutableBitNameData, OutPoint, Output,
-        OutputContent, Outputs, Signature, Transaction, TransactionData, Txid,
-        VerifyingKey, WithdrawalOutputContent, schema::BitcoinAddr,
-        schema::BitcoinBlockHash, schema::BitcoinOutPoint,
+        OutputContent, Outputs, PublicKey, Signature, Transaction,
+        TransactionData, Txid, WithdrawalOutputContent, XPublicKey,
+        schema::BitcoinAddr, schema::BitcoinBlockHash, schema::BitcoinOutPoint,
     ])]
     #[rpc(client, server, server_bounds(Self: open_api::RpcServer))]
     pub trait Rpc {
@@ -553,22 +554,22 @@ pub mod wallet {
             mainchain_fee_sats: u64,
         ) -> RpcResult<Txid>;
 
-        /// Decrypt a message with the specified encryption key corresponding to
-        /// the specified encryption pubkey.
+        /// Decrypt a message with the secret key corresponding to
+        /// the specified public key.
         /// Returns a decrypted hex string.
         #[method(name = "decrypt_msg")]
         async fn decrypt_msg(
             &self,
-            encryption_pubkey: EncryptionPubKey,
+            pubkey: PublicKey,
             ciphertext: String,
         ) -> RpcResult<String>;
 
-        /// Encrypt a message to the specified encryption pubkey
+        /// Encrypt a message to the specified public key.
         /// Returns the ciphertext as a hex string.
         #[method(name = "encrypt_msg")]
         async fn encrypt_msg(
             &self,
-            encryption_pubkey: EncryptionPubKey,
+            pubkey: PublicKey,
             msg: String,
         ) -> RpcResult<String>;
 
@@ -596,27 +597,17 @@ pub mod wallet {
         #[method(name = "get_new_address")]
         async fn get_new_address(&self) -> RpcResult<Address>;
 
-        /// Get new encryption key
-        #[method(name = "get_new_encryption_key")]
-        async fn get_new_encryption_key(&self) -> RpcResult<EncryptionPubKey>;
-
-        /// Get new verifying/signing key
-        #[method(name = "get_new_verifying_key")]
-        async fn get_new_verifying_key(&self) -> RpcResult<VerifyingKey>;
+        /// Get new extended public key
+        #[method(name = "get_new_xpubkey")]
+        async fn get_new_xpubkey(&self) -> RpcResult<XPublicKey>;
 
         /// Get wallet addresses, sorted by base58 encoding
         #[method(name = "get_wallet_addresses")]
         async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>>;
 
-        /// Get wallet master XVerifyingKey
-        #[method(name = "get_wallet_master_xvk")]
-        async fn get_wallet_master_xvk(&self) -> RpcResult<XVerifyingKey>;
-
-        /// Get wallet master XEncryptionSecretKey
-        #[method(name = "get_wallet_master_xesk")]
-        async fn get_wallet_master_xesk(
-            &self,
-        ) -> RpcResult<XEncryptionSecretKey>;
+        /// Get wallet master XPublicKey
+        #[method(name = "get_wallet_master_xpk")]
+        async fn get_wallet_master_xpk(&self) -> RpcResult<XPublicKey>;
 
         /// Get wallet UTXOs
         #[method(name = "get_wallet_utxos")]
@@ -654,11 +645,11 @@ pub mod wallet {
             mnemonic: String,
         ) -> RpcResult<()>;
 
-        /// Sign an arbitrary message with the specified verifying key
+        /// Sign an arbitrary message with the specified public key
         #[method(name = "sign_arbitrary_msg")]
         async fn sign_arbitrary_msg(
             &self,
-            verifying_key: VerifyingKey,
+            public_key: PublicKey,
             msg: String,
         ) -> RpcResult<Signature>;
 
@@ -678,13 +669,13 @@ pub mod wallet {
             broadcast: Option<bool>,
         ) -> RpcResult<Authorized<Transaction>>;
 
-        /// Verify a signature on a message against the specified verifying key.
+        /// Verify a signature on a message against the specified public key.
         /// Returns `true` if the signature is valid
         #[method(name = "verify_signature")]
         async fn verify_signature(
             &self,
             signature: Signature,
-            verifying_key: VerifyingKey,
+            public_key: PublicKey,
             dst: Dst,
             msg: String,
         ) -> RpcResult<bool>;

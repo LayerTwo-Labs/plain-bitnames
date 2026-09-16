@@ -12,10 +12,12 @@ version = "0.17.3"
 
 [workspace.dependencies]
 addr = "0.15.6"
+aes-gcm = { version = "0.10", default-features = false }
 anyhow = "1.0.72"
 async-lock = "3.4.0"
 bech32 = "0.11.0"
 bincode = "1.3.3"
+bip32ish = "0.1.1"
 bitcoin = "0.32.5"
 blake3 = "1.4.1"
 borsh = "1.3.1"
@@ -23,10 +25,9 @@ byteorder = "1.4.3"
 bytes = "1.9.0"
 clap = "4.5.4"
 const-hex = "1.19.1"
+curve25519-dalek = { version = "5", default-features = false }
 dirs = "6.0.0"
 dotenvy = "0.15.7"
-ed25519-bip32 = "0.4.1"
-ed25519-dalek = "2.1.1"
 educe = { version = "0.6.0", default-features = false }
 eframe = { version = "0.35.0", default-features = false }
 either = "1.13.0"
@@ -40,11 +41,11 @@ hashlink = "0.12.1"
 heed = "0.22.0"
 hex-literal = "0.4.1"
 hickory-resolver = { version = "0.26", default-features = false }
+hkdf = "0.13.0"
 http = "1.2.0"
 human-size = "0.4.3"
 itertools = "0.14.0"
 jsonrpsee = { version = "0.26.0", features = ["tracing"] }
-libes = "0.9.1"
 libtest-mimic = "0.8.1"
 merkle-cbt = "0.3.2"
 mimalloc = "0.1.48"
@@ -56,6 +57,8 @@ prost-build = "0.14.3"
 prost-types = "0.14.3"
 protox = "0.9.1"
 quinn = "0.11.6"
+# needs to line up with version required by frost-core
+rand = { version = "0.10", default-features = false }
 rayon = "1.7.0"
 rcgen = "0.13.2"
 reserve-port = "2.0.1"
@@ -66,6 +69,7 @@ serde_json = "1.0.113"
 serde_json_canonicalizer = "0.3.0"
 serde_path_to_error = "0.1.20"
 serde_with = { version = "3.4.0", default-features = false }
+sha2 = "0.11"
 shlex = "1.3.0"
 smallvec = "1.15"
 sneed = "0.0.22"
@@ -93,7 +97,6 @@ typewit = { version = "1.15", default-features = false }
 url = { version = "2.5.4", default-features = false }
 utoipa = { version = "5.2.0", default-features = false }
 uuid = "1.13.1"
-x25519-dalek = "2.0.0"
 zeromq = "0.6.0"
 
 [workspace.dependencies.bip300301_enforcer_lib]
@@ -103,6 +106,20 @@ path = "bip300301_enforcer/lib"
 [workspace.dependencies.bip300301_enforcer_integration_tests]
 default-features = false
 path = "bip300301_enforcer/integration_tests"
+
+# TODO: remove once a release is published that is compatible with
+# curve25519-dalek v5
+[workspace.dependencies.frost-core]
+default-features = false
+git = "https://github.com/ZcashFoundation/frost"
+rev = "0966bd1529aa062ad3b621af99e277f976b1c0f0"
+
+# TODO: remove once a release is published that is compatible with
+# curve25519-dalek v5
+[workspace.dependencies.frost-ristretto255]
+default-features = false
+git = "https://github.com/ZcashFoundation/frost"
+rev = "0966bd1529aa062ad3b621af99e277f976b1c0f0"
 
 [workspace.dependencies.l2l-openapi]
 git = "https://github.com/Ash-L2L/l2l-openapi"

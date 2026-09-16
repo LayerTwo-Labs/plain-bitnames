@@ -1,12 +1,11 @@
 use std::sync::LazyLock;
 
-use ed25519_dalek::PUBLIC_KEY_LENGTH;
 use hex_literal::hex;
 
-use crate::VerifyingKey;
+use crate::authorization::VerifyingKey;
 
 /// authorized pubkey that can make batch icann registration txs
-const BATCH_ICANN_VERIFYING_KEY_BYTES: [u8; PUBLIC_KEY_LENGTH] =
+const BATCH_ICANN_VERIFYING_KEY_BYTES: [u8; 32] =
     // FIXME: choose a real key
     hex!(
         "0000000000000000000000000000000000000000000000000000000000000000"
@@ -14,6 +13,10 @@ const BATCH_ICANN_VERIFYING_KEY_BYTES: [u8; PUBLIC_KEY_LENGTH] =
 
 pub static BATCH_ICANN_VERIFYING_KEY: LazyLock<VerifyingKey> =
     LazyLock::new(|| {
-        VerifyingKey::try_from(&BATCH_ICANN_VERIFYING_KEY_BYTES)
-            .expect("invalid batch ICANN pubkey")
+        let compressed = curve25519_dalek::ristretto::CompressedRistretto(
+            BATCH_ICANN_VERIFYING_KEY_BYTES,
+        );
+        let decompressed =
+            compressed.decompress().expect("invalid batch ICANN pubkey");
+        VerifyingKey::new(decompressed)
     });
