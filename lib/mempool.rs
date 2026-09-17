@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, path::PathBuf};
 
 use fallible_iterator::FallibleIterator as _;
 use heed::types::SerdeBincode;
@@ -24,6 +24,12 @@ pub enum Error {
     DbEnv(#[source] Box<EnvError>),
     #[error("Database write error")]
     DbWrite(#[from] RwTxnError),
+    #[error(
+        "Incompatible DB version ({}). Please clear the DB (`{}`) and re-sync",
+        .version,
+        .db_path.display()
+    )]
+    IncompatibleVersion { version: Version, db_path: PathBuf },
     #[error("Missing transaction {0}")]
     MissingTransaction(Txid),
     #[error("can't add transaction, utxo double spent")]
@@ -61,9 +67,23 @@ impl MemPool {
             DatabaseUnique::create(env, &mut rwtxn, "spent_utxos")?;
         let version =
             DatabaseUnique::create(env, &mut rwtxn, "mempool_version")?;
-        if version.try_get(&rwtxn, &())?.is_none() {
-            version.put(&mut rwtxn, &(), &*VERSION)?;
-        }
+        match version.try_get(&rwtxn, &())? {
+            Some(db_version)
+                if db_version
+                    < Version {
+                        major: 0,
+                        minor: 18,
+                        patch: 0,
+                    } =>
+            {
+                return Err(Error::IncompatibleVersion {
+                    version: db_version,
+                    db_path: env.path().to_path_buf(),
+                });
+            }
+            Some(_) => (),
+            None => version.put(&mut rwtxn, &(), &*VERSION)?,
+        };
         rwtxn.commit()?;
         Ok(Self {
             transactions,

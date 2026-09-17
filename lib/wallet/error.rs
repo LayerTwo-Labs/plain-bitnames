@@ -1,12 +1,14 @@
 //! Wallet errors
 
+use std::path::PathBuf;
+
 use sneed::{db::error as db, env::error as env, rwtxn::error as rwtxn};
 use thiserror::Error;
 use transitive::Transitive;
 
 use crate::{
     types::{
-        Address, AmountOverflowError, AmountUnderflowError,
+        Address, AmountOverflowError, AmountUnderflowError, Version,
         ecies::error as ecies, keys::CompressedPublicKey,
     },
     wallet::bip32,
@@ -104,6 +106,12 @@ pub enum Error {
     DbWrite(#[from] rwtxn::Error),
     #[error("ECIES decryption error")]
     EciesDecrypt(#[from] ecies::Decrypt),
+    #[error(
+        "Incompatible DB version ({}). Please clear the DB (`{}`) and re-sync",
+        .version,
+        .db_path.display()
+    )]
+    IncompatibleVersion { version: Version, db_path: PathBuf },
     #[error("io error")]
     Io(#[from] std::io::Error),
     #[error("no index for address {address}")]
