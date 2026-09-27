@@ -50,6 +50,6 @@ path = "lib.rs"
 name = "plain_bitnames_types"
 authors.workspace = true
 edition.workspace = true
-license-file.workspace = true
+license.workspace = true
 publish.workspace = true
 version.workspace = true

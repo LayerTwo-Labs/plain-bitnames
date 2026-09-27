@@ -6,7 +6,7 @@ resolver = "2"
 [workspace.package]
 authors = [ "Ash Manning <ash@layertwolabs.com>" ]
 edition = "2024"
-license-file = "LICENSE.txt"
+license = "MIT"
 publish = false
 version = "0.17.2"
 
