@@ -495,6 +495,7 @@ fn connect_withdrawal_bundle_event(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn connect_2wpd_event(
     state: &State,
     rwtxn: &mut RwTxn,
@@ -502,10 +503,16 @@ fn connect_2wpd_event(
     latest_deposit_block_hash: &mut Option<bitcoin::BlockHash>,
     latest_withdrawal_bundle_event_block_hash: &mut Option<bitcoin::BlockHash>,
     event_block_hash: bitcoin::BlockHash,
+    event_block_height: u32,
     event: &BlockEvent,
 ) -> Result<(), Error> {
     match event {
         BlockEvent::Deposit(deposit) => {
+            state.deposit_mainchain_height.put(
+                rwtxn,
+                &deposit.outpoint.txid,
+                &event_block_height,
+            )?;
             let outpoint = OutPoint::Deposit(deposit.outpoint);
             let output = deposit.output.clone();
             state
@@ -538,7 +545,7 @@ pub fn connect(
     let mut latest_deposit_block_hash = None;
     let mut latest_withdrawal_bundle_event_block_hash = None;
     for (event_block_hash, event_block_info) in &two_way_peg_data.block_info {
-        for event in &event_block_info.events {
+        for event in &event_block_info.inner.events {
             let () = connect_2wpd_event(
                 state,
                 rwtxn,
@@ -546,6 +553,7 @@ pub fn connect(
                 &mut latest_deposit_block_hash,
                 &mut latest_withdrawal_bundle_event_block_hash,
                 *event_block_hash,
+                event_block_info.height,
                 event,
             )?;
         }
@@ -874,6 +882,9 @@ fn disconnect_event(
 ) -> Result<(), Error> {
     match event {
         BlockEvent::Deposit(deposit) => {
+            state
+                .deposit_mainchain_height
+                .delete(rwtxn, &deposit.outpoint.txid)?;
             let outpoint = OutPoint::Deposit(deposit.outpoint);
             if !state.utxos.delete(rwtxn, &OutPointKey::from(&outpoint))? {
                 return Err(error::NoUtxo { outpoint }.into());
@@ -916,7 +927,7 @@ pub fn disconnect(
     for (event_block_hash, event_block_info) in
         two_way_peg_data.block_info.iter().rev()
     {
-        for event in event_block_info.events.iter().rev() {
+        for event in event_block_info.inner.events.iter().rev() {
             let () = disconnect_event(
                 state,
                 rwtxn,
@@ -1027,7 +1038,9 @@ mod test {
             M6id, OutPoint, OutPointKey, Txid, WithdrawalBundle,
             WithdrawalBundleEvent, WithdrawalBundleEventStatus,
             WithdrawalBundleStatus, WithdrawalOutputContent,
-            proto::mainchain::{BlockEvent, BlockInfo, Deposit, TwoWayPegData},
+            proto::mainchain::{
+                BlockEvent, BlockInfo, Deposit, TwoWayPegData, two_way_peg_data,
+            },
         },
     };
 
@@ -1130,14 +1143,17 @@ mod test {
             let mut block_info = LinkedHashMap::new();
             block_info.insert(
                 event_block_hash,
-                BlockInfo {
-                    bmm_commitment: None,
-                    events: vec![BlockEvent::WithdrawalBundle(
-                        WithdrawalBundleEvent {
-                            m6id,
-                            status: WithdrawalBundleEventStatus::Submitted,
-                        },
-                    )],
+                two_way_peg_data::BlockInfo {
+                    height: 999,
+                    inner: BlockInfo {
+                        bmm_commitment: None,
+                        events: vec![BlockEvent::WithdrawalBundle(
+                            WithdrawalBundleEvent {
+                                m6id,
+                                status: WithdrawalBundleEventStatus::Submitted,
+                            },
+                        )],
+                    },
                 },
             );
             TwoWayPegData { block_info }
@@ -1278,7 +1294,9 @@ mod test {
         let merkle_root =
             Body::compute_merkle_root(&empty_body.coinbase, no_txs)?;
         let main0 = bitcoin::BlockHash::from_byte_array([10; 32]);
+        let main_height0 = 99;
         let main1 = bitcoin::BlockHash::from_byte_array([11; 32]);
+        let main_height1 = 9999;
 
         let genesis = Header {
             merkle_root,
@@ -1291,6 +1309,7 @@ mod test {
                 &mut rwtxn,
                 &batch_verification_ctxt,
                 &genesis,
+                main_height0,
                 &empty_body,
             )?;
             state.connect_two_way_peg_data(
@@ -1315,13 +1334,19 @@ mod test {
             let mut block_info = LinkedHashMap::new();
             block_info.insert(
                 main1,
-                BlockInfo {
-                    bmm_commitment: None,
-                    events: vec![BlockEvent::Deposit(Deposit {
-                        tx_index: 0,
-                        outpoint: deposit_outpoint,
-                        output: bitcoin_filled_output(Address::ALL_ZEROS, 1000),
-                    })],
+                two_way_peg_data::BlockInfo {
+                    height: main_height1,
+                    inner: BlockInfo {
+                        bmm_commitment: None,
+                        events: vec![BlockEvent::Deposit(Deposit {
+                            tx_index: 0,
+                            outpoint: deposit_outpoint,
+                            output: bitcoin_filled_output(
+                                Address::ALL_ZEROS,
+                                1000,
+                            ),
+                        })],
+                    },
                 },
             );
             TwoWayPegData { block_info }
@@ -1332,6 +1357,7 @@ mod test {
                 &mut rwtxn,
                 &batch_verification_ctxt,
                 &block1,
+                main_height1,
                 &empty_body,
             )?;
             state.connect_two_way_peg_data(&mut rwtxn, &deposit_twpd)?;
@@ -1393,8 +1419,20 @@ mod test {
         let mut block_info = LinkedHashMap::new();
         let (h1, b1) = deposit_block(1);
         let (h2, b2) = deposit_block(2);
-        block_info.insert(h1, b1);
-        block_info.insert(h2, b2);
+        block_info.insert(
+            h1,
+            two_way_peg_data::BlockInfo {
+                height: 1,
+                inner: b1,
+            },
+        );
+        block_info.insert(
+            h2,
+            two_way_peg_data::BlockInfo {
+                height: 2,
+                inner: b2,
+            },
+        );
         let tdp = TwoWayPegData { block_info };
 
         let () = connect(&state, &mut rwtxn, &tdp)?;

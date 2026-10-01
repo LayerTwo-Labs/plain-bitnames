@@ -25,6 +25,7 @@ pub fn validate(
     state: &State,
     rotxn: &RoTxn,
     header: &Header,
+    prev_main_height: u32,
     body: &Body,
 ) -> Result<(bitcoin::Amount, MerkleRoot), Error> {
     let body_size =
@@ -74,7 +75,11 @@ pub fn validate(
     // Process transactions for fee validation
     for filled_tx in &filled_txs {
         total_fees = total_fees
-            .checked_add(state.validate_filled_transaction(rotxn, filled_tx)?)
+            .checked_add(state.validate_filled_transaction(
+                rotxn,
+                prev_main_height,
+                filled_tx,
+            )?)
             .ok_or(AmountOverflowError)?;
     }
     if coinbase_value > total_fees {
@@ -126,6 +131,7 @@ pub fn prevalidate(
     state: &State,
     rotxn: &RoTxn,
     header: &Header,
+    prev_main_height: u32,
     body: &Body,
 ) -> Result<PrevalidatedBlock, Error> {
     let body_size =
@@ -176,9 +182,11 @@ pub fn prevalidate(
     // Process transactions for fee validation
     for filled_transaction in &filled_transactions {
         total_fees = total_fees
-            .checked_add(
-                state.validate_filled_transaction(rotxn, filled_transaction)?,
-            )
+            .checked_add(state.validate_filled_transaction(
+                rotxn,
+                prev_main_height,
+                filled_transaction,
+            )?)
             .ok_or(AmountOverflowError)?;
     }
     if coinbase_value > total_fees {
@@ -366,6 +374,11 @@ pub fn connect_prevalidated(
     // Update tip and height
     let block_hash = header.hash();
     state.tip.put(rwtxn, &(), &block_hash)?;
+    state.coinbase_height.put(
+        rwtxn,
+        &coinbase_txid,
+        &prevalidated.next_height,
+    )?;
     state.height.put(rwtxn, &(), &height)?;
 
     Ok(merkle_root)
@@ -378,11 +391,18 @@ pub fn apply_block(
     state: &State,
     rwtxn: &mut RwTxn,
     header: &Header,
+    prev_main_height: u32,
     body: &Body,
 ) -> Result<(), Error> {
     // Prevalidate the block using the same transaction
-    let prevalidated =
-        prevalidate(batch_verification_ctxt, state, rwtxn, header, body)?;
+    let prevalidated = prevalidate(
+        batch_verification_ctxt,
+        state,
+        rwtxn,
+        header,
+        prev_main_height,
+        body,
+    )?;
 
     // Connect the block using precomputed values
     let _merkle_root =
@@ -516,6 +536,7 @@ pub fn connect(
     }
     let block_hash = header.hash();
     state.tip.put(rwtxn, &(), &block_hash)?;
+    state.coinbase_height.put(rwtxn, &coinbase_txid, &height)?;
     state.height.put(rwtxn, &(), &height)?;
     Ok(merkle_root)
 }
@@ -613,9 +634,10 @@ pub fn disconnect_tip(
         })
     })?;
     filled_txs.reverse();
-    // delete coinbase UTXOs, last-to-first
     {
         let coinbase_txid = header.compute_coinbase_txid();
+        state.coinbase_height.delete(rwtxn, &coinbase_txid)?;
+        // delete coinbase UTXOs, last-to-first
         body.coinbase
             .outputs
             .iter()
@@ -813,6 +835,7 @@ mod test {
         )?;
         let update_header =
             header(Some(genesis_header.hash()), update_merkle_root);
+        let main_height = 9999;
 
         {
             let rotxn = env.read_txn()?;
@@ -821,6 +844,7 @@ mod test {
                 &state,
                 &rotxn,
                 &update_header,
+                main_height,
                 &update_body,
             )?;
         }

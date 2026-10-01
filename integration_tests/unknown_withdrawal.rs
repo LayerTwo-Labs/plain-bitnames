@@ -18,7 +18,9 @@ use bip300301_enforcer_integration_tests::{
 use futures::{
     FutureExt as _, StreamExt as _, channel::mpsc, future::BoxFuture,
 };
-use plain_bitnames::types::OutPoint;
+use plain_bitnames::types::transaction::outpoint::{
+    DEPOSIT_MATURITY, OutPoint,
+};
 use plain_bitnames_app_rpc_api::node::RpcClient as _;
 use tokio::time::sleep;
 use tracing::Instrument as _;
@@ -81,6 +83,9 @@ async fn unknown_withdrawal_task(
     )
     .await?;
     tracing::info!("Deposited to sidechain successfully");
+    let () = sidechain_withdrawer
+        .bmm(&mut enforcer_post_setup, DEPOSIT_MATURITY)
+        .await?;
     let () = withdraw_succeed(
         &mut enforcer_post_setup,
         &mut sidechain_withdrawer,

@@ -138,6 +138,14 @@ impl From<db::Error> for ConnectWithdrawalBundleSubmitted {
 }
 
 #[derive(Debug, Error)]
+pub enum ImmatureOutPoint {
+    #[error("immature coinbase outpoint")]
+    Coinbase,
+    #[error("immature deposit outpoint")]
+    Deposit,
+}
+
+#[derive(Debug, Error)]
 pub enum InvalidHeader {
     #[error("expected block hash {expected}, but computed {computed}")]
     BlockHash {
@@ -201,6 +209,8 @@ pub enum Error {
     FillTxOutputContentsFailed,
     #[error("invalid ICANN name: {plain_name}")]
     IcannNameInvalid { plain_name: String },
+    #[error(transparent)]
+    ImmatureOutPoint(#[from] ImmatureOutPoint),
     #[error("Invalid Batch ICANN registration signature")]
     InvalidBatchIcannRegistrationSignature,
     #[error(

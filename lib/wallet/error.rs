@@ -75,6 +75,7 @@ pub struct PubkeyDoesNotExist {
     from(bip32::NonHardenedDeriveError, bip32::Error),
     from(db::Clear, db::Error),
     from(db::Delete, db::Error),
+    from(db::Get, db::Error),
     from(db::IterInit, db::Error),
     from(db::IterItem, db::Error),
     from(db::Last, db::Error),

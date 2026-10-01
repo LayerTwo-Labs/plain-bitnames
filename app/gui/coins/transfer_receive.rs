@@ -16,7 +16,19 @@ fn create_transfer(
     amount: bitcoin::Amount,
     fee: bitcoin::Amount,
 ) -> anyhow::Result<()> {
-    let tx = app.wallet.create_transfer(dest, amount, fee, None)?;
+    let spend_height = app
+        .node
+        .try_get_tip_height()?
+        .map_or(0, |height| height + 1);
+    let main_height = app.node.try_get_mainchain_tip_height()?.unwrap_or(0);
+    let tx = app.wallet.create_transfer(
+        spend_height,
+        main_height,
+        dest,
+        amount,
+        fee,
+        None,
+    )?;
     app.sign_and_send(tx)?;
     Ok(())
 }
