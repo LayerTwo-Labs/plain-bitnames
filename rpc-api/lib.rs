@@ -392,7 +392,7 @@ pub mod node {
         async fn get_transaction(
             &self,
             txid: Txid,
-        ) -> RpcResult<Option<Transaction>>;
+        ) -> RpcResult<Option<GetTransactionResponse>>;
 
         /// Get information about a transaction in the current chain
         #[method(name = "get_transaction_info")]

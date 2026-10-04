@@ -296,8 +296,16 @@ impl<const ENABLE_PRIVATE_API: bool> rpc_api::node::RpcServer
     async fn get_transaction(
         &self,
         txid: Txid,
-    ) -> RpcResult<Option<Transaction>> {
-        self.app.node.try_get_transaction(txid).map_err(custom_err)
+    ) -> RpcResult<Option<rpc_api::node::GetTransactionResponse>> {
+        let res =
+            self.app
+                .node
+                .try_get_transaction(txid)
+                .map_err(custom_err)?
+                .map(|(tx, block_hash)| {
+                    rpc_api::node::GetTransactionResponse { tx, block_hash }
+                });
+        Ok(res)
     }
 
     async fn get_transaction_info(

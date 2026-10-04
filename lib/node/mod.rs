@@ -605,27 +605,36 @@ where
         Ok((returned_transactions, fee))
     }
 
-    /// get a transaction from the archive or mempool, if it exists
+    /// Get a transaction if it exists in the active chain or mempool.
+    /// Returns the transaction and the block it was included in, if it exists
+    /// in the active chain.
     pub fn try_get_transaction(
         &self,
         txid: Txid,
-    ) -> Result<Option<Transaction>, Error> {
+    ) -> Result<Option<(Transaction, Option<BlockHash>)>, Error> {
         let rotxn = self.env.read_txn()?;
-        if let Some((block_hash, txin)) = self
-            .archive
-            .get_tx_inclusions(&rotxn, txid)?
-            .first_key_value()
+        let tip = self.state.try_get_tip(&rotxn)?;
+        if let Some(tip) = tip
+            && let Some((block_hash, txin)) = self
+                .archive
+                .get_tx_inclusions(&rotxn, txid)?
+                .into_iter()
+                .map(Ok)
+                .transpose_into_fallible()
+                .find(|(block_hash, _idx)| {
+                    self.archive.is_descendant(&rotxn, *block_hash, tip)
+                })?
         {
-            let body = self.archive.get_body(&rotxn, *block_hash)?;
-            let tx = body.transactions.into_iter().nth(*txin as usize).unwrap();
-            Ok(Some(tx))
+            let body = self.archive.get_body(&rotxn, block_hash)?;
+            let tx = body.transactions.into_iter().nth(txin as usize).unwrap();
+            Ok(Some((tx, Some(block_hash))))
         } else if let Some(auth_tx) = self
             .mempool
             .transactions
             .try_get(&rotxn, &txid)
             .map_err(mempool::Error::from)?
         {
-            Ok(Some(auth_tx.transaction))
+            Ok(Some((auth_tx.transaction, None)))
         } else {
             Ok(None)
         }
