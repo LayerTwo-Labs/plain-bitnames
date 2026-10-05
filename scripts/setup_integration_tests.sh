@@ -50,10 +50,7 @@ read_env_var() {
 
 BITCOIND="$(read_env_var "$DEPS_ENV" BITCOIND)"
 BITCOIND_UNPATCHED="$(read_env_var "$DEPS_ENV" BITCOIND_UNPATCHED)"
-BITCOIN_CLI="$(read_env_var "$DEPS_ENV" BITCOIN_CLI)"
-BITCOIN_UTIL="$(read_env_var "$DEPS_ENV" BITCOIN_UTIL)"
 ELECTRS="$(read_env_var "$DEPS_ENV" ELECTRS)"
-SIGNET_MINER="$(read_env_var "$DEPS_ENV" SIGNET_MINER)"
 
 # --- Binaries under test ---
 # Built from the pinned submodule, so it matches the enforcer library bitnames
@@ -71,11 +68,8 @@ cat > "$ENV_FILE" <<EOF
 BIP300301_ENFORCER='$ENFORCER_DIR/target/debug/bip300301_enforcer'
 BITCOIND='$BITCOIND'
 BITCOIND_UNPATCHED='$BITCOIND_UNPATCHED'
-BITCOIN_CLI='$BITCOIN_CLI'
-BITCOIN_UTIL='$BITCOIN_UTIL'
 BITNAMES_APP='$REPO_ROOT/target/debug/plain_bitnames_app'
 ELECTRS='$ELECTRS'
-SIGNET_MINER='$SIGNET_MINER'
 EOF
 
 echo "Wrote $ENV_FILE"

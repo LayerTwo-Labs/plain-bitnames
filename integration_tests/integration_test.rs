@@ -7,8 +7,8 @@ use bip300301_enforcer_integration_tests::{
     },
     util::{AsyncTrial, TestFailureCollector, TestFileRegistry},
 };
-use bip300301_enforcer_lib::bins::CommandExt;
 use futures::{FutureExt, channel::mpsc::UnboundedSender, future::BoxFuture};
+use jsonrpsee::{core::client::ClientT as _, rpc_params};
 use plain_bitnames_app_rpc_api::node::RpcClient as _;
 
 use crate::{
@@ -90,10 +90,9 @@ pub async fn deposit_withdraw_roundtrip_task(
     )
     .await?;
     tracing::info!("Withdrawal succeeded");
-    let mainchain_block_count = post_setup
-        .bitcoin_cli
-        .command::<String, _, String, _, _>([], "getblockcount", [])
-        .run_utf8()
+    let mainchain_block_count: u32 = post_setup
+        .bitcoind_client
+        .request("getblockcount", rpc_params![])
         .await?;
     let sidechain_block_count = sidechain.rpc_client.getblockcount().await?;
     tracing::info!(%mainchain_block_count, sidechain_block_count);
