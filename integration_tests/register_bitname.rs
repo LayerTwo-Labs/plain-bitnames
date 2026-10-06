@@ -46,10 +46,7 @@ async fn setup(
     tracing::info!("Activated sidechain successfully");
     let () = fund_enforcer::<PostSetup>(&mut enforcer_post_setup).await?;
     let mut post_setup = PostSetup::setup(
-        Init {
-            bitnames_app: bin_paths.bitnames()?.clone(),
-            data_dir_suffix: None,
-        },
+        Init::new(bin_paths.bitnames()?.clone()),
         &enforcer_post_setup,
         res_tx,
     )

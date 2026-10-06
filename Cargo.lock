@@ -4942,9 +4942,11 @@ dependencies = [
  "libtest-mimic",
  "plain_bitnames",
  "plain_bitnames_app_rpc_api",
+ "rcgen",
  "reserve-port",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-rustls",
  "tracing",
  "tracing-indicatif",
  "tracing-subscriber",
@@ -6895,11 +6897,13 @@ dependencies = [
  "socket2",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",
  "tower-service",
  "tracing",
+ "webpki-roots 1.0.5",
 ]
 
 [[package]]

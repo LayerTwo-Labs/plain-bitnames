@@ -19,12 +19,14 @@ jsonrpsee = { workspace = true }
 libtest-mimic = { workspace = true }
 plain_bitnames = { path = "../lib", features = ["clap"] }
 plain_bitnames_app_rpc_api = { path = "../rpc-api" }
+rcgen = { workspace = true }
 reserve-port = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 tracing-indicatif = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["io-util", "net", "rt-multi-thread"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
 
 [features]
 default = ["rustls"]

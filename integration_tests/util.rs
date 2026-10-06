@@ -27,7 +27,9 @@ pub struct BitNamesApp {
     pub path: PathBuf,
     pub data_dir: PathBuf,
     pub log_level: Option<tracing::Level>,
-    pub mainchain_grpc_port: u16,
+    /// Extra CA certificate to trust for an `https` mainchain URL
+    pub mainchain_grpc_ca_cert: Option<PathBuf>,
+    pub mainchain_grpc_url: String,
     /// Port to use for P2P networking
     pub net_port: u16,
     pub network: Network,
@@ -55,8 +57,8 @@ impl BitNamesApp {
             "--datadir".to_owned(),
             self.data_dir.display().to_string(),
             "--headless".to_owned(),
-            "--mainchain-grpc-port".to_owned(),
-            self.mainchain_grpc_port.to_string(),
+            "--mainchain-grpc-url".to_owned(),
+            self.mainchain_grpc_url.clone(),
             "--net-addr".to_owned(),
             format!("127.0.0.1:{}", self.net_port),
             format!("--network={}", self.network),
@@ -67,6 +69,10 @@ impl BitNamesApp {
             "--zmq-addr".to_owned(),
             format!("127.0.0.1:{}", self.zmq_port),
         ];
+        if let Some(ca_cert) = &self.mainchain_grpc_ca_cert {
+            default_args.push("--mainchain-grpc-ca-cert".to_owned());
+            default_args.push(ca_cert.display().to_string());
+        }
         if let Some(log_level) = self.log_level {
             default_args.push("--log-level".to_owned());
             default_args.push(log_level.as_str().to_owned());
