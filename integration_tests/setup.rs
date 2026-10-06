@@ -46,6 +46,18 @@ pub struct Init {
     pub data_dir_suffix: Option<String>,
 }
 
+impl Init {
+    /// Defaults for everything but the binary. Override fields with struct
+    /// update syntax, so that adding a field doesn't touch every test:
+    /// `Init { data_dir_suffix: Some(..), ..Init::new(bitnames_app) }`
+    pub fn new(bitnames_app: PathBuf) -> Self {
+        Self {
+            bitnames_app,
+            data_dir_suffix: None,
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum BmmError {
     #[error(transparent)]

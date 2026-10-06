@@ -143,10 +143,7 @@ fn deposit_withdraw_roundtrip_trial(
             };
             deposit_withdraw_roundtrip(
                 post_setup,
-                Init {
-                    bitnames_app: bin_paths.bitnames()?.clone(),
-                    data_dir_suffix: None,
-                },
+                Init::new(bin_paths.bitnames()?.clone()),
                 res_tx,
             )
             .await
