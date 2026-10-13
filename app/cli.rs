@@ -8,7 +8,6 @@ use std::{
 
 use clap::{Arg, Parser};
 use plain_bitnames::types::{Network, THIS_SIDECHAIN};
-use url::{Host, Url};
 
 use crate::util::saturating_pred_level;
 
@@ -114,10 +113,6 @@ static DEFAULT_DATA_DIR: LazyLock<Option<PathBuf>> =
         }
         Some(data_dir) => Some(data_dir.join("plain_bitnames")),
     });
-
-const DEFAULT_MAIN_HOST: Host = Host::Ipv4(Ipv4Addr::LOCALHOST);
-
-const DEFAULT_MAIN_PORT: u16 = 50051;
 
 const DEFAULT_NET_ADDR: SocketAddr =
     ipv4_socket_addr([0, 0, 0, 0], 4000 + THIS_SIDECHAIN as u16);

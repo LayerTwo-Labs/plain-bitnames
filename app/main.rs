@@ -1,8 +1,9 @@
 use std::{net::SocketAddr, path::Path, sync::Arc};
 
 use clap::Parser as _;
+use futures::StreamExt as _;
 use mimalloc::MiMalloc;
-use tokio::{signal::ctrl_c, sync::oneshot};
+use tokio::signal::ctrl_c;
 use tracing_subscriber::{
     Layer, filter as tracing_filter, layer::SubscriberExt,
 };
@@ -209,7 +210,10 @@ fn main() -> anyhow::Result<()> {
         config.log_level,
     )?;
     let () = config.log_all_fields("Loaded config");
-    let (app_tx, app_rx) = oneshot::channel::<anyhow::Error>();
+    // Any task that stops leaves the node unable to make progress, so in
+    // headless mode the first error ends the process.
+    let (fatal_error_tx, mut fatal_error_rx) =
+        futures::channel::mpsc::unbounded();
     let app_config = app::Config {
         add_peers: config.add_peers,
         datadir: config.datadir,
@@ -224,24 +228,33 @@ fn main() -> anyhow::Result<()> {
         #[cfg(feature = "zmq")]
         zmq_addr: config.zmq_addr,
     };
-    let app = app::App::new(app_config).inspect(|app| {
-        // spawn rpc server
-        app.runtime.spawn({
-            let app = app.clone();
-            async move {
-                tracing::info!("starting RPC server at `{}`", config.rpc_addr);
-                if let Err(err) = rpc_server::run_server(
-                    app,
-                    config.private_rpc_addr,
-                    config.rpc_addr,
-                )
-                .await
-                {
-                    app_tx.send(err).expect("failed to send error to app");
+    let app =
+        app::App::new(app_config, fatal_error_tx.clone()).inspect(|app| {
+            // spawn rpc server
+            app.runtime.spawn({
+                let app = app.clone();
+                async move {
+                    tracing::info!(
+                        "starting RPC server at `{}`",
+                        config.rpc_addr
+                    );
+                    if let Err(err) = rpc_server::run_server(
+                        app,
+                        config.private_rpc_addr,
+                        config.rpc_addr,
+                    )
+                    .await
+                    {
+                        let err = plain_bitnames::node::TaskError {
+                            task: "RPC server",
+                            err: format!("{err:#}"),
+                        };
+                        let _send_err: Result<(), _> =
+                            fatal_error_tx.unbounded_send(err);
+                    }
                 }
-            }
+            });
         });
-    });
     if !config.headless {
         let (app, rt) = match app {
             Ok(app) => {
@@ -275,8 +288,8 @@ fn main() -> anyhow::Result<()> {
                 tracing::info!("Shutting down due to process interruption");
                 Ok(())
             }
-            Ok(err) = app_rx => {
-                Err(anyhow::anyhow!("received error from RPC server: {err:#} ({err:?})"))
+            Some(err) = fatal_error_rx.next() => {
+                Err(err.into())
             }
         }
     })

@@ -32,8 +32,10 @@ use crate::{
         peer_message,
     },
     node::{
+        FatalErrorTx,
         error::net_task::{self as error, Error},
         mainchain_task::{self, MainchainTaskHandle},
+        supervise,
     },
     state::{self, State},
     types::{
@@ -1343,6 +1345,7 @@ impl NetTaskHandle {
         runtime: &tokio::runtime::Runtime,
         env: sneed::Env<heed::WithoutTls>,
         archive: Archive,
+        fatal_error_tx: FatalErrorTx,
         mainchain_task: MainchainTaskHandle,
         mainchain_task_event_rx: UnboundedReceiver<mainchain_task::Event>,
         mempool: MemPool,
@@ -1375,11 +1378,7 @@ impl NetTaskHandle {
             new_tip_ready_rx,
             peer_info_rx,
         };
-        let task = runtime.spawn(async {
-            if let Err(err) = task.run().await {
-                tracing::error!("Net task error: {:#}", ErrorChain::new(&err));
-            }
-        });
+        let task = runtime.spawn(supervise("Net", task.run(), fatal_error_tx));
         NetTaskHandle {
             task: Arc::new(task),
             new_tip_ready_tx,
