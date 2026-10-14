@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use error_fatality::{Nested as _, Split};
+use error_fatality::{Fatality as _, Nested as _, Split};
 use fallible_iterator::{FallibleIterator, IteratorExt};
 use futures::{
     StreamExt,
@@ -220,10 +220,6 @@ pub(in crate::node) fn disconnect_tip_(
     Ok(())
 }
 
-fn is_fatal_reorg_error(err: &Error) -> bool {
-    !matches!(err, Error::State(_))
-}
-
 /// Re-org to the specified tip, if it is better than the current tip.
 /// The new tip block and all ancestor blocks must exist in the node's archive.
 /// A result of `Ok(true)` indicates a successful re-org.
@@ -372,7 +368,7 @@ fn reorg_to_tip<ThreadLocalStorage>(
         ) {
             Ok(()) => (),
             Err(err) => {
-                if !is_fatal_reorg_error(&err) {
+                if !err.is_fatal() {
                     // The stored body for this block failed validation (e.g. a peer
                     // supplied a body whose contents do not match the header's merkle
                     // root). Abort the reorg and discard the invalid body from the
@@ -897,7 +893,7 @@ impl NetTask {
                 block_hash: best_side_tip.block_hash,
                 main_block_hash: best_side_tip.info.main_block_hash,
             };
-            let _: bool = reorg_to_tip(
+            match reorg_to_tip(
                 &ctxt.env,
                 &ctxt.archive,
                 &ctxt.net.batch_verification_ctxt,
@@ -906,7 +902,18 @@ impl NetTask {
                 #[cfg(feature = "zmq")]
                 &ctxt.zmq_pub_handler,
                 best_side_tip,
-            )?;
+            )
+            .into_nested()?
+            {
+                Ok(completed_reorg) => {
+                    let _: bool = completed_reorg;
+                }
+                Err(err) => tracing::warn!(
+                    ?best_side_tip,
+                    err = format!("{:#}", ErrorChain::new(&err)),
+                    "rejecting invalid best side tip"
+                ),
+            }
         }
         Ok(())
     }
@@ -1161,12 +1168,10 @@ impl NetTask {
                             &self.ctxt.zmq_pub_handler,
                             new_tip,
                         )
-                    });
+                    })
+                    .into_nested()?;
                     let reorg_applied = match reorg_result {
                         Ok(applied) => applied,
-                        Err(err) if is_fatal_reorg_error(&err) => {
-                            return Err(err);
-                        }
                         // an invalid block must not kill the net task; drop the
                         // peer and keep running
                         Err(err) => {
@@ -1420,21 +1425,20 @@ impl Drop for NetTaskHandle {
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        node::net_task::{Error, is_fatal_reorg_error},
-        state,
-    };
+    use error_fatality::Fatality as _;
+
+    use crate::{node::net_task::Error, state};
 
     // a peer's invalid block (value out > value in) must not be fatal
     #[test]
     fn invalid_peer_block_is_not_fatal() {
         let err = Error::State(Box::new(state::Error::NotEnoughFees));
-        assert!(!is_fatal_reorg_error(&err));
+        assert!(!err.is_fatal());
     }
 
     // local infrastructure errors stay fatal
     #[test]
     fn infrastructure_error_is_fatal() {
-        assert!(is_fatal_reorg_error(&Error::PeerInfoRxClosed));
+        assert!(Error::PeerInfoRxClosed.is_fatal());
     }
 }
