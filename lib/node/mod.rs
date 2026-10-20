@@ -249,6 +249,7 @@ where
             mempool.clone(),
             net.clone(),
             peer_info_rx,
+            rng,
             state.clone(),
             #[cfg(feature = "zmq")]
             zmq_pub_handler.clone(),
