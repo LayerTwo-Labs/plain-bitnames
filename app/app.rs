@@ -14,8 +14,9 @@ use plain_bitnames::{
     node::{self, FatalErrorTx, Node},
     state,
     types::{
-        self, Address, AmountOverflowError, BitcoinOutputContent, Body,
-        Coinbase, FilledOutput, GetValue, InPoint, OutPoint, Transaction,
+        self, Address, AmountOverflowError, AuthorizedTransaction,
+        BitcoinOutputContent, Body, Coinbase, FilledOutput, FilledTransaction,
+        GetValue, InPoint, OutPoint, Transaction,
         hashes::BitName,
         proto::mainchain::{
             self,
@@ -731,11 +732,32 @@ impl App {
                     outputs: outputs.into(),
                 }
             };
-            let merkle_root = Body::compute_merkle_root(&coinbase, &txs)?;
-            let body = Body::new(
-                txs.into_iter().map(|tx| tx.into()).collect(),
+            let mut authorizations = {
+                let capacity =
+                    txs.iter().map(|tx| tx.authorizations.len()).sum();
+                Vec::with_capacity(capacity)
+            };
+            let mut filled_txs = Vec::with_capacity(txs.len());
+            for tx in txs {
+                let AuthorizedTransaction {
+                    transaction,
+                    authorizations: tx_authorizations,
+                } = tx;
+                authorizations.extend(tx_authorizations);
+                filled_txs.push(transaction);
+            }
+            let merkle_root = Body::compute_merkle_root(
+                &coinbase,
+                &filled_txs,
+                &authorizations,
+            )?;
+            let transactions =
+                filled_txs.into_iter().map(|tx| tx.transaction).collect();
+            let body = Body {
                 coinbase,
-            );
+                transactions,
+                authorizations,
+            };
             let header = types::Header {
                 merkle_root,
                 prev_side_hash,
@@ -751,10 +773,17 @@ impl App {
             (bribe, header, body, tx_fees)
         } else {
             let coinbase = Coinbase::default();
-            let merkle_root = Body::compute_merkle_root::<
-                types::FilledTransaction,
-            >(&coinbase, &[])?;
-            let body = Body::new(Vec::new(), coinbase);
+            let authorizations = Vec::new();
+            let merkle_root = Body::compute_merkle_root::<FilledTransaction>(
+                &coinbase,
+                &[],
+                &authorizations,
+            )?;
+            let body = Body {
+                coinbase,
+                transactions: Vec::new(),
+                authorizations,
+            };
             let header = types::Header {
                 merkle_root,
                 prev_side_hash,

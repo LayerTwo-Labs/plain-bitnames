@@ -85,8 +85,11 @@ pub fn validate(
     if coinbase_value > total_fees {
         return Err(Error::NotEnoughFees);
     }
-    let merkle_root =
-        Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
+    let merkle_root = Body::compute_merkle_root(
+        &body.coinbase,
+        filled_txs.as_slice(),
+        &body.authorizations,
+    )?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -195,6 +198,7 @@ pub fn prevalidate(
     let computed_merkle_root = Body::compute_merkle_root(
         &body.coinbase,
         filled_transactions.as_slice(),
+        &body.authorizations,
     )?;
     if computed_merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
@@ -525,8 +529,11 @@ pub fn connect(
         }
         filled_txs.push(filled_tx);
     }
-    let merkle_root =
-        Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
+    let merkle_root = Body::compute_merkle_root(
+        &body.coinbase,
+        filled_txs.as_slice(),
+        &body.authorizations,
+    )?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -655,8 +662,11 @@ pub fn disconnect_tip(
                 }
             })?;
     }
-    let merkle_root =
-        Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
+    let merkle_root = Body::compute_merkle_root(
+        &body.coinbase,
+        filled_txs.as_slice(),
+        &body.authorizations,
+    )?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -802,6 +812,7 @@ mod test {
         let genesis_merkle_root = Body::compute_merkle_root::<FilledTransaction>(
             &genesis_body.coinbase,
             &[],
+            &genesis_body.authorizations,
         )?;
         let genesis_header = header(None, genesis_merkle_root);
         {
@@ -832,6 +843,7 @@ mod test {
         let update_merkle_root = Body::compute_merkle_root(
             &update_body.coinbase,
             &[filled_update_tx],
+            &update_body.authorizations,
         )?;
         let update_header =
             header(Some(genesis_header.hash()), update_merkle_root);

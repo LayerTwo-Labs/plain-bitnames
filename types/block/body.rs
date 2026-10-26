@@ -160,6 +160,7 @@ impl Body {
     pub fn compute_merkle_root<FilledTx>(
         coinbase: &Coinbase,
         txs: &[FilledTx],
+        authorizations: &[Authorization],
     ) -> Result<MerkleRoot, error::ComputeMerkleRoot>
     where
         FilledTx: Borrow<FilledTransaction> + Sync,
@@ -244,10 +245,14 @@ impl Body {
         struct HashComponents {
             coinbase_commitment: CoinbaseMerkleRoot,
             txs_commitment: Hash,
+            authorizations_commitment: Hash,
         }
         let root = hashes::hash_with_scratch_buffer(&HashComponents {
             coinbase_commitment,
             txs_commitment,
+            authorizations_commitment: hashes::hash_with_scratch_buffer(
+                authorizations,
+            ),
         })
         .into();
         Ok(root)
