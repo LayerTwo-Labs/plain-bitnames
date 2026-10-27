@@ -141,7 +141,7 @@ impl Wallet {
                 if db_version
                     < Version {
                         major: 0,
-                        minor: 18,
+                        minor: 19,
                         patch: 0,
                     } =>
             {
@@ -706,7 +706,8 @@ impl Wallet {
                         continue;
                     }
                 }
-                OutPoint::Regular { .. } => (),
+                OutPoint::Regular { .. }
+                | OutPoint::UnsuccessfulWithdrawal { .. } => (),
             }
             if output.content.is_withdrawal()
                 || output.is_bitname()

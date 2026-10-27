@@ -30,6 +30,9 @@ impl Inbox {
             OutPoint::Coinbase { txid, vout } => {
                 ("coinbase", format!("{txid}"), *vout)
             }
+            OutPoint::UnsuccessfulWithdrawal { m6id, vout, .. } => {
+                ("unsuccessful withdrawal", format!("{m6id}"), *vout)
+            }
         };
         let hash = &hash[0..8];
         ui.monospace(kind.to_string());

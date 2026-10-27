@@ -105,7 +105,8 @@ fn update_wallet(
                         })?;
                     deposit_main_heights.insert(*txid, height);
                 }
-                OutPoint::Regular { .. } => (),
+                OutPoint::Regular { .. }
+                | OutPoint::UnsuccessfulWithdrawal { .. } => (),
             }
         }
     }

@@ -124,6 +124,15 @@ impl MempoolExplorer {
                                             format!("{txid}"),
                                             *vout,
                                         ),
+                                        OutPoint::UnsuccessfulWithdrawal {
+                                            m6id,
+                                            vout,
+                                            ..
+                                        } => (
+                                            "unsuccessful withdrawal",
+                                            format!("{m6id}"),
+                                            *vout,
+                                        ),
                                     };
                                     let output = &utxos[input];
                                     let hash = &hash[0..8];
