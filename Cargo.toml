@@ -12,7 +12,7 @@ version = "0.19.2"
 
 [workspace.dependencies]
 addr = "0.15.6"
-aes-gcm = { version = "0.10", default-features = false }
+aes-gcm = { version = "0.11", default-features = false }
 anyhow = "1.0.72"
 async-lock = "3.4.0"
 bech32 = "0.11.0"
@@ -97,7 +97,7 @@ typewit = { version = "1.15", default-features = false }
 url = { version = "2.5.4", default-features = false }
 utoipa = { version = "5.2.0", default-features = false }
 uuid = "1.13.1"
-zeromq = "0.6.0"
+zeromq = "0.7.0"
 
 [workspace.dependencies.bip300301_enforcer_lib]
 default-features = false
