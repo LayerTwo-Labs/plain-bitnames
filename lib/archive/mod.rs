@@ -1,88 +1,20 @@
 use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashMap, HashSet},
-    path::PathBuf,
 };
 
 use bitcoin::{self, hashes::Hash as _};
 use fallible_iterator::{FallibleIterator, IteratorExt};
 use heed::types::SerdeBincode;
-use sneed::{
-    DatabaseUnique, EnvError, RoTxn, RwTxn, RwTxnError, UnitKey,
-    db::{self, error::Error as DbError},
-    env, rwtxn,
-};
+use sneed::{DatabaseUnique, RoTxn, RwTxn, UnitKey, db::Error as DbError};
 
 use crate::types::{
     Block, BlockHash, BmmResult, Body, Header, Tip, Txid, VERSION, Version,
     proto::mainchain,
 };
 
-#[allow(clippy::duplicated_attributes)]
-#[derive(Debug, thiserror::Error, transitive::Transitive)]
-#[transitive(
-    from(db::error::Delete, DbError),
-    from(db::error::Put, DbError),
-    from(db::error::TryGet, DbError),
-    from(env::error::CreateDb, EnvError),
-    from(env::error::WriteTxn, EnvError),
-    from(rwtxn::error::Commit, RwTxnError)
-)]
-pub enum Error {
-    #[error(transparent)]
-    Db(Box<DbError>),
-    #[error("Database env error")]
-    DbEnv(#[from] EnvError),
-    #[error("Database write error")]
-    DbWrite(#[from] RwTxnError),
-    #[error(
-        "Incompatible DB version ({}). Please clear the DB (`{}`) and re-sync",
-        .version,
-        .db_path.display()
-    )]
-    IncompatibleVersion { version: Version, db_path: PathBuf },
-    #[error("invalid previous side hash")]
-    InvalidPrevSideHash,
-    #[error("invalid merkle root")]
-    InvalidMerkleRoot,
-    #[error("no ancestor with depth {depth} for block {block_hash}")]
-    NoAncestor { block_hash: BlockHash, depth: u32 },
-    #[error("no block with hash {0}")]
-    NoBlock(BlockHash),
-    #[error("unknown block hash: {0}")]
-    NoBlockHash(BlockHash),
-    #[error("no BMM result with block {0}")]
-    NoBmmResult(BlockHash),
-    #[error("no block body with hash {0}")]
-    NoBody(BlockHash),
-    #[error("no deposits info for block {0}")]
-    NoDepositsInfo(bitcoin::BlockHash),
-    #[error("no header with hash {0}")]
-    NoHeader(BlockHash),
-    #[error("no height info for block hash {0}")]
-    NoHeight(BlockHash),
-    #[error("no mainchain ancestor with depth {depth} for block {block_hash}")]
-    NoMainAncestor {
-        block_hash: bitcoin::BlockHash,
-        depth: u32,
-    },
-    #[error("unknown mainchain block hash: {0}")]
-    NoMainBlockHash(bitcoin::BlockHash),
-    #[error("no mainchain block info for block hash {0}")]
-    NoMainBlockInfo(bitcoin::BlockHash),
-    #[error("no mainchain header info for block hash {0}")]
-    NoMainHeaderInfo(bitcoin::BlockHash),
-    #[error("no height info for mainchain block hash {0}")]
-    NoMainHeight(bitcoin::BlockHash),
-    #[error("no tx with txid {0}")]
-    NoTx(Txid),
-}
-
-impl From<DbError> for Error {
-    fn from(err: DbError) -> Self {
-        Self::Db(Box::new(err))
-    }
-}
+pub mod error;
+pub use error::Error;
 
 #[derive(Clone)]
 pub struct Archive {
