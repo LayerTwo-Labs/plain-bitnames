@@ -160,8 +160,12 @@ pub mod node {
             };
             use l2l_openapi::open_api;
             use plain_bitnames_types::{
-                Address, Authorization, Block, BlockHash, Body, Header,
-                MerkleRoot, Output, OutputContent, Transaction, Txid,
+                Address, Authorization, BatchIcannRegistrationData, BitName,
+                BitNameDataUpdates, BitcoinOutputContent, Block, BlockHash,
+                Body, EncryptionPubKey, Header, MerkleRoot, MutableBitNameData,
+                Output, OutputContent, Transaction, TransactionData, Txid,
+                VerifyingKey, WithdrawalOutputContent,
+                authorization::Signature,
             };
             use serde::Serialize;
             use typewit::const_marker::Bool;
@@ -196,10 +200,14 @@ pub mod node {
             /// This trait exists only as a bound, and should not be implemented
             /// manually
             #[open_api(ref_schemas[
-                Address, Authorization, Block, BlockHash, BlockVerbose, Body,
-                BodyVerbose, Header, MerkleRoot, Output, OutputContent,
-                Transaction, TransactionVerbose, Txid, schema::BitcoinAddr,
-                schema::BitcoinBlockHash, schema::BitcoinOutPoint,
+                Address, Authorization, BatchIcannRegistrationData,
+                BitcoinOutputContent, BitName, BitNameDataUpdates, Block,
+                BlockHash, BlockVerbose, Body, BodyVerbose, EncryptionPubKey,
+                Header, MerkleRoot, MutableBitNameData, Output, OutputContent,
+                Signature, Transaction, TransactionData, TransactionVerbose,
+                Txid, VerifyingKey, WithdrawalOutputContent,
+                schema::BitcoinAddr, schema::BitcoinBlockHash,
+                schema::BitcoinOutPoint,
             ])]
             #[rpc(server, server_bounds(Self: private::Sealed))]
             pub trait Rpc {
@@ -273,10 +281,12 @@ pub mod node {
         ref_schemas[
             Address, Authorization, BatchIcannRegistrationData,
             BitcoinOutputContent, BitName, BitNameDataUpdates, BitNameSeqId,
-            BlockHash, Body, EncryptionPubKey, FilledOutput, FilledOutputContent,
-            Header, InPoint, M6id, MerkleRoot, MutableBitNameData, OutPoint,
-            Output, OutputContent, PeerConnectionStatus, Signature, SpentOutput,
-            Transaction, TransactionData, Txid, TxIn, VerifyingKey,
+            BlockHash, Body, EncryptionPubKey, FilledOutput,
+            FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
+            MutableBitNameData, OutPoint, Output, OutputContent,
+            PeerConnectionStatus, Signature, SpentOutput, Transaction,
+            TransactionData, Txid, TxIn, VerifyingKey, WithdrawalBundle,
+            WithdrawalBundleInfo, WithdrawalBundleStatus,
             WithdrawalOutputContent, schema::BitcoinAddr,
             schema::BitcoinBlockHash, schema::BitcoinOutPoint,
             schema::BitcoinTransaction, schema::SocketAddr,

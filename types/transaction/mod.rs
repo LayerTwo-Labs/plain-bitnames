@@ -1,280 +1,26 @@
-use std::{borrow::Borrow, io::Cursor};
+use std::borrow::Borrow;
 
 use bitcoin::amount::CheckedSum;
-use borsh::{self, BorshDeserialize, BorshSerialize};
+use borsh::{self, BorshSerialize};
 use serde::{Deserialize, Serialize};
 use utoipa::{PartialSchema, ToSchema};
 
-#[cfg(feature = "heed")]
-use heed::{BoxedError, BytesDecode, BytesEncode};
-
 use crate::{
-    Address, AmountOverflowError, BitNameDataUpdates, ComputeFeeError,
-    GetValue, MutableBitNameData,
+    AmountOverflowError, BitNameDataUpdates, ComputeFeeError, GetValue,
+    MutableBitNameData,
     authorization::{Authorization, Signature},
-    hashes::{self, BitName, Hash, M6id, MerkleRoot, Txid},
+    hashes::{self, BitName, Hash, M6id, Txid},
     util,
 };
 
-mod output_content;
-pub use output_content::{
-    BitcoinContent as BitcoinOutputContent, Content, Filled as FilledContent,
+pub mod outpoint;
+pub use outpoint::{OutPoint, OutPointKey};
+pub mod output;
+pub use output::{
+    BitcoinContent as BitcoinOutputContent, Content as OutputContent,
+    FilledContent as FilledOutputContent, FilledOutput, Output, PointedOutput,
     WithdrawalContent as WithdrawalOutputContent,
 };
-
-#[derive(
-    BorshSerialize,
-    BorshDeserialize,
-    Clone,
-    Copy,
-    Debug,
-    Deserialize,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    Serialize,
-    ToSchema,
-)]
-pub enum OutPoint {
-    // Created by transactions.
-    Regular {
-        txid: Txid,
-        vout: u32,
-    },
-    // Created by block bodies.
-    Coinbase {
-        merkle_root: MerkleRoot,
-        vout: u32,
-    },
-    // Created by mainchain deposits.
-    #[schema(value_type = crate::schema::BitcoinOutPoint)]
-    Deposit(
-        #[borsh(
-            deserialize_with = "util::borsh::deserialize::bitcoin_outpoint",
-            serialize_with = "util::borsh::serialize::bitcoin_outpoint"
-        )]
-        bitcoin::OutPoint,
-    ),
-}
-
-impl std::fmt::Display for OutPoint {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Regular { txid, vout } => write!(f, "regular {txid} {vout}"),
-            Self::Coinbase { merkle_root, vout } => {
-                write!(f, "coinbase {merkle_root} {vout}")
-            }
-            Self::Deposit(bitcoin::OutPoint { txid, vout }) => {
-                write!(f, "deposit {txid} {vout}")
-            }
-        }
-    }
-}
-
-const OUTPOINT_KEY_SIZE: usize = 37;
-
-/// Fixed-width key for OutPoint based on its canonical Borsh encoding.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct OutPointKey([u8; OUTPOINT_KEY_SIZE]);
-
-impl OutPointKey {
-    /// Get the raw key bytes
-    #[inline]
-    pub fn as_bytes(&self) -> &[u8; OUTPOINT_KEY_SIZE] {
-        &self.0
-    }
-
-    /// Decode OutPointKey back to OutPoint
-    #[inline]
-    pub fn to_outpoint(&self) -> OutPoint {
-        let mut cursor = Cursor::new(&self.0[..]);
-        OutPoint::deserialize_reader(&mut cursor)
-            .expect("OutPointKey stores canonical Borsh-serialized OutPoints")
-    }
-
-    /// Encode an OutPoint into a fixed-width key
-    #[inline]
-    pub fn from_outpoint(op: &OutPoint) -> Self {
-        let mut key = [0u8; OUTPOINT_KEY_SIZE];
-        let mut cursor = Cursor::new(&mut key[..]);
-        BorshSerialize::serialize(op, &mut cursor)
-            .expect("serializing OutPoint into key buffer should never fail");
-        debug_assert_eq!(cursor.position() as usize, OUTPOINT_KEY_SIZE);
-        Self(key)
-    }
-}
-
-impl From<OutPoint> for OutPointKey {
-    #[inline]
-    fn from(op: OutPoint) -> Self {
-        Self::from_outpoint(&op)
-    }
-}
-
-impl From<&OutPoint> for OutPointKey {
-    #[inline]
-    fn from(op: &OutPoint) -> Self {
-        <Self as From<OutPoint>>::from(*op)
-    }
-}
-
-impl From<OutPointKey> for OutPoint {
-    #[inline]
-    fn from(key: OutPointKey) -> Self {
-        key.to_outpoint()
-    }
-}
-
-impl From<&OutPointKey> for OutPoint {
-    #[inline]
-    fn from(key: &OutPointKey) -> Self {
-        <Self as From<OutPointKey>>::from(*key)
-    }
-}
-
-impl Ord for OutPointKey {
-    #[inline]
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.0.cmp(&other.0)
-    }
-}
-
-impl PartialOrd for OutPointKey {
-    #[inline]
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl AsRef<[u8]> for OutPointKey {
-    #[inline]
-    fn as_ref(&self) -> &[u8] {
-        &self.0
-    }
-}
-
-// Database key encoding traits for direct LMDB usage
-#[cfg(feature = "heed")]
-impl<'a> BytesEncode<'a> for OutPointKey {
-    type EItem = OutPointKey;
-
-    #[inline]
-    fn bytes_encode(
-        item: &'a Self::EItem,
-    ) -> Result<std::borrow::Cow<'a, [u8]>, BoxedError> {
-        Ok(std::borrow::Cow::Borrowed(item.as_ref()))
-    }
-}
-
-#[cfg(feature = "heed")]
-impl<'a> BytesDecode<'a> for OutPointKey {
-    type DItem = OutPointKey;
-
-    #[inline]
-    fn bytes_decode(bytes: &'a [u8]) -> Result<Self::DItem, BoxedError> {
-        if bytes.len() != OUTPOINT_KEY_SIZE {
-            return Err("OutPointKey must be exactly 37 bytes".into());
-        }
-        let mut key = [0u8; OUTPOINT_KEY_SIZE];
-        key.copy_from_slice(bytes);
-        let mut cursor = Cursor::new(&key[..]);
-        OutPoint::deserialize_reader(&mut cursor)
-            .map_err(|err| -> BoxedError { Box::new(err) })?;
-        Ok(OutPointKey(key))
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::{
-        Address,
-        transaction::{
-            Content, FilledContent, FilledOutput, FilledTransaction,
-            GetValue as _, OUTPOINT_KEY_SIZE, OutPoint, OutPointKey, Output,
-            Transaction, output_content,
-        },
-    };
-
-    #[test]
-    fn check_outpoint_key_size() -> anyhow::Result<()> {
-        use bitcoin::hashes::Hash as _;
-
-        let variants = [
-            OutPoint::Regular {
-                txid: Default::default(),
-                vout: u32::MAX,
-            },
-            OutPoint::Coinbase {
-                merkle_root: Default::default(),
-                vout: u32::MAX,
-            },
-            OutPoint::Deposit(bitcoin::OutPoint {
-                txid: bitcoin::Txid::from_byte_array([0; 32]),
-                vout: u32::MAX,
-            }),
-        ];
-
-        for op in variants {
-            let serialized = borsh::to_vec(&op)?;
-            anyhow::ensure!(
-                serialized.len() == OUTPOINT_KEY_SIZE,
-                "unexpected serialized size: {}",
-                serialized.len()
-            );
-
-            let key = OutPointKey::from(op);
-            let decoded = OutPoint::from(key);
-            anyhow::ensure!(decoded == op);
-        }
-        Ok(())
-    }
-
-    // a withdrawal output must be funded for both its payout and its mainchain
-    // fee, since both leave the treasury
-    #[test]
-    fn withdrawal_value_includes_main_fee() {
-        let value = bitcoin::Amount::from_sat(1000);
-        let main_fee = bitcoin::Amount::from_sat(300);
-        let main_address = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"
-            .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
-            .unwrap();
-        let withdrawal = Output {
-            address: Address::ALL_ZEROS,
-            content: Content::Withdrawal(output_content::WithdrawalContent {
-                value,
-                main_fee,
-                main_address,
-            }),
-            memo: Vec::new(),
-        };
-        assert_eq!(withdrawal.get_value(), value + main_fee);
-
-        let value_output = |amount| FilledOutput {
-            address: Address::ALL_ZEROS,
-            content: FilledContent::Bitcoin(output_content::BitcoinContent(
-                amount,
-            )),
-            memo: Vec::new(),
-        };
-        let withdrawal_tx = |funding| FilledTransaction {
-            transaction: Transaction {
-                outputs: vec![withdrawal.clone()],
-                ..Default::default()
-            },
-            spent_utxos: vec![value_output(funding)],
-        };
-
-        // inputs covering only the payout are insufficient
-        assert!(withdrawal_tx(value).get_fee().is_err());
-        // inputs covering payout plus mainchain fee fully fund it
-        assert_eq!(
-            withdrawal_tx(value + main_fee).get_fee().unwrap(),
-            bitcoin::Amount::ZERO
-        );
-    }
-}
 
 /// Reference to a tx input.
 #[derive(
@@ -291,59 +37,6 @@ pub enum InPoint {
     Withdrawal {
         m6id: M6id,
     },
-}
-
-#[derive(
-    BorshSerialize,
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    PartialEq,
-    Serialize,
-    ToSchema,
-)]
-pub struct Output {
-    #[serde(with = "util::serde::display_fromstr_human_readable")]
-    pub address: Address,
-    pub content: Content,
-    #[serde(with = "util::serde::hexstr_human_readable")]
-    pub memo: Vec<u8>,
-}
-
-impl Output {
-    pub fn new(address: Address, content: Content) -> Self {
-        Self {
-            address,
-            content,
-            memo: Vec::new(),
-        }
-    }
-
-    /// true if the output content corresponds to a BitName
-    pub fn is_bitname(&self) -> bool {
-        self.content.is_bitname()
-    }
-
-    /// true if the output content corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        self.content.is_reservation()
-    }
-
-    /// `true` if the output content corresponds to a value output
-    pub fn is_value(&self) -> bool {
-        match self.content {
-            Content::Bitcoin(_) | Content::Withdrawal { .. } => true,
-            Content::BitName | Content::BitNameReservation => false,
-        }
-    }
-}
-
-impl GetValue for Output {
-    #[inline(always)]
-    fn get_value(&self) -> bitcoin::Amount {
-        self.content.get_value()
-    }
 }
 
 pub type TxInputs = Vec<OutPoint>;
@@ -552,86 +245,6 @@ impl Transaction {
     }
 }
 
-/// Representation of output that includes asset type
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
-pub struct FilledOutput {
-    #[serde(with = "util::serde::display_fromstr_human_readable")]
-    pub address: Address,
-    pub content: FilledContent,
-    #[serde(with = "util::serde::hexstr_human_readable")]
-    pub memo: Vec<u8>,
-}
-
-impl FilledOutput {
-    /// construct a new filled output
-    #[inline(always)]
-    pub fn new(address: Address, content: FilledContent) -> Self {
-        Self {
-            address,
-            content,
-            memo: Vec::new(),
-        }
-    }
-
-    /// Construct a new Bitcoin value output
-    #[inline(always)]
-    pub fn new_bitcoin_value(
-        address: Address,
-        amount: bitcoin::Amount,
-    ) -> Self {
-        Self::new(address, FilledContent::new_bitcoin_value(amount))
-    }
-
-    /// returns the BitName ID (name hash) if the filled output content
-    /// corresponds to a BitName output.
-    pub fn bitname(&self) -> Option<&BitName> {
-        self.content.bitname()
-    }
-
-    /// accessor for content
-    pub fn content(&self) -> &FilledContent {
-        &self.content
-    }
-
-    /// true if the output content corresponds to a bitname
-    pub fn is_bitname(&self) -> bool {
-        self.content.is_bitname()
-    }
-
-    /// true if the output content corresponds to a reservation
-    pub fn is_reservation(&self) -> bool {
-        self.content.is_reservation()
-    }
-
-    /// returns the reservation txid and commitment if the filled output
-    /// content corresponds to a BitName reservation output.
-    pub fn reservation_data(&self) -> Option<(&Txid, &Hash)> {
-        self.content.reservation_data()
-    }
-
-    /// returns the reservation commitment if the filled output content
-    /// corresponds to a BitName reservation output.
-    pub fn reservation_commitment(&self) -> Option<&Hash> {
-        self.content.reservation_commitment()
-    }
-}
-
-impl From<FilledOutput> for Output {
-    fn from(filled: FilledOutput) -> Self {
-        Self {
-            address: filled.address,
-            content: filled.content.into(),
-            memo: filled.memo,
-        }
-    }
-}
-
-impl GetValue for FilledOutput {
-    fn get_value(&self) -> bitcoin::Amount {
-        self.content.get_value()
-    }
-}
-
 /// Representation of a spent output
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize, ToSchema)]
 pub struct SpentOutput {
@@ -821,12 +434,13 @@ impl FilledTransaction {
     /// compute the filled content for BitName outputs
     fn filled_bitname_output_content(
         &self,
-    ) -> impl Iterator<Item = FilledContent> + '_ {
+    ) -> impl Iterator<Item = FilledOutputContent> + '_ {
         // If this tx is a BitName registration, this is the content of the
         // output corresponding to the newly created BitName, which must be
         // the final BitName output.
-        let new_bitname_content: Option<FilledContent> =
-            self.registration_name_hash().map(FilledContent::BitName);
+        let new_bitname_content: Option<FilledOutputContent> = self
+            .registration_name_hash()
+            .map(FilledOutputContent::BitName);
         self.spent_bitnames()
             .map(|(_, filled_output)| filled_output.content())
             .cloned()
@@ -837,13 +451,13 @@ impl FilledTransaction {
     /// WARNING: do not expose DoubleEndedIterator.
     fn filled_reservation_output_content(
         &self,
-    ) -> impl Iterator<Item = FilledContent> + '_ {
+    ) -> impl Iterator<Item = FilledOutputContent> + '_ {
         // If this tx is a BitName reservation, this is the content of the
         // output corresponding to the newly created BitName reservation,
         // which must be the final reservation output.
-        let new_reservation_content: Option<FilledContent> =
+        let new_reservation_content: Option<FilledOutputContent> =
             self.reservation_commitment().map(|commitment| {
-                FilledContent::BitNameReservation(self.txid(), commitment)
+                FilledOutputContent::BitNameReservation(self.txid(), commitment)
             });
         // used to track if the reservation that should be burned as part
         // of a registration tx
@@ -857,7 +471,7 @@ impl FilledTransaction {
                 if let Some(implied_commitment) = reservation_to_burn {
                     if matches!(
                         content,
-                        FilledContent::BitNameReservation(_, commitment)
+                        FilledOutputContent::BitNameReservation(_, commitment)
                             if *commitment == implied_commitment)
                     {
                         reservation_to_burn = None;
@@ -884,15 +498,17 @@ impl FilledTransaction {
             .iter()
             .map(|output| {
                 let content = match output.content.clone() {
-                    Content::BitName => {
+                    OutputContent::BitName => {
                         filled_bitname_output_content.next()?.clone()
                     }
-                    Content::BitNameReservation => {
+                    OutputContent::BitNameReservation => {
                         filled_reservation_output_content.next()?.clone()
                     }
-                    Content::Bitcoin(value) => FilledContent::Bitcoin(value),
-                    Content::Withdrawal(withdrawal) => {
-                        FilledContent::BitcoinWithdrawal(withdrawal)
+                    OutputContent::Bitcoin(value) => {
+                        FilledOutputContent::Bitcoin(value)
+                    }
+                    OutputContent::Withdrawal(withdrawal) => {
+                        FilledOutputContent::BitcoinWithdrawal(withdrawal)
                     }
                 };
                 Some(FilledOutput {
@@ -961,17 +577,56 @@ impl From<Authorized<FilledTransaction>> for AuthorizedTransaction {
     }
 }
 
-#[derive(
-    BorshSerialize,
-    Clone,
-    Debug,
-    Deserialize,
-    Eq,
-    PartialEq,
-    Serialize,
-    ToSchema,
-)]
-pub struct Pointed<OutputKind = Output> {
-    pub outpoint: OutPoint,
-    pub output: OutputKind,
+#[cfg(test)]
+mod test {
+    use crate::{
+        Address,
+        transaction::{
+            BitcoinOutputContent, FilledOutput, FilledOutputContent,
+            FilledTransaction, GetValue as _, Output, OutputContent,
+            Transaction, WithdrawalOutputContent,
+        },
+    };
+
+    // a withdrawal output must be funded for both its payout and its mainchain
+    // fee, since both leave the treasury
+    #[test]
+    fn withdrawal_value_includes_main_fee() {
+        let value = bitcoin::Amount::from_sat(1000);
+        let main_fee = bitcoin::Amount::from_sat(300);
+        let main_address = "1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2"
+            .parse::<bitcoin::Address<bitcoin::address::NetworkUnchecked>>()
+            .unwrap();
+        let withdrawal = Output {
+            address: Address::ALL_ZEROS,
+            content: OutputContent::Withdrawal(WithdrawalOutputContent {
+                value,
+                main_fee,
+                main_address,
+            }),
+            memo: Vec::new(),
+        };
+        assert_eq!(withdrawal.get_value(), value + main_fee);
+
+        let value_output = |amount| FilledOutput {
+            address: Address::ALL_ZEROS,
+            content: FilledOutputContent::Bitcoin(BitcoinOutputContent(amount)),
+            memo: Vec::new(),
+        };
+        let withdrawal_tx = |funding| FilledTransaction {
+            transaction: Transaction {
+                outputs: vec![withdrawal.clone()],
+                ..Default::default()
+            },
+            spent_utxos: vec![value_output(funding)],
+        };
+
+        // inputs covering only the payout are insufficient
+        assert!(withdrawal_tx(value).get_fee().is_err());
+        // inputs covering payout plus mainchain fee fully fund it
+        assert_eq!(
+            withdrawal_tx(value + main_fee).get_fee().unwrap(),
+            bitcoin::Amount::ZERO
+        );
+    }
 }

@@ -204,6 +204,7 @@ mod withdrawal_content {
 }
 pub use withdrawal_content::WithdrawalContent;
 
+#[allow(clippy::module_inception)]
 mod content {
     use serde::{Deserialize, Serialize};
     use utoipa::{PartialSchema, ToSchema};
@@ -392,8 +393,10 @@ mod filled {
     use utoipa::{PartialSchema, ToSchema};
 
     use crate::{
-        BitName, Hash, Txid,
-        transaction::{Content, output_content},
+        hashes::{BitName, Hash, Txid},
+        transaction::output::content::{
+            BitcoinContent, Content, WithdrawalContent,
+        },
     };
 
     /// Defines a Filled enum with the specified visibility, name,
@@ -418,8 +421,8 @@ mod filled {
                 $(
                     $(#[$bitcoin_attr])*
                 )?
-                Bitcoin(output_content::BitcoinContent),
-                BitcoinWithdrawal(output_content::WithdrawalContent),
+                Bitcoin(BitcoinContent),
+                BitcoinWithdrawal(WithdrawalContent),
                 BitName(BitName),
                 /// Reservation txid and commitment
                 BitNameReservation(
@@ -468,7 +471,7 @@ mod filled {
         /// Constructs a new filled Bitcoin value output
         #[inline(always)]
         pub fn new_bitcoin_value(amount: bitcoin::Amount) -> Self {
-            Self::Bitcoin(output_content::BitcoinContent(amount))
+            Self::Bitcoin(BitcoinContent(amount))
         }
 
         /// returns the BitName ID (name hash) if the filled output content

@@ -44,9 +44,8 @@ pub mod state;
 pub mod transaction;
 pub use transaction::{
     Authorized, AuthorizedTransaction, BatchIcannRegistrationData,
-    BitcoinOutputContent, Content as OutputContent,
-    FilledContent as FilledOutputContent, FilledOutput, FilledTransaction,
-    InPoint, OutPoint, OutPointKey, Output, Pointed as PointedOutput,
+    BitcoinOutputContent, FilledOutput, FilledOutputContent, FilledTransaction,
+    InPoint, OutPoint, OutPointKey, Output, OutputContent, PointedOutput,
     SpentOutput, Transaction, TransactionData, TxData, WithdrawalOutputContent,
 };
 mod util;
