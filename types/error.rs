@@ -18,23 +18,28 @@ pub enum ComputeFee {
     ValueOutOverflow(#[source] AmountOverflow),
 }
 
-#[derive(Debug, Error)]
-pub enum GetFee {
-    #[error(transparent)]
-    AmountOverflow(#[from] AmountOverflow),
-    #[error(transparent)]
-    AmountUnderflow(#[from] AmountUnderflow),
-}
+pub mod compute_merkle_root {
+    use thiserror::Error;
 
-#[derive(Debug, Error)]
-pub enum ComputeMerkleRoot {
-    #[error("failed to compute fee for tx ({txid})")]
-    FeeComputation {
-        txid: crate::Txid,
-        #[source]
-        source: GetFee,
-    },
+    use crate::{error::ComputeFee, hashes::Txid};
+
+    #[derive(Debug, Error)]
+    pub(crate) enum Inner {
+        #[error("failed to compute canonical size for tx ({txid})")]
+        TxCanonicalSize {
+            txid: Txid,
+            source: borsh::io::Error,
+        },
+        #[error("failed to compute fee for tx ({txid})")]
+        TxFee { txid: Txid, source: ComputeFee },
+    }
+
+    #[derive(Debug, Error)]
+    #[error("failed to compute merkle root")]
+    #[repr(transparent)]
+    pub struct Error(#[from] Inner);
 }
+pub use compute_merkle_root::Error as ComputeMerkleRoot;
 
 pub mod withdrawal_bundle {
     use thiserror::Error;

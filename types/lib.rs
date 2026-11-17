@@ -26,7 +26,7 @@ pub use error::{
     AmountOverflow as AmountOverflowError,
     AmountUnderflow as AmountUnderflowError,
     Authorization as AuthorizationError, ComputeFee as ComputeFeeError,
-    ComputeMerkleRoot as ComputeMerkleRootError, GetFee as GetFeeError,
+    ComputeMerkleRoot as ComputeMerkleRootError,
     WithdrawalBundle as WithdrawalBundleError,
 };
 pub mod hashes;
@@ -484,35 +484,40 @@ impl Body {
                 IndexedParallelIterator, IntoParallelRefIterator,
                 ParallelIterator,
             };
-            let results: Result<Vec<_>, ComputeMerkleRootError> = txs
-                .par_iter()
-                .enumerate()
-                .map(|(idx, tx)| {
-                    let tx = tx.borrow();
-                    let fees = tx.get_fee().map_err(|err| {
-                        ComputeMerkleRootError::FeeComputation {
-                            txid: tx.transaction.txid(),
-                            source: err,
-                        }
-                    })?;
-                    let canonical_size = tx.transaction.canonical_size();
-                    let leaf_pre_commitment = CbmtLeafPreCommitment {
-                        fee: fees,
-                        canonical_size,
-                        tx: &tx.transaction,
-                    };
-                    let node = CbmtNode {
-                        commitment: hashes::hash_with_scratch_buffer(
-                            &leaf_pre_commitment,
-                        ),
-                        fees,
-                        canonical_size,
-                        // see https://github.com/nervosnetwork/merkle-tree/blob/5d1898263e7167560fdaa62f09e8d52991a1c712/README.md#tree-struct
-                        index: (idx + n_txs) - 1,
-                    };
-                    Ok((idx, node))
-                })
-                .collect();
+            let results: Result<Vec<_>, ComputeMerkleRootError> =
+                txs.par_iter()
+                    .enumerate()
+                    .map(|(idx, tx)| {
+                        let tx = tx.borrow();
+                        let fees = tx.get_fee().map_err(|err| {
+                            error::compute_merkle_root::Inner::TxFee {
+                                txid: tx.transaction.txid(),
+                                source: err,
+                            }
+                        })?;
+                        let canonical_size = tx.transaction.canonical_size()
+                        .map_err(|err|
+                            error::compute_merkle_root::Inner::TxCanonicalSize {
+                                txid: tx.transaction.txid(),
+                                source: err,
+                            })?;
+                        let leaf_pre_commitment = CbmtLeafPreCommitment {
+                            fee: fees,
+                            canonical_size,
+                            tx: &tx.transaction,
+                        };
+                        let node = CbmtNode {
+                            commitment: hashes::hash_with_scratch_buffer(
+                                &leaf_pre_commitment,
+                            ),
+                            fees,
+                            canonical_size,
+                            // see https://github.com/nervosnetwork/merkle-tree/blob/5d1898263e7167560fdaa62f09e8d52991a1c712/README.md#tree-struct
+                            index: (idx + n_txs) - 1,
+                        };
+                        Ok((idx, node))
+                    })
+                    .collect();
 
             // Fill the pre-allocated vector with computed nodes
             for (idx, node) in results? {

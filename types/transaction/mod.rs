@@ -9,8 +9,8 @@ use utoipa::{PartialSchema, ToSchema};
 use heed::{BoxedError, BytesDecode, BytesEncode};
 
 use crate::{
-    Address, AmountOverflowError, AmountUnderflowError, BitNameDataUpdates,
-    ComputeFeeError, GetFeeError, GetValue, MutableBitNameData,
+    Address, AmountOverflowError, BitNameDataUpdates, ComputeFeeError,
+    GetValue, MutableBitNameData,
     authorization::{Authorization, Signature},
     hashes::{self, BitName, Hash, M6id, MerkleRoot, Txid},
     util,
@@ -439,8 +439,9 @@ impl Transaction {
 
     /// Canonical size in bytes. The canonical encoding is used for hashing,
     /// But other encodings may be used at eg. networking, rpc levels.
-    pub fn canonical_size(&self) -> u64 {
-        (borsh::object_length(self).unwrap() / 8) as u64
+    #[inline(always)]
+    pub fn canonical_size(&self) -> borsh::io::Result<u64> {
+        borsh::object_length(self).map(|size| size as u64)
     }
 
     /// return an iterator over value outputs with index
@@ -655,27 +656,36 @@ impl FilledTransaction {
         &self.transaction.data
     }
 
+    pub fn get_value_in(&self) -> Result<bitcoin::Amount, AmountOverflowError> {
+        self.spent_utxos
+            .iter()
+            .map(GetValue::get_value)
+            .checked_sum()
+            .ok_or(AmountOverflowError)
+    }
+
+    pub fn get_value_out(
+        &self,
+    ) -> Result<bitcoin::Amount, AmountOverflowError> {
+        self.transaction
+            .outputs
+            .iter()
+            .map(GetValue::get_value)
+            .checked_sum()
+            .ok_or(AmountOverflowError)
+    }
+
     /// Calculate the fee for this transaction
-    pub fn get_fee(&self) -> Result<bitcoin::Amount, GetFeeError> {
-        let input_value = self.spent_utxos.iter().try_fold(
-            bitcoin::Amount::ZERO,
-            |acc, output| {
-                acc.checked_add(output.content.get_value())
-                    .ok_or(GetFeeError::AmountOverflow(AmountOverflowError))
-            },
-        )?;
-
-        let output_value = self.transaction.outputs.iter().try_fold(
-            bitcoin::Amount::ZERO,
-            |acc, output| {
-                acc.checked_add(output.content.get_value())
-                    .ok_or(GetFeeError::AmountOverflow(AmountOverflowError))
-            },
-        )?;
-
-        input_value
-            .checked_sub(output_value)
-            .ok_or(GetFeeError::AmountUnderflow(AmountUnderflowError))
+    pub fn get_fee(&self) -> Result<bitcoin::Amount, ComputeFeeError> {
+        let value_in = self
+            .get_value_in()
+            .map_err(ComputeFeeError::ValueInOverflow)?;
+        let value_out = self
+            .get_value_out()
+            .map_err(ComputeFeeError::ValueOutOverflow)?;
+        value_in
+            .checked_sub(value_out)
+            .ok_or(ComputeFeeError::Underfunded)
     }
 
     /// If the tx is a bitname registration, returns the implied reservation
