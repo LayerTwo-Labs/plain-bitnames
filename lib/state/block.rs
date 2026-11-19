@@ -41,7 +41,7 @@ pub fn validate(
         return Err(Error::InvalidHeader(err));
     };
     let mut coinbase_value = bitcoin::Amount::ZERO;
-    for output in &body.coinbase {
+    for output in &body.coinbase.outputs {
         coinbase_value = coinbase_value
             .checked_add(output.get_value())
             .ok_or(AmountOverflowError)?;
@@ -79,10 +79,8 @@ pub fn validate(
     if coinbase_value > total_fees {
         return Err(Error::NotEnoughFees);
     }
-    let merkle_root = Body::compute_merkle_root(
-        body.coinbase.as_slice(),
-        filled_txs.as_slice(),
-    )?;
+    let merkle_root =
+        Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -145,7 +143,7 @@ pub fn prevalidate(
     };
 
     let mut coinbase_value = bitcoin::Amount::ZERO;
-    for output in &body.coinbase {
+    for output in &body.coinbase.outputs {
         coinbase_value = coinbase_value
             .checked_add(output.get_value())
             .ok_or(AmountOverflowError)?;
@@ -186,7 +184,7 @@ pub fn prevalidate(
         return Err(Error::NotEnoughFees);
     }
     let computed_merkle_root = Body::compute_merkle_root(
-        body.coinbase.as_slice(),
+        &body.coinbase,
         filled_transactions.as_slice(),
     )?;
     if computed_merkle_root != header.merkle_root {
@@ -254,7 +252,7 @@ pub fn connect_prevalidated(
     let mut utxo_puts: BTreeMap<OutPointKey, FilledOutput> = BTreeMap::new();
 
     // Handle coinbase outputs (accumulate puts)
-    for (vout, output) in body.coinbase.iter().enumerate() {
+    for (vout, output) in body.coinbase.outputs.iter().enumerate() {
         let outpoint = OutPoint::Coinbase {
             merkle_root: header.merkle_root,
             vout: vout as u32,
@@ -405,7 +403,7 @@ pub fn connect(
         };
         return Err(Error::InvalidHeader(err));
     }
-    for (vout, output) in body.coinbase.iter().enumerate() {
+    for (vout, output) in body.coinbase.outputs.iter().enumerate() {
         let outpoint = OutPoint::Coinbase {
             merkle_root: header.merkle_root,
             vout: vout as u32,
@@ -503,10 +501,8 @@ pub fn connect(
         }
         filled_txs.push(filled_tx);
     }
-    let merkle_root = Body::compute_merkle_root(
-        body.coinbase.as_slice(),
-        filled_txs.as_slice(),
-    )?;
+    let merkle_root =
+        Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -613,8 +609,12 @@ pub fn disconnect_tip(
     })?;
     filled_txs.reverse();
     // delete coinbase UTXOs, last-to-first
-    body.coinbase.iter().enumerate().rev().try_for_each(
-        |(vout, _output)| {
+    body.coinbase
+        .outputs
+        .iter()
+        .enumerate()
+        .rev()
+        .try_for_each(|(vout, _output)| {
             let outpoint = OutPoint::Coinbase {
                 merkle_root: header.merkle_root,
                 vout: vout as u32,
@@ -624,12 +624,9 @@ pub fn disconnect_tip(
             } else {
                 Err(error::NoUtxo { outpoint }.into())
             }
-        },
-    )?;
-    let merkle_root = Body::compute_merkle_root(
-        body.coinbase.as_slice(),
-        filled_txs.as_slice(),
-    )?;
+        })?;
+    let merkle_root =
+        Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -662,9 +659,9 @@ mod test {
         },
         types::{
             BitName, BitNameDataUpdates, BitNameSeqId, BlockHash, Body,
-            FilledOutput, FilledOutputContent, FilledTransaction, Hash, Header,
-            MerkleRoot, MutableBitNameData, OutPoint, OutPointKey, Output,
-            OutputContent, Transaction, TxData, Update,
+            Coinbase, FilledOutput, FilledOutputContent, FilledTransaction,
+            Hash, Header, MerkleRoot, MutableBitNameData, OutPoint,
+            OutPointKey, Output, OutputContent, Transaction, TxData, Update,
             authorization::{self, SigningKey},
         },
     };
@@ -721,8 +718,9 @@ mod test {
                 inputs: vec![OutPoint::Regular {
                     txid: reservation_txid,
                     vout: 0,
-                }],
-                outputs: Vec::new(),
+                }]
+                .into(),
+                outputs: Vec::new().into(),
                 memo: Vec::new(),
                 data: Some(TxData::BitNameRegistration {
                     name_hash: bitname,
@@ -763,12 +761,14 @@ mod test {
         }
 
         let genesis_body = Body {
-            coinbase: Vec::new(),
+            coinbase: Coinbase::default(),
             transactions: Vec::new(),
             authorizations: Vec::new(),
         };
-        let genesis_merkle_root =
-            Body::compute_merkle_root::<FilledTransaction>(&[], &[])?;
+        let genesis_merkle_root = Body::compute_merkle_root::<FilledTransaction>(
+            &genesis_body.coinbase,
+            &[],
+        )?;
         let genesis_header = header(None, genesis_merkle_root);
         {
             let mut rwtxn = env.write_txn()?;
@@ -779,8 +779,8 @@ mod test {
         let mut updates = all_retained_updates();
         updates.commitment = Update::Set([9; 32]);
         let update_tx = Transaction {
-            inputs: vec![bitname_outpoint],
-            outputs: vec![Output::new(address, OutputContent::BitName)],
+            inputs: vec![bitname_outpoint].into(),
+            outputs: vec![Output::new(address, OutputContent::BitName)].into(),
             memo: Vec::new(),
             data: Some(TxData::BitNameUpdate(Box::new(updates))),
         };
@@ -790,9 +790,12 @@ mod test {
         };
         let authorized_update =
             authorization::authorize(&[(address, &signing_key)], update_tx)?;
-        let update_body = Body::new(vec![authorized_update], Vec::new());
-        let update_merkle_root =
-            Body::compute_merkle_root(&[], &[filled_update_tx])?;
+        let update_body =
+            Body::new(vec![authorized_update], Coinbase::default());
+        let update_merkle_root = Body::compute_merkle_root(
+            &update_body.coinbase,
+            &[filled_update_tx],
+        )?;
         let update_header =
             header(Some(genesis_header.hash()), update_merkle_root);
 

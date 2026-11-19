@@ -9,6 +9,8 @@ use crate::{
 
 pub mod body;
 pub use body::Body;
+pub mod coinbase;
+pub use coinbase::Coinbase;
 
 #[derive(
     BorshSerialize,
@@ -37,9 +39,6 @@ impl Header {
 
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub struct Block {
-    #[serde(flatten)]
     pub header: Header,
-    #[serde(flatten)]
     pub body: Body,
-    pub height: u32,
 }

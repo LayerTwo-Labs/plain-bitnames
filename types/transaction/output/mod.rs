@@ -42,6 +42,13 @@ impl Output {
         }
     }
 
+    /// Canonical size in bytes. The canonical encoding is used for hashing,
+    /// but other encodings may be used at eg. networking, rpc levels.
+    #[inline(always)]
+    pub(crate) fn canonical_size(&self) -> borsh::io::Result<u64> {
+        borsh::object_length(self).map(|size| size as u64)
+    }
+
     /// true if the output content corresponds to a BitName
     pub fn is_bitname(&self) -> bool {
         self.content.is_bitname()

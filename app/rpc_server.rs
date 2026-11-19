@@ -144,14 +144,8 @@ impl<const ENABLE_PRIVATE_API: bool>
         else {
             return Ok(None);
         };
-        let height =
-            self.app.node.get_height(block_hash).map_err(custom_err)?;
         let body = self.app.node.get_body(block_hash).map_err(custom_err)?;
-        let block = plain_bitnames::types::Block {
-            header,
-            height,
-            body,
-        };
+        let block = plain_bitnames::types::Block { header, body };
         Ok(Some(block))
     }
 }
@@ -579,7 +573,6 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
             critical_hash: template.header.hash(),
             block: Block {
                 header: template.header,
-                height: template.height,
                 body: template.body,
             },
             fees_sats: template.fees.to_sat(),

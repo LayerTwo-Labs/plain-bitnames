@@ -481,12 +481,12 @@ impl Wallet {
     ) -> Result<Transaction, Error> {
         let (total, coins) = self.select_coins(fee)?;
         let change = total - fee;
-        let inputs = coins.into_keys().collect();
+        let inputs = coins.into_keys().collect::<Vec<_>>();
         let outputs = vec![Output::new(
             self.get_new_address()?,
             OutputContent::Bitcoin(BitcoinOutputContent(change)),
         )];
-        Ok(Transaction::new(inputs, outputs))
+        Ok(Transaction::new(inputs.into(), outputs.into()))
     }
 
     pub fn create_withdrawal(
@@ -511,7 +511,7 @@ impl Wallet {
                 .ok_or(AmountOverflowError)?,
         )?;
         let change = total - value - fee - main_fee;
-        let inputs = coins.into_keys().collect();
+        let inputs = coins.into_keys().collect::<Vec<_>>();
         let outputs = vec![
             Output::new(
                 self.get_new_address()?,
@@ -526,7 +526,7 @@ impl Wallet {
                 OutputContent::Bitcoin(BitcoinOutputContent(change)),
             ),
         ];
-        Ok(Transaction::new(inputs, outputs))
+        Ok(Transaction::new(inputs.into(), outputs.into()))
     }
 
     pub fn create_transfer(
@@ -539,7 +539,7 @@ impl Wallet {
         let (total, coins) = self
             .select_coins(value.checked_add(fee).ok_or(AmountOverflowError)?)?;
         let change = total - value - fee;
-        let inputs = coins.into_keys().collect();
+        let inputs = coins.into_keys().collect::<Vec<_>>();
         let mut outputs = vec![Output {
             address,
             content: OutputContent::Bitcoin(BitcoinOutputContent(value)),
@@ -551,7 +551,7 @@ impl Wallet {
                 OutputContent::Bitcoin(BitcoinOutputContent(change)),
             ))
         }
-        Ok(Transaction::new(inputs, outputs))
+        Ok(Transaction::new(inputs.into(), outputs.into()))
     }
 
     /// given a regular transaction, add a bitname reservation.
@@ -577,7 +577,7 @@ impl Wallet {
             }
             // if the last output is owned by this wallet, then use
             // the address associated with the last output
-            else if let Some(last_output) = tx.outputs.last() {
+            else if let Some(last_output) = tx.outputs.as_slice().last() {
                 let last_output_addr = last_output.address;
                 let rotxn = self.env.read_txn()?;
                 if self.address_to_index.try_get(&rotxn, &last_output_addr)?.is_some() {
@@ -632,7 +632,7 @@ impl Wallet {
         let registration_addr =
             // if the last output is owned by this wallet, then use
             // the address associated with the last output
-            if let Some(last_output) = tx.outputs.last() {
+            if let Some(last_output) = tx.outputs.as_slice().last() {
                 let last_output_addr = last_output.address;
                 let rotxn = self.env.read_txn()?;
                 if self.address_to_index.try_get(&rotxn, &last_output_addr)?.is_some() {

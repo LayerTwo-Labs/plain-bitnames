@@ -38,6 +38,7 @@ pub mod node {
         hashes::BitName,
         net::{Peer, PeerAddress, PeerConnectionStatus},
         state::WithdrawalBundleInfo,
+        transaction::Outputs,
     };
     use serde::{Deserialize, Serialize};
     use typewit::const_marker::Bool;
@@ -84,7 +85,7 @@ pub mod node {
 
     pub mod get_block {
         use jsonrpsee::{core::RpcResult, proc_macros::rpc};
-        use plain_bitnames_types::{Authorization, Header, Output};
+        use plain_bitnames_types::{Authorization, Coinbase, Header};
         use serde::{Deserialize, Serialize, de::DeserializeOwned};
         use utoipa::ToSchema;
 
@@ -92,7 +93,7 @@ pub mod node {
 
         #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
         pub struct BodyVerbose {
-            pub coinbase: Vec<Output>,
+            pub coinbase: Coinbase,
             pub transactions: Vec<TransactionVerbose>,
             pub authorizations: Vec<Authorization>,
         }
@@ -162,10 +163,11 @@ pub mod node {
             use plain_bitnames_types::{
                 Address, Authorization, BatchIcannRegistrationData, BitName,
                 BitNameDataUpdates, BitcoinOutputContent, Block, BlockHash,
-                Body, EncryptionPubKey, Header, MerkleRoot, MutableBitNameData,
-                Output, OutputContent, Transaction, TransactionData, Txid,
-                VerifyingKey, WithdrawalOutputContent,
-                authorization::Signature,
+                Body, Coinbase, EncryptionPubKey, Header, MerkleRoot,
+                MutableBitNameData, OutPoint, Output, OutputContent,
+                Transaction, TransactionData, Txid, VerifyingKey,
+                WithdrawalOutputContent, authorization::Signature,
+                transaction::Outputs,
             };
             use serde::Serialize;
             use typewit::const_marker::Bool;
@@ -202,12 +204,12 @@ pub mod node {
             #[open_api(ref_schemas[
                 Address, Authorization, BatchIcannRegistrationData,
                 BitcoinOutputContent, BitName, BitNameDataUpdates, Block,
-                BlockHash, BlockVerbose, Body, BodyVerbose, EncryptionPubKey,
-                Header, MerkleRoot, MutableBitNameData, Output, OutputContent,
-                Signature, Transaction, TransactionData, TransactionVerbose,
-                Txid, VerifyingKey, WithdrawalOutputContent,
-                schema::BitcoinAddr, schema::BitcoinBlockHash,
-                schema::BitcoinOutPoint,
+                BlockHash, BlockVerbose, Body, BodyVerbose, Coinbase,
+                EncryptionPubKey, Header, MerkleRoot, MutableBitNameData,
+                OutPoint, Output, OutputContent, Outputs, Signature,
+                Transaction, TransactionData, TransactionVerbose, Txid,
+                VerifyingKey, WithdrawalOutputContent, schema::BitcoinAddr,
+                schema::BitcoinBlockHash, schema::BitcoinOutPoint,
             ])]
             #[rpc(server, server_bounds(Self: private::Sealed))]
             pub trait Rpc {
@@ -283,7 +285,7 @@ pub mod node {
             BitcoinOutputContent, BitName, BitNameDataUpdates, BitNameSeqId,
             BlockHash, Body, EncryptionPubKey, FilledOutput,
             FilledOutputContent, Header, InPoint, M6id, MerkleRoot,
-            MutableBitNameData, OutPoint, Output, OutputContent,
+            MutableBitNameData, OutPoint, Output, OutputContent, Outputs,
             PeerConnectionStatus, Signature, SpentOutput, Transaction,
             TransactionData, Txid, TxIn, VerifyingKey, WithdrawalBundle,
             WithdrawalBundleInfo, WithdrawalBundleStatus,
@@ -471,12 +473,13 @@ pub mod wallet {
     use plain_bitnames_types::{
         Address, Authorization, Authorized, BatchIcannRegistrationData,
         BitNameDataUpdates, BitcoinOutputContent, Block, BlockHash, Body,
-        EncryptionPubKey, FilledOutput, FilledOutputContent, Header,
+        Coinbase, EncryptionPubKey, FilledOutput, FilledOutputContent, Header,
         MerkleRoot, MutableBitNameData, OutPoint, Output, OutputContent,
         PointedOutput, Transaction, TransactionData, Txid, VerifyingKey,
         WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
         authorization::{Dst, Signature},
         hashes::BitName,
+        transaction::Outputs,
         wallet::Balance,
     };
     use serde::{Deserialize, Serialize};
@@ -498,10 +501,10 @@ pub mod wallet {
     #[open_api(ref_schemas[
         Address, Authorization, BatchIcannRegistrationData,
         BitcoinOutputContent, BitName, BitNameDataUpdates, Block, BlockHash,
-        Body, EncryptionPubKey, FilledOutput, FilledOutputContent, Header,
-        MerkleRoot, MutableBitNameData, OutPoint, Output, OutputContent,
-        Signature, Transaction, TransactionData, Txid, VerifyingKey,
-        WithdrawalOutputContent, schema::BitcoinAddr,
+        Body, Coinbase, EncryptionPubKey, FilledOutput, FilledOutputContent,
+        Header, MerkleRoot, MutableBitNameData, OutPoint, Output,
+        OutputContent, Outputs, Signature, Transaction, TransactionData, Txid,
+        VerifyingKey, WithdrawalOutputContent, schema::BitcoinAddr,
         schema::BitcoinBlockHash, schema::BitcoinOutPoint,
     ])]
     #[rpc(client, server, server_bounds(Self: open_api::RpcServer))]

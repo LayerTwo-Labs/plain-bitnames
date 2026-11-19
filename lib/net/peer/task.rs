@@ -25,7 +25,8 @@ use crate::{
         request_queue,
     },
     types::{
-        AuthorizedTransaction, BlockHash, BmmResult, Header, Tip, VERSION,
+        AuthorizedTransaction, Block, BlockHash, BmmResult, Header, Tip,
+        VERSION,
     },
     util::{ErrorChain, join_set},
 };
@@ -633,7 +634,7 @@ impl ConnectionTask {
         };
         let resp = match (header, body) {
             (Some(header), Some(body)) => {
-                ResponseMessage::Block { header, body }
+                ResponseMessage::Block(Box::new(Block { header, body }))
             }
             (_, _) => ResponseMessage::NoBlock { block_hash },
         };

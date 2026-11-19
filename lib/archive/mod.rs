@@ -319,12 +319,7 @@ impl Archive {
             return Ok(None);
         };
         let header = self.get_header(rotxn, block_hash)?;
-        let height = self.get_height(rotxn, block_hash)?;
-        let block = Block {
-            header,
-            body,
-            height,
-        };
+        let block = Block { header, body };
         Ok(Some(block))
     }
 

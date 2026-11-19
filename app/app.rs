@@ -14,7 +14,7 @@ use plain_bitnames::{
     node::{self, Node},
     types::{
         self, Address, AmountOverflowError, BitcoinOutputContent, Body,
-        FilledOutput, GetValue, InPoint, OutPoint, Transaction,
+        Coinbase, FilledOutput, GetValue, InPoint, OutPoint, Transaction,
         hashes::BitName,
         proto::mainchain::{
             self,
@@ -106,7 +106,6 @@ pub struct BlockTemplate {
     /// Bribe to offer for this block
     pub bribe: bitcoin::Amount,
     pub header: types::Header,
-    pub height: u32,
     pub body: types::Body,
     /// Fees collected by the transactions in the block
     pub fees: bitcoin::Amount,
@@ -622,14 +621,20 @@ impl App {
             const NUM_TRANSACTIONS: usize = 1000;
             let (txs, tx_fees) =
                 self.node.get_transactions(NUM_TRANSACTIONS)?;
-            let coinbase = match tx_fees {
-                bitcoin::Amount::ZERO => Vec::new(),
-                _ => vec![types::Output::new(
-                    self.wallet.get_new_address()?,
-                    types::OutputContent::Bitcoin(BitcoinOutputContent(
-                        tx_fees,
-                    )),
-                )],
+            let coinbase = {
+                let outputs = match tx_fees {
+                    bitcoin::Amount::ZERO => Vec::new(),
+                    _ => vec![types::Output::new(
+                        self.wallet.get_new_address()?,
+                        types::OutputContent::Bitcoin(BitcoinOutputContent(
+                            tx_fees,
+                        )),
+                    )],
+                };
+                Coinbase {
+                    memo: Vec::new(),
+                    outputs: outputs.into(),
+                }
             };
             let merkle_root = Body::compute_merkle_root(&coinbase, &txs)?;
             let body = Body::new(
@@ -650,7 +655,7 @@ impl App {
             });
             (bribe, header, body, tx_fees)
         } else {
-            let coinbase = Vec::new();
+            let coinbase = Coinbase::default();
             let merkle_root = Body::compute_merkle_root::<
                 types::FilledTransaction,
             >(&coinbase, &[])?;
@@ -663,14 +668,9 @@ impl App {
             let bribe = Self::EMPTY_BLOCK_BMM_BRIBE;
             (bribe, header, body, bitcoin::Amount::ZERO)
         };
-        let height = match prev_side_hash {
-            None => 0,
-            Some(prev_side_hash) => self.node.get_height(prev_side_hash)? + 1,
-        };
         Ok(BlockTemplate {
             bribe,
             header,
-            height,
             body,
             fees,
         })
@@ -690,11 +690,7 @@ impl App {
         block: types::Block,
         main_block_hash: bitcoin::BlockHash,
     ) -> Result<bool, Error> {
-        let types::Block {
-            header,
-            height: _,
-            body,
-        } = block;
+        let types::Block { header, body } = block;
         let accepted = self
             .node
             .submit_block(main_block_hash, &header, &body)
@@ -716,7 +712,6 @@ impl App {
         let BlockTemplate {
             bribe,
             header,
-            height: _,
             body,
             fees: _,
         } = self.build_block_template(fee).await?;

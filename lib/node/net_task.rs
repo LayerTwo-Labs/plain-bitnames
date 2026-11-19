@@ -494,12 +494,9 @@ impl NetTask {
                         peer_state_id: Some(peer_state_id),
                     },
                 ),
-                ref resp @ PeerResponse::Block {
-                    ref header,
-                    ref body,
-                },
+                ref resp @ PeerResponse::Block(ref block),
             ) => {
-                if header.hash() != block_hash {
+                if block.header.hash() != block_hash {
                     // Invalid response
                     tracing::warn!(
                         %addr,
@@ -513,8 +510,11 @@ impl NetTask {
                 {
                     let mut rwtxn =
                         ctxt.env.write_txn().map_err(EnvError::from)?;
-                    let () =
-                        ctxt.archive.put_body(&mut rwtxn, block_hash, body)?;
+                    let () = ctxt.archive.put_body(
+                        &mut rwtxn,
+                        block_hash,
+                        &block.body,
+                    )?;
                     rwtxn.commit().map_err(RwTxnError::from)?;
                 }
                 // Notify the peer connection if all requested block bodies are
@@ -596,7 +596,9 @@ impl NetTask {
                         main_block_hash,
                     };
 
-                    if header.prev_side_hash == tip.map(|tip| tip.block_hash) {
+                    if block.header.prev_side_hash
+                        == tip.map(|tip| tip.block_hash)
+                    {
                         tracing::trace!(
                             ?block_tip,
                             origin = %addr,

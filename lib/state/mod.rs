@@ -807,8 +807,9 @@ mod test {
             vec![OutPoint::Regular {
                 txid: Txid([0; 32]),
                 vout: 0,
-            }],
-            vec![Output::new(address, OutputContent::BitName)],
+            }]
+            .into(),
+            vec![Output::new(address, OutputContent::BitName)].into(),
         );
         transaction.data = Some(TxData::BitNameRegistration {
             name_hash,
@@ -842,8 +843,8 @@ mod test {
         let outpoint = fund(&env, &state, address, 1000);
 
         let transaction = Transaction::new(
-            vec![outpoint],
-            vec![bitcoin_filled_output(address, 900).into()],
+            vec![outpoint].into(),
+            vec![bitcoin_filled_output(address, 900).into()].into(),
         );
 
         // The attack: spend the input while providing no authorization for it.
@@ -941,10 +942,11 @@ mod test {
         };
         let tx = FilledTransaction {
             transaction: Transaction {
-                inputs: vec![outpoint],
+                inputs: vec![outpoint].into(),
                 outputs: vec![
                     bitcoin_filled_output(Address::ALL_ZEROS, 1300).into(),
-                ],
+                ]
+                .into(),
                 ..Default::default()
             },
             spent_utxos: vec![withdrawal],

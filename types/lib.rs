@@ -19,7 +19,7 @@ pub use bitname_data::{
 pub mod bitname_seq_id;
 pub use bitname_seq_id::BitNameSeqId;
 pub mod block;
-pub use block::{Block, Body, Header};
+pub use block::{Block, Body, Coinbase, Header};
 pub mod constants;
 pub mod error;
 pub use error::{

@@ -3,16 +3,18 @@ use std::borrow::Borrow;
 use bitcoin::amount::CheckedSum;
 use borsh::{self, BorshSerialize};
 use serde::{Deserialize, Serialize};
-use utoipa::{PartialSchema, ToSchema};
+use utoipa::ToSchema;
 
 use crate::{
     AmountOverflowError, BitNameDataUpdates, ComputeFeeError, GetValue,
     MutableBitNameData,
     authorization::{Authorization, Signature},
-    hashes::{self, BitName, Hash, M6id, Txid},
+    hashes::{self, BitName, Hash, M6id, MerkleRoot, Txid},
     util,
 };
 
+pub mod inputs;
+pub use inputs::Inputs;
 pub mod outpoint;
 pub use outpoint::{OutPoint, OutPointKey};
 pub mod output;
@@ -21,6 +23,8 @@ pub use output::{
     FilledContent as FilledOutputContent, FilledOutput, Output, PointedOutput,
     WithdrawalContent as WithdrawalOutputContent,
 };
+pub mod outputs;
+pub use outputs::Outputs;
 
 /// Reference to a tx input.
 #[derive(
@@ -38,10 +42,6 @@ pub enum InPoint {
         m6id: M6id,
     },
 }
-
-pub type TxInputs = Vec<OutPoint>;
-
-pub type TxOutputs = Vec<Output>;
 
 /// batch icann registration tx payload
 #[derive(BorshSerialize, Clone, Debug, Deserialize, Serialize, ToSchema)]
@@ -104,10 +104,9 @@ impl TxData {
     BorshSerialize, Clone, Debug, Default, Deserialize, Serialize, ToSchema,
 )]
 pub struct Transaction {
-    #[schema(schema_with = TxInputs::schema)]
-    pub inputs: TxInputs,
-    #[schema(schema_with = TxOutputs::schema)]
-    pub outputs: TxOutputs,
+    #[schema(value_type = Vec<OutPoint>)]
+    pub inputs: Inputs<OutPoint>,
+    pub outputs: Outputs,
     #[serde(with = "util::serde::hexstr_human_readable")]
     #[schema(value_type = String)]
     pub memo: Vec<u8>,
@@ -115,7 +114,7 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    pub fn new(inputs: TxInputs, outputs: TxOutputs) -> Self {
+    pub fn new(inputs: Inputs<OutPoint>, outputs: Outputs) -> Self {
         Self {
             inputs,
             outputs,
@@ -135,6 +134,32 @@ impl Transaction {
     #[inline(always)]
     pub fn canonical_size(&self) -> borsh::io::Result<u64> {
         borsh::object_length(self).map(|size| size as u64)
+    }
+
+    pub(crate) fn compute_merkle_root(
+        &self,
+    ) -> Result<MerkleRoot, outputs::error::ComputeMerkleRoot> {
+        let Self {
+            inputs,
+            outputs,
+            memo,
+            data,
+        } = self;
+        // Borsh encoding for hashing
+        #[derive(BorshSerialize)]
+        struct HashComponents<'a> {
+            inputs_commitment: MerkleRoot,
+            outputs_commitment: MerkleRoot,
+            memo: &'a [u8],
+            data: &'a Option<TransactionData>,
+        }
+        let digest = hashes::hash_with_scratch_buffer(&HashComponents {
+            inputs_commitment: inputs.compute_merkle_root(),
+            outputs_commitment: outputs.compute_merkle_root()?,
+            memo,
+            data,
+        });
+        Ok(digest.into())
     }
 
     /// return an iterator over value outputs with index
@@ -308,7 +333,7 @@ impl FilledTransaction {
     }
 
     /// accessor for tx inputs
-    pub fn inputs(&self) -> &TxInputs {
+    pub fn inputs(&self) -> &Inputs<OutPoint> {
         &self.transaction.inputs
     }
 
@@ -344,7 +369,7 @@ impl FilledTransaction {
     }
 
     /// accessor for tx outputs
-    pub fn outputs(&self) -> &TxOutputs {
+    pub fn outputs(&self) -> &Outputs {
         &self.transaction.outputs
     }
 
@@ -615,7 +640,7 @@ mod test {
         };
         let withdrawal_tx = |funding| FilledTransaction {
             transaction: Transaction {
-                outputs: vec![withdrawal.clone()],
+                outputs: vec![withdrawal.clone()].into(),
                 ..Default::default()
             },
             spent_utxos: vec![value_output(funding)],

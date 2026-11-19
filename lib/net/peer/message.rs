@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     net::peer::{PeerState, PeerStateId},
     types::{
-        AuthorizedTransaction, BlockHash, Body, Header, Network, Tip, Txid,
+        AuthorizedTransaction, Block, BlockHash, Header, Network, Tip, Txid,
     },
 };
 
@@ -277,10 +277,7 @@ impl<'de> Deserialize<'de> for RequestMessage {
 #[derive(educe::Educe, Serialize, Deserialize)]
 #[educe(Debug)]
 pub enum ResponseMessage {
-    Block {
-        header: Header,
-        body: Body,
-    },
+    Block(Box<Block>),
     /// Headers, from start to end
     Headers(#[educe(Debug(method(ResponseMessage::fmt_headers)))] Vec<Header>),
     NoBlock {
