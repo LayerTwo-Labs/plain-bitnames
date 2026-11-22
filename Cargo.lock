@@ -576,7 +576,7 @@ dependencies = [
  "jsonrpsee",
  "miette",
  "nom",
- "nonempty 0.12.0",
+ "nonempty",
  "ordermap",
  "parking_lot 0.13.0",
  "rand 0.10.1",
@@ -1464,7 +1464,7 @@ dependencies = [
  "indexmap",
  "jsonrpsee",
  "lender",
- "nonempty 0.12.0",
+ "nonempty",
  "parking_lot 0.12.5",
  "polonius-the-crab",
  "serde",
@@ -4155,18 +4155,12 @@ dependencies = [
 
 [[package]]
 name = "nonempty"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "549e471b99ccaf2f89101bec68f4d244457d5a95a9c3d0672e9564124397741d"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "nonempty"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9737e026353e5cd0736f98eddae28665118eb6f6600902a7f50db585621fecb6"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "nonzero_ext"
@@ -4826,7 +4820,7 @@ dependencies = [
  "heed",
  "hickory-resolver",
  "jsonrpsee",
- "nonempty 0.11.0",
+ "nonempty",
  "parking_lot 0.12.5",
  "plain_bitnames_types",
  "prost",
@@ -5001,7 +4995,7 @@ dependencies = [
  "hex-literal",
  "hkdf",
  "merkle-cbt",
- "nonempty 0.11.0",
+ "nonempty",
  "rand 0.10.1",
  "rayon",
  "semver",
