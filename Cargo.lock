@@ -4780,7 +4780,7 @@ checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
 
 [[package]]
 name = "plain_bitnames"
-version = "0.18.1"
+version = "0.18.2"
 dependencies = [
  "addr",
  "anyhow",
@@ -4842,7 +4842,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app"
-version = "0.18.1"
+version = "0.18.2"
 dependencies = [
  "anyhow",
  "bincode",
@@ -4888,7 +4888,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_cli"
-version = "0.18.1"
+version = "0.18.2"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -4913,7 +4913,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_app_rpc_api"
-version = "0.18.1"
+version = "0.18.2"
 dependencies = [
  "anyhow",
  "bitcoin",
@@ -4930,7 +4930,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_integration_tests"
-version = "0.18.1"
+version = "0.18.2"
 dependencies = [
  "anyhow",
  "bip300301_enforcer_integration_tests",
@@ -4959,7 +4959,7 @@ dependencies = [
 
 [[package]]
 name = "plain_bitnames_types"
-version = "0.18.1"
+version = "0.18.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -6273,7 +6273,7 @@ version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c4db69cba1110affc0e9f7bcd48bbf87b3f4fc7c61fc9155afd4c469eb3d6c1b"
 dependencies = [
- "errno 0.2.8",
+ "errno 0.3.14",
  "libc",
 ]
 
