@@ -1,9 +1,3 @@
-#![feature(impl_trait_in_assoc_type)]
-#![feature(trait_alias)]
-#![feature(try_find)]
-
-pub use plain_bitnames_types::authorization;
-
 pub mod archive;
 pub mod mempool;
 pub mod miner;

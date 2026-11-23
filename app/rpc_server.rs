@@ -10,18 +10,15 @@ use jsonrpsee::{
     server::Server,
     types::ErrorObject,
 };
-
-use plain_bitnames::{
+use plain_bitnames::types::{
+    Address, Authorization, BitName, BitNameData, Block, BlockHash,
+    EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
+    PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
+    WithdrawalBundle,
     authorization::{self, Dst, Signature},
-    types::{
-        Address, Authorization, BitName, BitNameData, Block, BlockHash,
-        EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
-        PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
-        WithdrawalBundle,
-        keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
-        net::Peer,
-        wallet::Balance,
-    },
+    keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
+    net::Peer,
+    wallet::Balance,
 };
 use plain_bitnames_app_rpc_api::{self as rpc_api, node::TxInfo};
 use tower_http::{
@@ -98,6 +95,17 @@ impl rpc_api::node::PrivateRpcServer for RpcServerImpl<true> {
             Ok(_) => Ok(()),
             Err(err) => Err(custom_err(err)),
         }
+    }
+
+    async fn invalidate_block(&self, block_hash: BlockHash) -> RpcResult<()> {
+        self.app
+            .node
+            .invalidate_block(block_hash)
+            .map_err(custom_err)
+    }
+
+    async fn remove_from_mempool(&self, txid: Txid) -> RpcResult<()> {
+        self.app.node.remove_from_mempool(txid).map_err(custom_err)
     }
 
     async fn stop(&self) {

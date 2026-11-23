@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use fallible_iterator::FallibleIterator as _;
-use futures::Stream;
 use heed::types::SerdeBincode;
 use serde::{Deserialize, Serialize};
 use sneed::{
@@ -10,13 +9,14 @@ use sneed::{
 };
 
 use crate::{
-    authorization::{self, Authorization},
     types::{
         Address, AmountOverflowError, Authorized, AuthorizedTransaction,
         BlockHash, Body, FilledOutput, FilledTransaction, GetAddress as _,
         GetValue as _, Header, InPoint, M6id, MerkleRoot, OutPoint,
         OutPointKey, SpentOutput, Transaction, VERSION, Verify as _, Version,
-        WithdrawalBundle, WithdrawalBundleStatus, constants, hashes,
+        WithdrawalBundle, WithdrawalBundleStatus,
+        authorization::{self, Authorization},
+        constants, hashes,
         proto::mainchain::TwoWayPegData,
     },
     util::Watchable,
@@ -706,7 +706,7 @@ impl State {
 }
 
 impl Watchable<()> for State {
-    type WatchStream = impl Stream<Item = ()>;
+    type WatchStream = tokio_stream::wrappers::WatchStream<()>;
 
     /// Get a signal that notifies whenever the tip changes
     fn watch(&self) -> Self::WatchStream {
@@ -720,14 +720,13 @@ mod test {
     use ed25519_dalek::SigningKey;
 
     use crate::{
-        authorization,
         state::{Error, State, error},
         types::{
             Address, AuthorizedTransaction, BitName, FilledOutput,
             FilledOutputContent, FilledTransaction, Hash, InPoint,
             MutableBitNameData, OutPoint, OutPointKey, Output, OutputContent,
             SpentOutput, Transaction, TxData, Txid, VerifyingKey,
-            WithdrawalOutputContent,
+            WithdrawalOutputContent, authorization,
         },
     };
 

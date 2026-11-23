@@ -6,7 +6,7 @@ use std::{
 };
 
 use bitcoin::amount::CheckedSum;
-use fallible_iterator::FallibleIterator;
+use fallible_iterator::{FallibleIterator, IteratorExt as _};
 use futures::{Stream, future::BoxFuture};
 use heed::EnvFlags;
 use sneed::{DbError, Env, EnvError, RwTxnError};
@@ -189,6 +189,40 @@ where
         let res = f(&mut cusf_mainchain_lock).await;
         drop(cusf_mainchain_lock);
         res
+    }
+
+    /// Invalidate a block.
+    /// This will delete the header and body, and mark invalid, the specified
+    /// block and any descendants.
+    /// The node will re-org to a previous valid block in the active chain.
+    pub fn invalidate_block(&self, block_hash: BlockHash) -> Result<(), Error> {
+        let mut rwtxn = self.env.write_txn().map_err(EnvError::from)?;
+        let Some(header) = self.archive.try_get_header(&rwtxn, block_hash)?
+        else {
+            return Ok(());
+        };
+        // check if the specified block is in the active chain
+        let tip = self.state.try_get_tip(&rwtxn)?;
+        let in_active_chain = if let Some(tip) = tip {
+            self.archive.is_descendant(&rwtxn, block_hash, tip)?
+        } else {
+            false
+        };
+        // re-org if necessary
+        if in_active_chain {
+            while self.state.try_get_tip(&rwtxn)? != header.prev_side_hash {
+                net_task::disconnect_tip_(
+                    &mut rwtxn,
+                    &self.archive,
+                    &self.mempool,
+                    &self.state,
+                )?;
+            }
+        }
+        // invalidate within archive
+        let () = self.archive.invalidate_block(&mut rwtxn, block_hash)?;
+        rwtxn.commit().map_err(RwTxnError::from)?;
+        Ok(())
     }
 
     pub fn try_get_tip_height(&self) -> Result<Option<u32>, Error> {
@@ -563,8 +597,11 @@ where
         let rotxn = self.env.read_txn()?;
         let tip = self.state.try_get_tip(&rotxn)?;
         let inclusions = self.archive.get_tx_inclusions(&rotxn, txid)?;
-        if let Some((block_hash, idx)) =
-            inclusions.into_iter().try_find(|(block_hash, _)| {
+        if let Some((block_hash, idx)) = inclusions
+            .into_iter()
+            .map(Ok)
+            .transpose_into_fallible()
+            .find(|(block_hash, _)| {
                 if let Some(tip) = tip {
                     self.archive.is_descendant(&rotxn, *block_hash, tip)
                 } else {

@@ -656,7 +656,6 @@ mod test {
     use bitcoin::hashes::Hash as _;
 
     use crate::{
-        authorization::{self, SigningKey},
         state::{
             block::{connect, disconnect_tip, validate},
             test::fresh_state,
@@ -666,6 +665,7 @@ mod test {
             FilledOutput, FilledOutputContent, FilledTransaction, Hash, Header,
             MerkleRoot, MutableBitNameData, OutPoint, OutPointKey, Output,
             OutputContent, Transaction, TxData, Update,
+            authorization::{self, SigningKey},
         },
     };
 
