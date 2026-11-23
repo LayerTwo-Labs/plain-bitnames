@@ -137,17 +137,30 @@ fn connect_tip_(
     two_way_peg_data: &mainchain::TwoWayPegData,
 ) -> Result<(), Error> {
     let block_hash = header.hash();
+    let prev_main_height =
+        archive.get_main_height(rwtxn, header.prev_main_hash)?;
+    // 2WPD events are connected BEFORE the block's transactions, so
+    // that txs can spend eg. recreated unsuccessful-withdrawal outputs.
+    let () = state.connect_two_way_peg_data(rwtxn, two_way_peg_data)?;
     if tracing::enabled!(tracing::Level::DEBUG) {
         let height = state.try_get_height(rwtxn)?;
-        let () =
-            state.apply_block(rwtxn, batch_verification_ctxt, header, body)?;
-        tracing::debug!(?height, %block_hash,
-                            "connected body")
+        let () = state.apply_block(
+            rwtxn,
+            batch_verification_ctxt,
+            header,
+            prev_main_height,
+            body,
+        )?;
+        tracing::debug!(?height, %block_hash, "connected body")
     } else {
-        let () =
-            state.apply_block(rwtxn, batch_verification_ctxt, header, body)?;
+        let () = state.apply_block(
+            rwtxn,
+            batch_verification_ctxt,
+            header,
+            prev_main_height,
+            body,
+        )?;
     }
-    let () = state.connect_two_way_peg_data(rwtxn, two_way_peg_data)?;
     // TODO: are these needed?
     {
         let () = archive.put_header(rwtxn, header)?;
@@ -243,6 +256,11 @@ pub(in crate::node) fn disconnect_tip_(
                 if block_info.events.is_empty() {
                     Ok(None)
                 } else {
+                    let height = archive.get_main_height(rwtxn, ancestor)?;
+                    let block_info = mainchain::two_way_peg_data::BlockInfo {
+                        height,
+                        inner: block_info,
+                    };
                     Ok(Some((ancestor, block_info)))
                 }
             })
@@ -251,8 +269,10 @@ pub(in crate::node) fn disconnect_tip_(
             block_info: block_infos.into_iter().rev().collect(),
         }
     };
+    let () = state.disconnect_withdrawal_bundle_creation(rwtxn)?;
+    let () = state.disconnect_tip_body(rwtxn, &tip_header, &tip_body)?;
     let () = state.disconnect_two_way_peg_data(rwtxn, &two_way_peg_data)?;
-    let () = state.disconnect_tip(rwtxn, &tip_header, &tip_body)?;
+    let () = state.disconnect_tip_header(rwtxn, &tip_header)?;
     for transaction in tip_body.authorized_transactions().iter().rev() {
         mempool.put(rwtxn, transaction)?;
     }
@@ -375,8 +395,13 @@ fn reorg_to_tip<ThreadLocalStorage>(
                 Ok(Some(ancestor) != common_ancestor_prev_main_hash.as_ref())
             })
             .map(|ancestor| {
+                let height = archive.get_main_height(&rwtxn, ancestor)?;
                 let block_info =
                     archive.get_main_block_info(&rwtxn, &ancestor)?;
+                let block_info = mainchain::two_way_peg_data::BlockInfo {
+                    height,
+                    inner: block_info,
+                };
                 Ok((ancestor, block_info))
             })
             .collect()?

@@ -7,9 +7,19 @@ use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
 use crate::{
-    hashes::{CoinbaseTxid, Txid},
+    hashes::{CoinbaseTxid, M6id, Txid},
     schema, util,
 };
+
+/// Coinbase outputs become spendable if the sidechain tip height is at least
+/// `COINBASE_MATURITY` greater than the height of the sidechain block in which
+/// the coinbase tx was included.
+pub const COINBASE_MATURITY: u32 = 50;
+
+/// Deposits become spendable if the previous mainchain tip height is at least
+/// `DEPOSIT_MATURITY` greater than the height of the mainchain block in which
+/// the deposit tx was included.
+pub const DEPOSIT_MATURITY: u32 = 50;
 
 #[derive(
     BorshSerialize,
@@ -46,6 +56,17 @@ pub enum OutPoint {
         )]
         bitcoin::OutPoint,
     ),
+    /// Created by recreating the outputs of an unsuccessful withdrawal
+    /// bundle (one that failed, or a stale pending bundle that was
+    /// dropped without ever being submitted).
+    UnsuccessfulWithdrawal {
+        /// M6ID of the unsuccessful withdrawal bundle
+        m6id: M6id,
+        /// Sidechain block height at which the outputs were recreated
+        height: u32,
+        /// Index of the spent output within the bundle's spend_utxos
+        vout: u32,
+    },
 }
 
 impl std::fmt::Display for OutPoint {
@@ -58,11 +79,17 @@ impl std::fmt::Display for OutPoint {
             Self::Deposit(bitcoin::OutPoint { txid, vout }) => {
                 write!(f, "deposit {txid} {vout}")
             }
+            Self::UnsuccessfulWithdrawal { m6id, height, vout } => {
+                write!(f, "unsuccessful withdrawal {m6id} {height} {vout}")
+            }
         }
     }
 }
 
-const OUTPOINT_KEY_SIZE: usize = 37;
+/// Maximum borsh-serialized size of an `OutPoint`:
+/// 1 (variant) + 32 (txid/m6id) + 4 (height) + 4 (vout).
+/// Shorter variants are zero-padded in the fixed-width key.
+const OUTPOINT_KEY_SIZE: usize = 41;
 
 /// Fixed-width key for OutPoint based on its canonical Borsh encoding.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -90,7 +117,7 @@ impl OutPointKey {
         let mut cursor = Cursor::new(&mut key[..]);
         BorshSerialize::serialize(op, &mut cursor)
             .expect("serializing OutPoint into key buffer should never fail");
-        debug_assert_eq!(cursor.position() as usize, OUTPOINT_KEY_SIZE);
+        debug_assert!(cursor.position() as usize <= OUTPOINT_KEY_SIZE);
         Self(key)
     }
 }
@@ -177,14 +204,15 @@ impl<'a> BytesDecode<'a> for OutPointKey {
 
 #[cfg(test)]
 mod test {
-    use crate::transaction::outpoint::{
-        OUTPOINT_KEY_SIZE, OutPoint, OutPointKey,
+    use bitcoin::hashes::Hash as _;
+
+    use crate::{
+        hashes::M6id,
+        transaction::outpoint::{OUTPOINT_KEY_SIZE, OutPoint, OutPointKey},
     };
 
     #[test]
     fn check_outpoint_key_size() -> anyhow::Result<()> {
-        use bitcoin::hashes::Hash as _;
-
         let variants = [
             OutPoint::Regular {
                 txid: Default::default(),
@@ -198,12 +226,17 @@ mod test {
                 txid: bitcoin::Txid::from_byte_array([0; 32]),
                 vout: u32::MAX,
             }),
+            OutPoint::UnsuccessfulWithdrawal {
+                m6id: M6id(bitcoin::Txid::from_byte_array([0; 32])),
+                height: u32::MAX,
+                vout: u32::MAX,
+            },
         ];
 
         for op in variants {
             let serialized = borsh::to_vec(&op)?;
             anyhow::ensure!(
-                serialized.len() == OUTPOINT_KEY_SIZE,
+                serialized.len() <= OUTPOINT_KEY_SIZE,
                 "unexpected serialized size: {}",
                 serialized.len()
             );

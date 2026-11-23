@@ -6,9 +6,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use const_hex::FromHex;
 use serde::{Deserialize, Serialize};
 
-pub type Hash = [u8; blake3::OUT_LEN];
+use crate::util::{self, serde::hexstr_human_readable};
 
-use crate::util::serde::hexstr_human_readable;
+pub type Hash = [u8; blake3::OUT_LEN];
 
 macro_rules! new_hash_wrapper {
     ($(#[$outer:meta])* $vis:vis $ident:ident) => {
@@ -113,10 +113,29 @@ impl Txid {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[derive(
+    BorshDeserialize,
+    BorshSerialize,
+    Clone,
+    Copy,
+    Debug,
+    Deserialize,
+    Eq,
+    Hash,
+    Ord,
+    PartialEq,
+    PartialOrd,
+    Serialize,
+)]
 #[repr(transparent)]
 #[serde(transparent)]
-pub struct M6id(pub bitcoin::Txid);
+pub struct M6id(
+    #[borsh(
+        deserialize_with = "util::borsh::deserialize::bitcoin_txid",
+        serialize_with = "util::borsh::serialize::bitcoin_txid"
+    )]
+    pub bitcoin::Txid,
+);
 
 impl std::fmt::Display for M6id {
     #[inline(always)]

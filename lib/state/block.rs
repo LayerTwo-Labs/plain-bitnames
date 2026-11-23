@@ -25,6 +25,7 @@ pub fn validate(
     state: &State,
     rotxn: &RoTxn,
     header: &Header,
+    prev_main_height: u32,
     body: &Body,
 ) -> Result<(bitcoin::Amount, MerkleRoot), Error> {
     let body_size =
@@ -74,14 +75,21 @@ pub fn validate(
     // Process transactions for fee validation
     for filled_tx in &filled_txs {
         total_fees = total_fees
-            .checked_add(state.validate_filled_transaction(rotxn, filled_tx)?)
+            .checked_add(state.validate_filled_transaction(
+                rotxn,
+                prev_main_height,
+                filled_tx,
+            )?)
             .ok_or(AmountOverflowError)?;
     }
     if coinbase_value > total_fees {
         return Err(Error::NotEnoughFees);
     }
-    let merkle_root =
-        Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
+    let merkle_root = Body::compute_merkle_root(
+        &body.coinbase,
+        filled_txs.as_slice(),
+        &body.authorizations,
+    )?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -126,6 +134,7 @@ pub fn prevalidate(
     state: &State,
     rotxn: &RoTxn,
     header: &Header,
+    prev_main_height: u32,
     body: &Body,
 ) -> Result<PrevalidatedBlock, Error> {
     let body_size =
@@ -142,6 +151,7 @@ pub fn prevalidate(
         };
         return Err(Error::InvalidHeader(err));
     };
+    let next_height = state.try_get_height(rotxn)?.map_or(0, |h| h + 1);
 
     let mut coinbase_value = bitcoin::Amount::ZERO;
     for output in &body.coinbase.outputs {
@@ -176,9 +186,11 @@ pub fn prevalidate(
     // Process transactions for fee validation
     for filled_transaction in &filled_transactions {
         total_fees = total_fees
-            .checked_add(
-                state.validate_filled_transaction(rotxn, filled_transaction)?,
-            )
+            .checked_add(state.validate_filled_transaction(
+                rotxn,
+                prev_main_height,
+                filled_transaction,
+            )?)
             .ok_or(AmountOverflowError)?;
     }
     if coinbase_value > total_fees {
@@ -187,6 +199,7 @@ pub fn prevalidate(
     let computed_merkle_root = Body::compute_merkle_root(
         &body.coinbase,
         filled_transactions.as_slice(),
+        &body.authorizations,
     )?;
     if computed_merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
@@ -222,14 +235,12 @@ pub fn prevalidate(
     }
     let () =
         authorization::verify_authorizations(batch_verification_ctxt, body)?;
-    let height = state.try_get_height(rotxn)?.map_or(0, |height| height + 1);
-
     Ok(PrevalidatedBlock {
         filled_transactions,
         computed_merkle_root,
         total_fees,
         coinbase_value,
-        next_height: height,
+        next_height,
     })
 }
 
@@ -363,31 +374,27 @@ pub fn connect_prevalidated(
         state.utxos.put(rwtxn, key, output)?;
     }
 
-    // Update tip and height
-    let block_hash = header.hash();
-    state.tip.put(rwtxn, &(), &block_hash)?;
-    state.height.put(rwtxn, &(), &height)?;
+    // NOTE: the tip, height, and coinbase height are NOT updated here;
+    // that happens after the block's transactions, in `connect_header`.
 
     Ok(merkle_root)
 }
 
-/// Apply a block by combining validation and connection in a single transaction
-/// This avoids the double B-tree traversal and reduces LMDB commit overhead
-pub fn apply_block(
-    batch_verification_ctxt: &BatchVerificationContext,
+/// Connect a block header: update the tip, height, and coinbase
+/// height.
+/// MUST be applied AFTER the block's transactions, and BEFORE
+/// withdrawal bundle construction.
+pub fn connect_header(
     state: &State,
     rwtxn: &mut RwTxn,
     header: &Header,
-    body: &Body,
 ) -> Result<(), Error> {
-    // Prevalidate the block using the same transaction
-    let prevalidated =
-        prevalidate(batch_verification_ctxt, state, rwtxn, header, body)?;
-
-    // Connect the block using precomputed values
-    let _merkle_root =
-        connect_prevalidated(state, rwtxn, header, body, prevalidated)?;
-
+    let block_hash = header.hash();
+    let height = state.try_get_height(rwtxn)?.map_or(0, |height| height + 1);
+    state.tip.put(rwtxn, &(), &block_hash)?;
+    let coinbase_txid = header.compute_coinbase_txid();
+    state.coinbase_height.put(rwtxn, &coinbase_txid, &height)?;
+    state.height.put(rwtxn, &(), &height)?;
     Ok(())
 }
 
@@ -505,8 +512,11 @@ pub fn connect(
         }
         filled_txs.push(filled_tx);
     }
-    let merkle_root =
-        Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
+    let merkle_root = Body::compute_merkle_root(
+        &body.coinbase,
+        filled_txs.as_slice(),
+        &body.authorizations,
+    )?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -516,11 +526,12 @@ pub fn connect(
     }
     let block_hash = header.hash();
     state.tip.put(rwtxn, &(), &block_hash)?;
+    state.coinbase_height.put(rwtxn, &coinbase_txid, &height)?;
     state.height.put(rwtxn, &(), &height)?;
     Ok(merkle_root)
 }
 
-pub fn disconnect_tip(
+pub fn disconnect_tip_body(
     state: &State,
     rwtxn: &mut RwTxn,
     header: &Header,
@@ -613,9 +624,9 @@ pub fn disconnect_tip(
         })
     })?;
     filled_txs.reverse();
-    // delete coinbase UTXOs, last-to-first
     {
         let coinbase_txid = header.compute_coinbase_txid();
+        // delete coinbase UTXOs, last-to-first
         body.coinbase
             .outputs
             .iter()
@@ -633,8 +644,11 @@ pub fn disconnect_tip(
                 }
             })?;
     }
-    let merkle_root =
-        Body::compute_merkle_root(&body.coinbase, filled_txs.as_slice())?;
+    let merkle_root = Body::compute_merkle_root(
+        &body.coinbase,
+        filled_txs.as_slice(),
+        &body.authorizations,
+    )?;
     if merkle_root != header.merkle_root {
         let err = Error::InvalidBody {
             expected: header.merkle_root,
@@ -642,6 +656,26 @@ pub fn disconnect_tip(
         };
         return Err(err);
     }
+    // NOTE: the tip, height, and coinbase height are NOT rolled back
+    // here; that happens after 2WPD is disconnected, in
+    // `disconnect_tip_header`.
+    Ok(())
+}
+
+/// Disconnect the tip block's header: roll back the coinbase height,
+/// tip, and height.
+/// MUST be applied AFTER disconnecting the block's transactions and
+/// 2WPD.
+pub fn disconnect_tip_header(
+    state: &State,
+    rwtxn: &mut RwTxn,
+    header: &Header,
+) -> Result<(), Error> {
+    let coinbase_txid = header.compute_coinbase_txid();
+    state.coinbase_height.delete(rwtxn, &coinbase_txid)?;
+    let height = state
+        .try_get_height(rwtxn)?
+        .expect("Height should not be None");
     match (header.prev_side_hash, height) {
         (None, 0) => {
             state.tip.delete(rwtxn, &())?;
@@ -662,7 +696,7 @@ mod test {
 
     use crate::{
         state::{
-            block::{connect, disconnect_tip, validate},
+            block::{connect, disconnect_tip_body, validate},
             test::fresh_state,
         },
         types::{
@@ -780,6 +814,7 @@ mod test {
         let genesis_merkle_root = Body::compute_merkle_root::<FilledTransaction>(
             &genesis_body.coinbase,
             &[],
+            &genesis_body.authorizations,
         )?;
         let genesis_header = header(None, genesis_merkle_root);
         {
@@ -810,9 +845,11 @@ mod test {
         let update_merkle_root = Body::compute_merkle_root(
             &update_body.coinbase,
             &[filled_update_tx],
+            &update_body.authorizations,
         )?;
         let update_header =
             header(Some(genesis_header.hash()), update_merkle_root);
+        let main_height = 9999;
 
         {
             let rotxn = env.read_txn()?;
@@ -821,6 +858,7 @@ mod test {
                 &state,
                 &rotxn,
                 &update_header,
+                main_height,
                 &update_body,
             )?;
         }
@@ -831,8 +869,12 @@ mod test {
         }
 
         let mut rwtxn = env.write_txn()?;
-        let () =
-            disconnect_tip(&state, &mut rwtxn, &update_header, &update_body)?;
+        let () = disconnect_tip_body(
+            &state,
+            &mut rwtxn,
+            &update_header,
+            &update_body,
+        )?;
         Ok(())
     }
 }

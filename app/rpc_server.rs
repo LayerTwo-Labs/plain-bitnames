@@ -487,10 +487,24 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
                 Some(hex)
             }
         };
+        let spend_height = self
+            .app
+            .node
+            .try_get_tip_height()
+            .map_err(custom_err)?
+            .map_or(0, |height| height + 1);
+        let main_height = self
+            .app
+            .node
+            .try_get_mainchain_tip_height()
+            .map_err(custom_err)?
+            .unwrap_or(0);
         let tx = self
             .app
             .wallet
             .create_transfer(
+                spend_height,
+                main_height,
                 dest,
                 Amount::from_sat(value_sats),
                 Amount::from_sat(fee_sats),
@@ -522,10 +536,28 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
                 (address, Amount::from_sat(value_sats))
             })
             .collect();
+        let spend_height = self
+            .app
+            .node
+            .try_get_tip_height()
+            .map_err(custom_err)?
+            .map_or(0, |height| height + 1);
+        let main_height = self
+            .app
+            .node
+            .try_get_mainchain_tip_height()
+            .map_err(custom_err)?
+            .unwrap_or(0);
         let tx = self
             .app
             .wallet
-            .create_transaction_many(&dests, Amount::from_sat(fee_sats), memo)
+            .create_transaction_many(
+                spend_height,
+                main_height,
+                &dests,
+                Amount::from_sat(fee_sats),
+                memo,
+            )
             .map_err(custom_err)?;
         let txid = tx.txid();
         let () = self.app.sign_and_send(tx).map_err(custom_err)?;
@@ -539,10 +571,24 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
         fee_sats: u64,
         mainchain_fee_sats: u64,
     ) -> RpcResult<Txid> {
+        let spend_height = self
+            .app
+            .node
+            .try_get_tip_height()
+            .map_err(custom_err)?
+            .map_or(0, |height| height + 1);
+        let main_height = self
+            .app
+            .node
+            .try_get_mainchain_tip_height()
+            .map_err(custom_err)?
+            .unwrap_or(0);
         let tx = self
             .app
             .wallet
             .create_withdrawal(
+                spend_height,
+                main_height,
                 mainchain_address,
                 Amount::from_sat(amount_sats),
                 Amount::from_sat(mainchain_fee_sats),

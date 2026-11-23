@@ -13,7 +13,16 @@ fn reserve_bitname(
     plaintext_name: &str,
     fee: bitcoin::Amount,
 ) -> anyhow::Result<()> {
-    let mut tx = app.wallet.create_regular_transaction(fee)?;
+    let spend_height = app
+        .node
+        .try_get_tip_height()?
+        .map_or(0, |height| height + 1);
+    let main_height = app.node.try_get_mainchain_tip_height()?.unwrap_or(0);
+    let mut tx = app.wallet.create_regular_transaction(
+        spend_height,
+        main_height,
+        fee,
+    )?;
     let () = app.wallet.reserve_bitname(&mut tx, plaintext_name)?;
     app.sign_and_send(tx).map_err(anyhow::Error::from)
 }
@@ -24,7 +33,16 @@ fn register_bitname(
     bitname_data: Cow<MutableBitNameData>,
     fee: bitcoin::Amount,
 ) -> anyhow::Result<()> {
-    let mut tx = app.wallet.create_regular_transaction(fee)?;
+    let spend_height = app
+        .node
+        .try_get_tip_height()?
+        .map_or(0, |height| height + 1);
+    let main_height = app.node.try_get_mainchain_tip_height()?.unwrap_or(0);
+    let mut tx = app.wallet.create_regular_transaction(
+        spend_height,
+        main_height,
+        fee,
+    )?;
     let () =
         app.wallet
             .register_bitname(&mut tx, plaintext_name, bitname_data)?;

@@ -9,6 +9,7 @@ use bip300301_enforcer_integration_tests::{
 };
 use futures::{FutureExt, channel::mpsc::UnboundedSender, future::BoxFuture};
 use jsonrpsee::{core::client::ClientT as _, rpc_params};
+use plain_bitnames::types::transaction::outpoint::DEPOSIT_MATURITY;
 use plain_bitnames_app_rpc_api::node::RpcClient as _;
 
 use crate::{
@@ -70,7 +71,8 @@ pub async fn deposit_withdraw_roundtrip_task(
     .await?;
     tracing::info!("Deposited to sidechain successfully");
     let sidechain_block_count = sidechain.rpc_client.getblockcount().await?;
-    let target_sidechain_block_height = 5;
+    let target_sidechain_block_height =
+        sidechain_block_count + DEPOSIT_MATURITY;
     tracing::info!(
         sidechain_block_count,
         target_sidechain_block_height,
