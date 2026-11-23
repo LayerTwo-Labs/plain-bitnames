@@ -8,7 +8,7 @@ use const_hex::FromHex;
 use eframe::egui::{self, Response};
 
 use plain_bitnames::types::{
-    EncryptionPubKey, Hash, MutableBitNameData, Transaction, Txid, VerifyingKey,
+    Hash, MutableBitNameData, Transaction, Txid, bitname_data::XPublicKey,
 };
 
 use crate::{app::App, gui::util::InnerResponseExt};
@@ -27,12 +27,10 @@ pub struct TrySetBitNameData {
     pub socket_addr_v4: TrySetOption<SocketAddrV4>,
     /// optional ipv6 addr
     pub socket_addr_v6: TrySetOption<SocketAddrV6>,
-    /// optional pubkey used for encryption
-    pub encryption_pubkey: TrySetOption<EncryptionPubKey>,
-    /// optional pubkey used for signing messages
-    pub signing_pubkey: TrySetOption<VerifyingKey>,
     /// paymail fee in sats
     pub paymail_fee_sats: TrySetOption<u64>,
+    /// optional extended pubkey
+    pub xpubkey: TrySetOption<XPublicKey>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -80,24 +78,20 @@ impl TryFrom<TrySetBitNameData> for MutableBitNameData {
             .socket_addr_v6
             .0
             .map_err(|err| format!("Cannot parse ipv6 address: \"{err}\""))?;
-        let encryption_pubkey = try_set.encryption_pubkey.0.map_err(|err| {
-            format!("Cannot parse encryption pubkey: \"{err}\"")
-        })?;
-        let signing_pubkey = try_set
-            .signing_pubkey
-            .0
-            .map_err(|err| format!("Cannot parse signing pubkey: \"{err}\""))?;
         let paymail_fee_sats = try_set
             .paymail_fee_sats
             .0
             .map_err(|err| format!("Cannot parse paymail fee: \"{err}\""))?;
+
+        let xpubkey = try_set.xpubkey.0.map_err(|err| {
+            format!("Cannot parse extended pubkey: \"{err}\"")
+        })?;
         Ok(MutableBitNameData {
             commitment,
             socket_addr_v4,
             socket_addr_v6,
-            encryption_pubkey,
-            signing_pubkey,
             paymail_fee_sats,
+            xpubkey,
         })
     }
 }
@@ -242,31 +236,6 @@ impl TxCreator {
                     SocketAddrV6::to_string,
                 )
         });
-        let encryption_pubkey_resp = ui.horizontal(|ui| {
-            let default_pubkey =
-                EncryptionPubKey::from(<[u8; 32] as Default>::default());
-            ui.monospace("Encryption PubKey:       ")
-                | Self::show_option_field_default(
-                    ui,
-                    "bitname_data_encryption_pubkey",
-                    default_pubkey,
-                    &mut bitname_data.encryption_pubkey,
-                    |s| EncryptionPubKey::from_str(&s),
-                    EncryptionPubKey::to_string,
-                )
-        });
-        let signing_pubkey_resp = ui.horizontal(|ui| {
-            let default_pubkey = VerifyingKey::try_from(&[0u8; 32]).unwrap();
-            ui.monospace("Signing PubKey:       ")
-                | Self::show_option_field_default(
-                    ui,
-                    "bitname_data_signing_pubkey",
-                    default_pubkey,
-                    &mut bitname_data.signing_pubkey,
-                    |s| VerifyingKey::from_str(&s),
-                    VerifyingKey::to_string,
-                )
-        });
         let paymail_fee_resp = ui.horizontal(|ui| {
             ui.monospace("Paymail fee:       ")
                 | Self::show_option_field_default(
@@ -278,12 +247,23 @@ impl TxCreator {
                     u64::to_string,
                 )
         });
+        let xpubkey_resp = ui.horizontal(|ui| {
+            let default_pubkey = XPublicKey::try_from([0u8; 64]).unwrap();
+            ui.monospace("XPubKey:       ")
+                | Self::show_option_field_default(
+                    ui,
+                    "bitname_data_xpubkey",
+                    default_pubkey,
+                    &mut bitname_data.xpubkey,
+                    |s| XPublicKey::from_str(&s),
+                    XPublicKey::to_string,
+                )
+        });
         commitment_resp.join()
             | ipv4_resp.join()
             | ipv6_resp.join()
-            | encryption_pubkey_resp.join()
-            | signing_pubkey_resp.join()
             | paymail_fee_resp.join()
+            | xpubkey_resp.join()
     }
 
     pub fn show(

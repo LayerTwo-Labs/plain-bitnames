@@ -79,6 +79,7 @@ ignore = [
     # https://github.com/aws/aws-lc-rs/issues/722
     { id = "RUSTSEC-2024-0436", reason = "Temporary ignore until aws-lc-rs and rustls-webpki get updated" },
     { id = "RUSTSEC-2025-0141", reason = "Temporary ignore until heed migrates to wincode" },
+    { id = "RUSTSEC-2025-0167", reason = "Temporary ignore until imbl drops bitmaps" },
     { id = "RUSTSEC-2026-0247", reason = "Temporary ignore until imbl drops bitmaps" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
@@ -273,6 +274,7 @@ allow-git = [
     "https://github.com/LayerTwo-Labs/bip300301_enforcer.git",
     "https://github.com/LayerTwo-Labs/cusf-enforcer-mempool.git",
     "https://github.com/torkelrogstad/tokio-tracing.git?branch=log-rotation-size",
+    "https://github.com/ZcashFoundation/frost.git?rev=0966bd1529aa062ad3b621af99e277f976b1c0f0",
 ]
 
 [sources.allow-org]

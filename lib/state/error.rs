@@ -1,12 +1,15 @@
 //! State errors
 
+use std::path::PathBuf;
+
 use sneed::{db::error as db, env::error as env, rwtxn::error as rwtxn};
 use thiserror::Error;
 use transitive::Transitive;
 
 use crate::types::{
     AmountOverflowError, AmountUnderflowError, BitName as BitNameId, BlockHash,
-    M6id, MerkleRoot, OutPoint, Txid, WithdrawalBundleError,
+    M6id, MerkleRoot, OutPoint, Txid, Version, WithdrawalBundleError,
+    authorization,
 };
 
 /// Errors related to BitNames
@@ -173,7 +176,7 @@ pub enum Error {
     #[error(transparent)]
     AmountUnderflow(#[from] AmountUnderflowError),
     #[error("failed to verify authorization")]
-    AuthorizationError,
+    Authorization(#[from] authorization::Error),
     #[error("bad coinbase output content")]
     BadCoinbaseOutputContent,
     #[error(transparent)]
@@ -200,6 +203,12 @@ pub enum Error {
     IcannNameInvalid { plain_name: String },
     #[error("Invalid Batch ICANN registration signature")]
     InvalidBatchIcannRegistrationSignature,
+    #[error(
+        "Incompatible DB version ({}). Please clear the DB (`{}`) and re-sync",
+        .version,
+        .db_path.display()
+    )]
+    IncompatibleVersion { version: Version, db_path: PathBuf },
     #[error(
         "invalid body: expected merkle root {expected}, but computed {computed}"
     )]

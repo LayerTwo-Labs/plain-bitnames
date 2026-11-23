@@ -1,7 +1,8 @@
+use std::str::FromStr;
+
 use eframe::egui;
 
-use libes::key::conversion::PublicKeyFrom;
-use plain_bitnames::types::{EncryptionPubKey, keys::Ecies};
+use plain_bitnames::types::{bitname_data::XPublicKey, ecies, keys::PublicKey};
 
 use crate::{
     app::App,
@@ -13,7 +14,7 @@ pub struct EncryptMessage {
     // Encryption pubkey or BitName
     receiver_input: String,
     // none if not yet set, otherwise result of parsing/resolving receiver pubkey
-    receiver_pubkey: Option<anyhow::Result<EncryptionPubKey>>,
+    receiver_pubkey: Option<anyhow::Result<PublicKey>>,
     plaintext: String,
     // none if not yet computed, otherwise result of attempting to encrypt
     ciphertext: Option<anyhow::Result<String>>,
@@ -44,28 +45,26 @@ impl EncryptMessage {
         let receiver_input_response =
             ui.add(egui::TextEdit::singleline(&mut self.receiver_input));
         if receiver_input_response.changed() {
-            let receiver_pubkey: anyhow::Result<EncryptionPubKey> = {
+            let receiver_xpubkey: anyhow::Result<XPublicKey> = {
                 if let Ok(bitname) = borsh_deserialize_hex(&self.receiver_input)
                 {
                     app.node
                         .get_current_bitname_data(&bitname)
                         .map_err(anyhow::Error::from)
                         .and_then(|bitname_data| {
-                            bitname_data.mutable_data.encryption_pubkey.ok_or(
+                            bitname_data.mutable_data.xpubkey.ok_or(
                                 anyhow::anyhow!(
-                                "No encryption pubkey exists for this BitName"
-                        ),
+                                    "No xpubkey exists for this BitName"
+                                ),
                             )
                         })
                 } else {
-                    EncryptionPubKey::bech32m_decode(&self.receiver_input)
-                        .map_err(|_| {
-                            anyhow::anyhow!(
-                                "Failed to parse BitName or Encryption Pubkey"
-                            )
-                        })
+                    XPublicKey::from_str(&self.receiver_input).map_err(|_| {
+                        anyhow::anyhow!("Failed to parse BitName or XPubkey")
+                    })
                 }
             };
+            let receiver_pubkey = receiver_xpubkey.map(|xpk| xpk.pubkey);
             self.receiver_pubkey = Some(receiver_pubkey);
         }
         let plaintext_response = egui::Panel::left("plaintext message")
@@ -92,14 +91,12 @@ impl EncryptMessage {
         };
         // regenerate ciphertext if possible
         if receiver_input_response.changed() || plaintext_response.changed() {
-            let receiver_pubkey =
-                libes::key::X25519::pk_from(receiver_pubkey.0);
+            let rng = rand::rng();
             self.ciphertext = Some(
                 // MUST instantiate a new ecies instance, even if only the
                 // plaintext has changed. This is to prevent re-use of
                 // ephemeral public keys & shared secrets.
-                Ecies::new(receiver_pubkey)
-                    .encrypt(self.plaintext.as_bytes())
+                ecies::encrypt(rng, receiver_pubkey, self.plaintext.as_bytes())
                     .map(const_hex::encode)
                     .map_err(|err| anyhow::anyhow!("{err:?}")),
             );

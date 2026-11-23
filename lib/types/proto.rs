@@ -509,7 +509,7 @@ pub mod mainchain {
         }
     }
 
-    #[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
     pub struct BlockHeaderInfo {
         pub block_hash: BlockHash,
         pub prev_block_hash: BlockHash,
@@ -1002,6 +1002,47 @@ pub mod mainchain {
 
     #[derive(Clone, Debug)]
     #[repr(transparent)]
+    pub struct BlockProducerClient<T>(
+        pub generated::block_producer_service_client::BlockProducerServiceClient<T>,
+    );
+
+    impl<T> BlockProducerClient<T>
+    where
+        T: super::Transport,
+    {
+        pub fn new(inner: T) -> Self {
+            Self(generated::block_producer_service_client::BlockProducerServiceClient::<T>::new(inner))
+        }
+
+        /// Hand a withdrawal bundle to the block producer, which proposes it
+        /// as an M3. The bundle only reaches the block producer database, so
+        /// this RPC itself needs no mainchain wallet.
+        ///
+        /// Bitnames as a whole still does. `Miner` holds a `WalletClient`
+        /// outright, so without `WalletService` there is no miner, no BMM,
+        /// and therefore no block to propose a bundle from -- the call site
+        /// in `Node::submit_block` is unreachable. Running wallet-free end to
+        /// end means breaking that coupling first, which is also why no
+        /// integration test covers it.
+        pub async fn propose_withdrawal_bundle(
+            &mut self,
+            transaction: &Transaction,
+        ) -> Result<(), super::Error> {
+            let request = generated::ProposeWithdrawalBundleRequest {
+                sidechain_id: Some(THIS_SIDECHAIN as u32),
+                transaction: Some(bitcoin::consensus::serialize(transaction)),
+            };
+            let generated::ProposeWithdrawalBundleResponse {} = self
+                .0
+                .propose_withdrawal_bundle(request)
+                .await?
+                .into_inner();
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    #[repr(transparent)]
     pub struct MiningClient<T>(
         pub generated::mining_service_client::MiningServiceClient<T>,
     );
@@ -1222,7 +1263,7 @@ pub mod mainchain {
 
         pub async fn subscribe_events(
             &mut self,
-        ) -> Result<BoxStream<'_, Result<Event, super::Error>>, super::Error>
+        ) -> Result<BoxStream<'static, Result<Event, super::Error>>, super::Error>
         {
             let request = generated::SubscribeEventsRequest {
                 sidechain_id: Some(THIS_SIDECHAIN as u32),
@@ -1255,22 +1296,6 @@ pub mod mainchain {
                     inner,
                 ),
             )
-        }
-
-        pub async fn broadcast_withdrawal_bundle(
-            &mut self,
-            transaction: &Transaction,
-        ) -> Result<(), super::Error> {
-            let request = generated::BroadcastWithdrawalBundleRequest {
-                sidechain_id: Some(THIS_SIDECHAIN as u32),
-                transaction: Some(bitcoin::consensus::serialize(transaction)),
-            };
-            let generated::BroadcastWithdrawalBundleResponse {} = self
-                .0
-                .broadcast_withdrawal_bundle(request)
-                .await?
-                .into_inner();
-            Ok(())
         }
 
         pub async fn create_bmm_critical_data_tx(

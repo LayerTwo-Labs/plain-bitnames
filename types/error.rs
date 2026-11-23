@@ -1,12 +1,67 @@
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
 #[error("Bitcoin amount overflow")]
 pub struct AmountOverflow;
 
 #[derive(Debug, Error)]
 #[error("Bitcoin amount underflow")]
 pub struct AmountUnderflow;
+
+#[derive(Debug, Error)]
+#[error("Non-canonical Ristretto point encoding")]
+pub struct NonCanonicalRistrettoPointEncoding;
+
+pub mod signature {
+    use thiserror::Error;
+
+    use crate::error::NonCanonicalRistrettoPointEncoding;
+
+    #[derive(Debug, Error)]
+    pub enum FromBytes {
+        #[error(transparent)]
+        R(#[from] NonCanonicalRistrettoPointEncoding),
+        #[error("Non-canonical Ristretto scalar encoding")]
+        Z,
+    }
+
+    #[derive(Debug, Error)]
+    pub enum FromHex {
+        #[error(transparent)]
+        FromBytes(FromBytes),
+        #[error(transparent)]
+        Hex(#[from] const_hex::FromHexError),
+    }
+
+    impl<E> From<E> for FromHex
+    where
+        FromBytes: From<E>,
+    {
+        fn from(err: E) -> Self {
+            Self::FromBytes(err.into())
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum Authorization {
+    #[error("borsh serialization error")]
+    BorshSerialize(#[from] borsh::io::Error),
+    #[error("not enough authorizations")]
+    NotEnoughAuthorizations,
+    #[error("signature verification error")]
+    SignatureVerification(#[from] frost_ristretto255::Error),
+    #[error("too many authorizations")]
+    TooManyAuthorizations,
+    #[error(
+        "wrong key for address: address = {address},
+             hash(verifying_key) = {hash_verifying_key}"
+    )]
+    WrongKeyForAddress {
+        address: crate::Address,
+        hash_verifying_key: crate::Address,
+    },
+}
 
 #[derive(Debug, Error)]
 pub enum ComputeFee {
@@ -18,23 +73,43 @@ pub enum ComputeFee {
     ValueOutOverflow(#[source] AmountOverflow),
 }
 
-#[derive(Debug, Error)]
-pub enum GetFee {
-    #[error(transparent)]
-    AmountOverflow(#[from] AmountOverflow),
-    #[error(transparent)]
-    AmountUnderflow(#[from] AmountUnderflow),
-}
+pub mod compute_merkle_root {
+    use thiserror::Error;
 
-#[derive(Debug, Error)]
-pub enum ComputeMerkleRoot {
-    #[error("failed to compute fee for tx ({txid})")]
-    FeeComputation {
-        txid: crate::Txid,
-        #[source]
-        source: GetFee,
-    },
+    use crate::{error::ComputeFee, hashes::Txid};
+
+    #[derive(Debug, Error)]
+    pub(crate) enum Inner {
+        #[error("failed to compute merkle root for coinbase tx")]
+        CoinbaseMerkleRoot(
+            #[source] crate::transaction::outputs::error::ComputeMerkleRoot,
+        ),
+        #[error("failed to compute canonical size for tx ({txid})")]
+        TxCanonicalSize {
+            txid: Txid,
+            source: borsh::io::Error,
+        },
+        #[error("failed to compute fee for tx ({txid})")]
+        TxFee { txid: Txid, source: ComputeFee },
+        #[error("failed to compute merkle root for tx ({txid})")]
+        TxMerkleRoot {
+            txid: Txid,
+            source: crate::transaction::outputs::error::ComputeMerkleRoot,
+        },
+    }
+
+    #[derive(Debug, Error)]
+    #[error("failed to compute merkle root")]
+    #[repr(transparent)]
+    pub struct Error(#[source] Box<Inner>);
+
+    impl From<Inner> for Error {
+        fn from(err: Inner) -> Self {
+            Self(Box::new(err))
+        }
+    }
 }
+pub use compute_merkle_root::Error as ComputeMerkleRoot;
 
 pub mod withdrawal_bundle {
     use thiserror::Error;
@@ -53,26 +128,6 @@ pub mod withdrawal_bundle {
     pub struct Error(#[from] Inner);
 }
 pub use withdrawal_bundle::Error as WithdrawalBundle;
-
-#[derive(Debug, thiserror::Error)]
-pub enum Authorization {
-    #[error("borsh serialization error")]
-    BorshSerialize(#[from] borsh::io::Error),
-    #[error("ed25519 error")]
-    Ed25519(#[from] ed25519_dalek::SignatureError),
-    #[error("not enough authorizations")]
-    NotEnoughAuthorizations,
-    #[error("too many authorizations")]
-    TooManyAuthorizations,
-    #[error(
-        "wrong key for address: address = {address},
-         hash(verifying_key) = {hash_verifying_key}"
-    )]
-    WrongKeyForAddress {
-        address: crate::Address,
-        hash_verifying_key: crate::Address,
-    },
-}
 
 #[derive(Debug, Error)]
 pub enum ParseAddress {
@@ -176,7 +231,7 @@ pub enum Bech32mDecode {
     #[error("Invalid bytes (`{}`)", const_hex::encode(.bytes))]
     InvalidBytes {
         bytes: [u8; 32],
-        source: Box<ed25519_dalek::SignatureError>,
+        source: Box<dyn std::error::Error + Send + Sync>,
     },
     #[error(transparent)]
     WrongHrp(#[from] Box<WrongHrp>),
@@ -189,4 +244,12 @@ pub enum Bech32mDecode {
     },
     #[error("Wrong Bech32 variant. Only Bech32m is accepted.")]
     WrongVariant,
+}
+
+#[derive(Debug, Error)]
+pub enum ParsePeerAddress {
+    #[error("missing port")]
+    MissingPort,
+    #[error(transparent)]
+    Parse(#[from] url::ParseError),
 }

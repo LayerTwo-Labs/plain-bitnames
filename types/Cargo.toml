@@ -1,7 +1,7 @@
 [build-dependencies]
 
 [dependencies]
-anyhow = { workspace = true, features = ["backtrace"] }
+aes-gcm = { workspace = true, features = ["aes", "alloc", "std"] }
 bech32 = { workspace = true }
 bincode = { workspace = true }
 bitcoin = { workspace = true, features = ["serde"] }
@@ -9,14 +9,20 @@ blake3 = { workspace = true }
 borsh = { workspace = true, features = ["derive"] }
 clap = { workspace = true, features = ["derive"], optional = true }
 const-hex = { workspace = true, features = ["serde"] }
-ed25519-bip32 = { workspace = true }
+curve25519-dalek = { workspace = true, features = ["serde"] }
 educe = { workspace = true, features = ["Clone", "Debug"] }
+frost-core = { workspace = true, features = ["internals"] }
+frost-ristretto255 = { workspace = true, features = ["serde"] }
 generic-array = { workspace = true }
+hashlink = { workspace = true, features = ["serde_impl"] }
 heed = { workspace = true, optional = true }
 hex-literal = { workspace = true }
+hkdf = { workspace = true }
 merkle-cbt = { workspace = true }
 nonempty = { workspace = true, features = ["serialize"] }
+rand = { workspace = true, features = ["chacha"] }
 rayon = { workspace = true }
+sha2 = { workspace = true }
 semver = { workspace = true, features = ["serde"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = {  workspace = true }
@@ -24,16 +30,12 @@ serde_with = {  workspace = true, features = ["hex", "macros"] }
 strum = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 typenum = { workspace = true }
+url = { workspace = true, features = ["serde"] }
 utoipa = { workspace = true, features = ["macros", "non_strict_integers"] }
-x25519-dalek = { workspace = true, features = ["serde"] }
 
-[dependencies.ed25519-dalek]
-workspace = true
-features = ["batch", "digest", "hazmat", "serde"]
-
-[dependencies.libes]
-workspace = true
-features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
+[dev-dependencies]
+anyhow = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 
 [features]
 clap = ["dep:clap"]

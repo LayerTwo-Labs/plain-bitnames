@@ -1,21 +1,32 @@
 //! Wallet errors
 
-use libes::EciesError;
+use std::path::PathBuf;
+
 use sneed::{db::error as db, env::error as env, rwtxn::error as rwtxn};
 use thiserror::Error;
 use transitive::Transitive;
 
-use crate::types::{
-    Address, AmountOverflowError, AmountUnderflowError, EncryptionPubKey,
-    VerifyingKey,
+use crate::{
+    types::{
+        Address, AmountOverflowError, AmountUnderflowError, Version,
+        ecies::error as ecies, keys::CompressedPublicKey,
+    },
+    wallet::bip32,
 };
 
 #[derive(Debug, Error)]
 #[error("wallet does not have a seed (set with RPC `set-seed-from-mnemonic`)")]
 pub struct NoSeed;
 
-#[derive(Debug, Error)]
-pub(in crate::wallet) enum GetMasterXprvInner {
+#[allow(clippy::duplicated_attributes)]
+#[derive(Debug, Error, Transitive)]
+#[transitive(
+    from(bip32::HardenedDeriveError, bip32::Error),
+    from(bip32::NonHardenedDeriveError, bip32::Error)
+)]
+pub(in crate::wallet) enum GetSecret {
+    #[error("bip32 error")]
+    Bip32(#[from] bip32::Error),
     #[error(transparent)]
     DbTryGet(#[from] db::TryGet),
     #[error(transparent)]
@@ -23,13 +34,13 @@ pub(in crate::wallet) enum GetMasterXprvInner {
 }
 
 #[derive(Debug, Error)]
-#[error("failed to get master xprv")]
+#[error("failed to get tx signing key")]
 #[repr(transparent)]
-pub struct GetMasterXprv(#[source] GetMasterXprvInner);
+pub struct GetTxSigningKey(#[source] GetSecret);
 
-impl<Err> From<Err> for GetMasterXprv
+impl<Err> From<Err> for GetTxSigningKey
 where
-    GetMasterXprvInner: From<Err>,
+    GetSecret: From<Err>,
 {
     fn from(err: Err) -> Self {
         Self(err.into())
@@ -37,36 +48,13 @@ where
 }
 
 #[derive(Debug, Error)]
-#[error("Encryption pubkey {epk} does not exist")]
+#[error("failed to get secret key")]
 #[repr(transparent)]
-pub struct EpkDoesNotExist {
-    pub epk: EncryptionPubKey,
-}
+pub struct GetSecretKey(#[source] GetSecret);
 
-#[derive(Debug, Error)]
-pub(in crate::wallet) enum GetEpkIndex {
-    #[error(transparent)]
-    DbTryGet(#[from] db::TryGet),
-    #[error(transparent)]
-    EpkDoesNotExist(#[from] EpkDoesNotExist),
-}
-
-#[derive(Debug, Error)]
-pub(in crate::wallet) enum GetEncryptionXEskForEpkInner {
-    #[error(transparent)]
-    GetEpkIndex(#[from] GetEpkIndex),
-    #[error(transparent)]
-    GetMasterXprv(#[from] GetMasterXprv),
-}
-
-#[derive(Debug, Error)]
-#[error("failed to get encryption xesk for encryption pubkey")]
-#[repr(transparent)]
-pub struct GetEncryptionXEskForEpk(#[source] GetEncryptionXEskForEpkInner);
-
-impl<Err> From<Err> for GetEncryptionXEskForEpk
+impl<Err> From<Err> for GetSecretKey
 where
-    GetEncryptionXEskForEpkInner: From<Err>,
+    GetSecret: From<Err>,
 {
     fn from(err: Err) -> Self {
         Self(err.into())
@@ -74,14 +62,17 @@ where
 }
 
 #[derive(Debug, Error)]
-#[error("message signature verification key {vk} does not exist")]
-pub struct VkDoesNotExist {
-    pub vk: VerifyingKey,
+#[error("Public key {cpk} does not exist")]
+#[repr(transparent)]
+pub struct PubkeyDoesNotExist {
+    pub cpk: CompressedPublicKey,
 }
 
 #[allow(clippy::duplicated_attributes)]
 #[derive(Debug, Error, Transitive)]
 #[transitive(
+    from(bip32::HardenedDeriveError, bip32::Error),
+    from(bip32::NonHardenedDeriveError, bip32::Error),
     from(db::Clear, db::Error),
     from(db::Delete, db::Error),
     from(db::IterInit, db::Error),
@@ -106,17 +97,21 @@ pub enum Error {
     #[error("authorization error")]
     Authorization(#[from] crate::types::AuthorizationError),
     #[error("bip32 error")]
-    Bip32(#[from] bitcoin::bip32::Error),
+    Bip32(#[from] bip32::Error),
     #[error(transparent)]
     Db(#[from] db::Error),
     #[error("Database env error")]
     DbEnv(#[from] env::Error),
     #[error("Database write error")]
     DbWrite(#[from] rwtxn::Error),
-    #[error("ECIES error: {:?}", .0)]
-    Ecies(EciesError),
-    #[error(transparent)]
-    EpkDoesNotExist(#[from] EpkDoesNotExist),
+    #[error("ECIES decryption error")]
+    EciesDecrypt(#[from] ecies::Decrypt),
+    #[error(
+        "Incompatible DB version ({}). Please clear the DB (`{}`) and re-sync",
+        .version,
+        .db_path.display()
+    )]
+    IncompatibleVersion { version: Version, db_path: PathBuf },
     #[error("io error")]
     Io(#[from] std::io::Error),
     #[error("no index for address {address}")]
@@ -131,53 +126,30 @@ pub enum Error {
     NoUtxo,
     #[error("failed to parse mnemonic seed phrase")]
     ParseMnemonic(#[from] bip39::ErrorKind),
+    #[error(transparent)]
+    PubkeyDoesNotExist(#[from] PubkeyDoesNotExist),
     #[error("seed has already been set")]
     SeedAlreadyExists,
-    #[error(transparent)]
-    VkDoesNotExist(Box<VkDoesNotExist>),
 }
 
-impl From<VkDoesNotExist> for Error {
-    fn from(err: VkDoesNotExist) -> Self {
-        Self::VkDoesNotExist(Box::new(err))
-    }
-}
-
-impl From<GetMasterXprvInner> for Error {
-    fn from(err: GetMasterXprvInner) -> Self {
+impl From<GetSecret> for Error {
+    fn from(err: GetSecret) -> Self {
         match err {
-            GetMasterXprvInner::DbTryGet(err) => err.into(),
-            GetMasterXprvInner::NoSeed(err) => err.into(),
+            GetSecret::Bip32(err) => err.into(),
+            GetSecret::DbTryGet(err) => err.into(),
+            GetSecret::NoSeed(err) => err.into(),
         }
     }
 }
 
-impl From<GetMasterXprv> for Error {
-    fn from(err: GetMasterXprv) -> Self {
+impl From<GetSecretKey> for Error {
+    fn from(err: GetSecretKey) -> Self {
         err.0.into()
     }
 }
 
-impl From<GetEpkIndex> for Error {
-    fn from(err: GetEpkIndex) -> Self {
-        match err {
-            GetEpkIndex::DbTryGet(err) => err.into(),
-            GetEpkIndex::EpkDoesNotExist(err) => err.into(),
-        }
-    }
-}
-
-impl From<GetEncryptionXEskForEpkInner> for Error {
-    fn from(err: GetEncryptionXEskForEpkInner) -> Self {
-        match err {
-            GetEncryptionXEskForEpkInner::GetEpkIndex(err) => err.into(),
-            GetEncryptionXEskForEpkInner::GetMasterXprv(err) => err.into(),
-        }
-    }
-}
-
-impl From<GetEncryptionXEskForEpk> for Error {
-    fn from(err: GetEncryptionXEskForEpk) -> Self {
+impl From<GetTxSigningKey> for Error {
+    fn from(err: GetTxSigningKey) -> Self {
         err.0.into()
     }
 }

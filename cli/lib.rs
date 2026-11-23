@@ -8,16 +8,18 @@ use std::{
 use clap::{Parser, Subcommand};
 use http::HeaderMap;
 use jsonrpsee::{core::client::ClientT, http_client::HttpClientBuilder};
-use plain_bitnames::types::{
-    Address, BitName, BlockHash, EncryptionPubKey, MutableBitNameData,
-    THIS_SIDECHAIN, Txid, VerifyingKey,
-    authorization::{Dst, Signature},
-};
 use plain_bitnames_app_rpc_api::{
     self as rpc_api,
     bitname_commit::RpcClient as _,
-    node::{PrivateRpcClient as _, RpcClient as _},
+    node::{PrivateRpcClient as _, RpcClient as _, get_block::RpcClient as _},
+    typewit::const_marker::Bool,
     wallet::RpcClient as _,
+};
+use plain_bitnames_types::{
+    Address, BitName, BlockHash, M6id, MutableBitNameData, PublicKey,
+    THIS_SIDECHAIN, Txid,
+    authorization::{Dst, Signature},
+    net::PeerAddress,
 };
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::Url;
@@ -52,7 +54,7 @@ pub enum Command {
         main_block_hash: bitcoin::BlockHash,
     },
     /// Connect to a peer
-    ConnectPeer { addr: SocketAddr },
+    ConnectPeer { addr: PeerAddress },
     /// Deposit to address
     CreateDeposit {
         address: Address,
@@ -80,28 +82,28 @@ pub enum Command {
         #[arg(long)]
         mainchain_fee_sats: u64,
     },
-    /// Decrypt a message with the specified encryption key corresponding to
-    /// the specified encryption pubkey
+    /// Decrypt a message with the secret key corresponding to
+    /// the specified public key
     DecryptMsg {
         #[arg(long)]
-        encryption_pubkey: EncryptionPubKey,
+        pubkey: PublicKey,
         #[arg(long)]
         msg: String,
         /// If set, decode as UTF-8
         #[arg(long)]
         utf8: bool,
     },
-    /// Encrypt a message to the specified encryption pubkey.
+    /// Encrypt a message to the specified public key.
     /// Returns the ciphertext as a hex string.
     EncryptMsg {
         #[arg(long)]
-        encryption_pubkey: EncryptionPubKey,
+        pubkey: PublicKey,
         #[arg(long)]
         msg: String,
     },
     /// Delete peer from known_peers DB.
     /// Connections to the peer are not terminated.
-    ForgetPeer { addr: SocketAddr },
+    ForgetPeer { addr: PeerAddress },
     /// Format a deposit address
     FormatDepositAddress { address: Address },
     /// Generate a mnemonic seed phrase
@@ -111,21 +113,25 @@ pub enum Command {
     /// Get the best sidechain block hash
     GetBestSidechainBlockHash,
     /// Get the block with specified block hash, if it exists
-    GetBlock { block_hash: BlockHash },
+    GetBlock {
+        block_hash: BlockHash,
+        verbose: Option<bool>,
+    },
     /// Get the current block count
     GetBlockcount,
+    /// Get the block hash at the specified height in the active chain, if it
+    /// exists
+    GetBlockHash { height: u32 },
     /// Assemble a block to blind merge mine, without requesting BMM for it
     GetBlockTemplate,
     /// Get mainchain blocks that commit to a specified block hash
     GetBmmInclusions {
-        block_hash: plain_bitnames::types::BlockHash,
+        block_hash: plain_bitnames_types::BlockHash,
     },
     /// Get a new address
     GetNewAddress,
-    /// Get a new encryption pubkey
-    GetNewEncryptionKey,
-    /// Get a new verifying key
-    GetNewVerifyingKey,
+    /// Get a new extended public key
+    GetNewXpubkey,
     /// Get all paymail
     GetPaymail,
     /// Get stxos for addresses
@@ -140,14 +146,13 @@ pub enum Command {
     },
     /// Get wallet addresses, sorted by base58 encoding
     GetWalletAddresses,
-    /// Get wallet master XEncryptionSecretKey
-    #[command(name = "get-wallet-master-xesk")]
-    GetWalletMasterXEsk,
-    /// Get wallet master XVerifyingKey
-    #[command(name = "get-wallet-master-xvk")]
-    GetWalletMasterXVk,
+    /// Get wallet master XPublicKey
+    #[command(name = "get-wallet-master-xpk")]
+    GetWalletMasterXpk,
     /// Get wallet UTXOs
     GetWalletUtxos,
+    /// Get withdrawal bundle by M6id
+    GetWithdrawalBundle { m6id: M6id },
     /// Invalidate a block, potentially re-orging to a valid ancestor of the
     /// current tip.
     InvalidateBlock { block_hash: BlockHash },
@@ -190,10 +195,10 @@ pub enum Command {
     SetSeedFromMnemonic { mnemonic: String },
     /// Get total sidechain wealth
     SidechainWealth,
-    /// Sign an arbitrary message with the specified verifying key
+    /// Sign an arbitrary message with the specified public key
     SignArbitraryMsg {
         #[arg(long)]
-        verifying_key: VerifyingKey,
+        pubkey: PublicKey,
         #[arg(long)]
         msg: String,
     },
@@ -206,8 +211,8 @@ pub enum Command {
     },
     /// Sign a transaction, and optionally broadcast it.
     SignTransaction {
-        #[arg(value_parser = JsonParser::<plain_bitnames::types::Transaction>::parse)]
-        transaction: plain_bitnames::types::Transaction,
+        #[arg(value_parser = JsonParser::<plain_bitnames_types::Transaction>::parse)]
+        transaction: plain_bitnames_types::Transaction,
         #[arg(default_value_t = false)]
         broadcast: bool,
     },
@@ -215,19 +220,19 @@ pub enum Command {
     SubmitTransaction {
         #[arg(
             value_parser =
-                JsonParser::<plain_bitnames::types::AuthorizedTransaction>::parse
+                JsonParser::<plain_bitnames_types::AuthorizedTransaction>::parse
         )]
-        transaction: plain_bitnames::types::AuthorizedTransaction,
+        transaction: plain_bitnames_types::AuthorizedTransaction,
     },
     /// Stop the node
     Stop,
-    /// Verify a signature on a message against the specified verifying key.
+    /// Verify a signature on a message against the specified public key.
     /// Returns `true` if the signature is valid
     VerifySignature {
         #[arg(long)]
         signature: Signature,
         #[arg(long)]
-        verifying_key: VerifyingKey,
+        pubkey: PublicKey,
         #[arg(long)]
         dst: Dst,
         #[arg(long)]
@@ -263,7 +268,7 @@ where
         HttpClientBuilder::default().build(format!("http://{socket_addr}"))?;
     let mut bitname_commit = http_client.bitname_commit(None).await?;
     let canonical_bytes = serde_json_canonicalizer::to_vec(&bitname_commit)?;
-    let canonical_hash: plain_bitnames::types::Hash =
+    let canonical_hash: plain_bitnames_types::Hash =
         blake3::hash(&canonical_bytes).into();
     anyhow::ensure!(commitment == canonical_hash);
     Ok(bitname_commit.remove(&field_name))
@@ -340,6 +345,10 @@ where
                 rpc_client.connect_block(block, main_block_hash).await?;
             format!("{accepted}")
         }
+        Command::GetBlockHash { height } => {
+            let block_hash = rpc_client.get_block_hash(height).await?;
+            serde_json::to_string_pretty(&block_hash)?
+        }
         Command::ConnectPeer { addr } => {
             let () = rpc_client.connect_peer(addr).await?;
             String::default()
@@ -380,13 +389,8 @@ where
                 .await?;
             format!("{txid}")
         }
-        Command::DecryptMsg {
-            encryption_pubkey,
-            msg,
-            utf8,
-        } => {
-            let msg_hex =
-                rpc_client.decrypt_msg(encryption_pubkey, msg).await?;
+        Command::DecryptMsg { pubkey, msg, utf8 } => {
+            let msg_hex = rpc_client.decrypt_msg(pubkey, msg).await?;
             if utf8 {
                 let msg_bytes: Vec<u8> = const_hex::decode(msg_hex)?;
                 String::from_utf8(msg_bytes)?
@@ -394,10 +398,9 @@ where
                 msg_hex
             }
         }
-        Command::EncryptMsg {
-            encryption_pubkey,
-            msg,
-        } => rpc_client.encrypt_msg(encryption_pubkey, msg).await?,
+        Command::EncryptMsg { pubkey, msg } => {
+            rpc_client.encrypt_msg(pubkey, msg).await?
+        }
         Command::ForgetPeer { addr } => {
             rpc_client.forget_peer(addr).await?;
             String::default()
@@ -406,14 +409,6 @@ where
             rpc_client.format_deposit_address(address).await?
         }
         Command::GenerateMnemonic => rpc_client.generate_mnemonic().await?,
-        Command::GetBlock { block_hash } => {
-            let block = rpc_client.get_block(block_hash).await?;
-            serde_json::to_string_pretty(&block)?
-        }
-        Command::GetBlockcount => {
-            let blockcount = rpc_client.getblockcount().await?;
-            format!("{blockcount}")
-        }
         Command::GetBestMainchainBlockHash => {
             let block_hash = rpc_client.get_best_mainchain_block_hash().await?;
             serde_json::to_string_pretty(&block_hash)?
@@ -421,6 +416,25 @@ where
         Command::GetBestSidechainBlockHash => {
             let block_hash = rpc_client.get_best_sidechain_block_hash().await?;
             serde_json::to_string_pretty(&block_hash)?
+        }
+        Command::GetBlock {
+            block_hash,
+            verbose,
+        } => match verbose {
+            Some(true) => {
+                let block =
+                    rpc_client.get_block(block_hash, Bool::<true>).await?;
+                serde_json::to_string_pretty(&block)?
+            }
+            Some(false) | None => {
+                let block =
+                    rpc_client.get_block(block_hash, Bool::<false>).await?;
+                serde_json::to_string_pretty(&block)?
+            }
+        },
+        Command::GetBlockcount => {
+            let blockcount = rpc_client.getblockcount().await?;
+            format!("{blockcount}")
         }
         Command::GetBlockTemplate => {
             let template = rpc_client.get_block_template().await?;
@@ -435,13 +449,9 @@ where
             let address = rpc_client.get_new_address().await?;
             format!("{address}")
         }
-        Command::GetNewEncryptionKey => {
-            let epk = rpc_client.get_new_encryption_key().await?;
-            format!("{epk}")
-        }
-        Command::GetNewVerifyingKey => {
-            let vk = rpc_client.get_new_verifying_key().await?;
-            format!("{vk}")
+        Command::GetNewXpubkey => {
+            let xpk = rpc_client.get_new_xpubkey().await?;
+            format!("{xpk}")
         }
         Command::GetPaymail => {
             let paymail = rpc_client.get_paymail().await?;
@@ -461,17 +471,18 @@ where
             let addresses = rpc_client.get_wallet_addresses().await?;
             serde_json::to_string_pretty(&addresses)?
         }
-        Command::GetWalletMasterXEsk => {
-            let master_xesk = rpc_client.get_wallet_master_xesk().await?;
-            format!("{master_xesk}")
-        }
-        Command::GetWalletMasterXVk => {
-            let master_xvk = rpc_client.get_wallet_master_xvk().await?;
-            format!("{master_xvk}")
+        Command::GetWalletMasterXpk => {
+            let master_xpk = rpc_client.get_wallet_master_xpk().await?;
+            format!("{master_xpk}")
         }
         Command::GetWalletUtxos => {
             let utxos = rpc_client.get_wallet_utxos().await?;
             serde_json::to_string_pretty(&utxos)?
+        }
+        Command::GetWithdrawalBundle { m6id } => {
+            let withdrawal_bundle =
+                rpc_client.get_withdrawal_bundle(m6id).await?;
+            serde_json::to_string_pretty(&withdrawal_bundle)?
         }
         Command::InvalidateBlock { block_hash } => {
             let () = rpc_client.invalidate_block(block_hash).await?;
@@ -548,8 +559,8 @@ where
             let sidechain_wealth = rpc_client.sidechain_wealth_sats().await?;
             format!("{sidechain_wealth}")
         }
-        Command::SignArbitraryMsg { verifying_key, msg } => {
-            let sig = rpc_client.sign_arbitrary_msg(verifying_key, msg).await?;
+        Command::SignArbitraryMsg { pubkey, msg } => {
+            let sig = rpc_client.sign_arbitrary_msg(pubkey, msg).await?;
             format!("{sig}")
         }
         Command::SignArbitraryMsgAsAddr { address, msg } => {
@@ -576,12 +587,12 @@ where
         }
         Command::VerifySignature {
             signature,
-            verifying_key,
+            pubkey,
             dst,
             msg,
         } => {
             let res = rpc_client
-                .verify_signature(signature, verifying_key, dst, msg)
+                .verify_signature(signature, pubkey, dst, msg)
                 .await?;
             format!("{res}")
         }

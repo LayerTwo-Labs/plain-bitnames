@@ -7,6 +7,8 @@ use utoipa::{
     openapi::{self, RefOr, Schema},
 };
 
+pub use plain_bitnames_types::schema::*;
+
 /// Utoipa does not support tuples at all, so these are represented as an
 /// arbitrary json value
 #[derive(Default)]

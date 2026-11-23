@@ -1,8 +1,9 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+//! Sidechain state as of the current sidechain tip
+
+use std::collections::{HashMap, HashSet};
 
 use fallible_iterator::FallibleIterator as _;
 use heed::types::SerdeBincode;
-use serde::{Deserialize, Serialize};
 use sneed::{
     DatabaseUnique, RoDatabaseUnique, RoTxn, RwTxn, UnitKey,
     db::error as db_error,
@@ -13,11 +14,12 @@ use crate::{
         Address, AmountOverflowError, Authorized, AuthorizedTransaction,
         BlockHash, Body, FilledOutput, FilledTransaction, GetAddress as _,
         GetValue as _, Header, InPoint, M6id, MerkleRoot, OutPoint,
-        OutPointKey, SpentOutput, Transaction, VERSION, Verify as _, Version,
+        OutPointKey, SpentOutput, Transaction, VERSION, Version,
         WithdrawalBundle, WithdrawalBundleStatus,
-        authorization::{self, Authorization},
+        authorization::{self, BatchVerificationContext},
         constants, hashes,
         proto::mainchain::TwoWayPegData,
+        state::WithdrawalBundleInfo,
     },
     util::Watchable,
 };
@@ -41,20 +43,6 @@ pub struct PrevalidatedBlock {
     pub total_fees: bitcoin::Amount,
     pub coinbase_value: bitcoin::Amount,
     pub next_height: u32, // Precomputed next height to avoid DB read in write txn
-}
-
-/// Information we have regarding a withdrawal bundle
-#[derive(Debug, Deserialize, Serialize)]
-enum WithdrawalBundleInfo {
-    /// Withdrawal bundle is known
-    Known(WithdrawalBundle),
-    /// Withdrawal bundle is unknown but unconfirmed / failed
-    Unknown,
-    /// If an unknown withdrawal bundle is confirmed, ALL UTXOs are
-    /// considered spent.
-    UnknownConfirmed {
-        spend_utxos: BTreeMap<OutPoint, FilledOutput>,
-    },
 }
 
 type WithdrawalBundlesDb = DatabaseUnique<
@@ -126,9 +114,23 @@ impl State {
             "withdrawal_bundle_event_blocks",
         )?;
         let version = DatabaseUnique::create(env, &mut rwtxn, "state_version")?;
-        if version.try_get(&rwtxn, &())?.is_none() {
-            version.put(&mut rwtxn, &(), &*VERSION)?;
-        }
+        match version.try_get(&rwtxn, &())? {
+            Some(db_version)
+                if db_version
+                    < Version {
+                        major: 0,
+                        minor: 18,
+                        patch: 0,
+                    } =>
+            {
+                return Err(Error::IncompatibleVersion {
+                    version: db_version,
+                    db_path: env.path().to_path_buf(),
+                });
+            }
+            Some(_) => (),
+            None => version.put(&mut rwtxn, &(), &*VERSION)?,
+        };
         rwtxn.commit()?;
         Ok(Self {
             tip,
@@ -279,6 +281,22 @@ impl State {
                 panic!("missing failure status for {latest_failed_m6id}")
             });
         Ok(Some((failed_height, latest_failed_m6id)))
+    }
+
+    pub fn try_get_withdrawal_bundle(
+        &self,
+        rotxn: &RoTxn,
+        m6id: &M6id,
+    ) -> Result<
+        Option<(WithdrawalBundleInfo, WithdrawalBundleStatus)>,
+        db_error::TryGet,
+    > {
+        let Some((bundle_info, bundle_status)) =
+            self.withdrawal_bundles.try_get(rotxn, m6id)?
+        else {
+            return Ok(None);
+        };
+        Ok(Some((bundle_info, bundle_status.latest().value)))
     }
 
     fn fill_transaction(
@@ -496,7 +514,7 @@ impl State {
                 &batch_icann_data.plain_names,
             ));
             if !authorization::verify(
-                batch_icann_data.signature,
+                &batch_icann_data.signature,
                 &constants::BATCH_ICANN_VERIFYING_KEY,
                 authorization::Dst::Arbitrary,
                 &msg_hash,
@@ -532,6 +550,7 @@ impl State {
     pub fn validate_transaction(
         &self,
         rotxn: &RoTxn,
+        batch_verification_ctxt: &BatchVerificationContext,
         transaction: &AuthorizedTransaction,
     ) -> Result<bitcoin::Amount, Error> {
         let filled_transaction =
@@ -556,9 +575,10 @@ impl State {
                 return Err(Error::WrongPubKeyForAddress);
             }
         }
-        if Authorization::verify_transaction(transaction).is_err() {
-            return Err(Error::AuthorizationError);
-        }
+        let () = authorization::verify_authorized_transaction(
+            batch_verification_ctxt,
+            transaction,
+        )?;
         let fee =
             self.validate_filled_transaction(rotxn, &filled_transaction)?;
         Ok(fee)
@@ -632,10 +652,11 @@ impl State {
     pub fn validate_block(
         &self,
         rotxn: &RoTxn,
+        batch_verification_ctxt: &BatchVerificationContext,
         header: &Header,
         body: &Body,
     ) -> Result<(bitcoin::Amount, MerkleRoot), Error> {
-        block::validate(self, rotxn, header, body)
+        block::validate(batch_verification_ctxt, self, rotxn, header, body)
     }
 
     pub fn connect_block(
@@ -651,10 +672,11 @@ impl State {
     pub fn prevalidate_block(
         &self,
         rotxn: &RoTxn,
+        batch_verification_ctxt: &BatchVerificationContext,
         header: &Header,
         body: &Body,
     ) -> Result<PrevalidatedBlock, Error> {
-        block::prevalidate(self, rotxn, header, body)
+        block::prevalidate(batch_verification_ctxt, self, rotxn, header, body)
     }
 
     /// Connect a prevalidated block using precomputed values
@@ -673,10 +695,11 @@ impl State {
     pub fn apply_block(
         &self,
         rwtxn: &mut RwTxn,
+        batch_verification_ctxt: &BatchVerificationContext,
         header: &Header,
         body: &Body,
     ) -> Result<(), Error> {
-        block::apply_block(self, rwtxn, header, body)
+        block::apply_block(batch_verification_ctxt, self, rwtxn, header, body)
     }
 
     pub fn disconnect_tip(
@@ -717,7 +740,6 @@ impl Watchable<()> for State {
 #[cfg(test)]
 mod test {
     use bitcoin::hashes::Hash as _;
-    use ed25519_dalek::SigningKey;
 
     use crate::{
         state::{Error, State, error},
@@ -725,8 +747,10 @@ mod test {
             Address, AuthorizedTransaction, BitName, FilledOutput,
             FilledOutputContent, FilledTransaction, Hash, InPoint,
             MutableBitNameData, OutPoint, OutPointKey, Output, OutputContent,
-            SpentOutput, Transaction, TxData, Txid, VerifyingKey,
-            WithdrawalOutputContent, authorization,
+            SpentOutput, Transaction, TxData, Txid, WithdrawalOutputContent,
+            authorization::{
+                self, BatchVerificationContext, SigningKey, VerifyingKey,
+            },
         },
     };
 
@@ -803,8 +827,9 @@ mod test {
             vec![OutPoint::Regular {
                 txid: Txid([0; 32]),
                 vout: 0,
-            }],
-            vec![Output::new(address, OutputContent::BitName)],
+            }]
+            .into(),
+            vec![Output::new(address, OutputContent::BitName)].into(),
         );
         transaction.data = Some(TxData::BitNameRegistration {
             name_hash,
@@ -832,14 +857,17 @@ mod test {
     fn validate_transaction_rejects_missing_authorization() -> anyhow::Result<()>
     {
         let (_temp_dir, env, state) = fresh_state("auth_count")?;
-        let signing_key = SigningKey::from_bytes(&[1u8; 32]);
-        let verifying_key: VerifyingKey = signing_key.verifying_key().into();
-        let address = authorization::get_address(&verifying_key);
+        let mut rng = rand::rng();
+        let batch_verification_ctxt = BatchVerificationContext::new(&mut rng);
+
+        let signing_key = SigningKey::new(&mut rng);
+        let verifying_key = VerifyingKey::from(&signing_key);
+        let address = authorization::get_address(verifying_key);
         let outpoint = fund(&env, &state, address, 1000);
 
         let transaction = Transaction::new(
-            vec![outpoint],
-            vec![bitcoin_filled_output(address, 900).into()],
+            vec![outpoint].into(),
+            vec![bitcoin_filled_output(address, 900).into()].into(),
         );
 
         // The attack: spend the input while providing no authorization for it.
@@ -849,7 +877,11 @@ mod test {
         };
         let rotxn = env.read_txn()?;
         let err = state
-            .validate_transaction(&rotxn, &unauthorized)
+            .validate_transaction(
+                &rotxn,
+                &batch_verification_ctxt,
+                &unauthorized,
+            )
             .expect_err("tx with no authorizations must be rejected");
         anyhow::ensure!(
             matches!(
@@ -863,10 +895,13 @@ mod test {
         );
 
         // The same transaction with a valid authorization is accepted.
-        let authorized =
-            authorization::authorize(&[(address, &signing_key)], transaction)?;
+        let authorized = authorization::authorize(
+            rng,
+            &[(address, &signing_key)],
+            transaction,
+        )?;
         state
-            .validate_transaction(&rotxn, &authorized)
+            .validate_transaction(&rotxn, &batch_verification_ctxt, &authorized)
             .expect("correctly authorized tx should validate");
         Ok(())
     }
@@ -937,10 +972,11 @@ mod test {
         };
         let tx = FilledTransaction {
             transaction: Transaction {
-                inputs: vec![outpoint],
+                inputs: vec![outpoint].into(),
                 outputs: vec![
                     bitcoin_filled_output(Address::ALL_ZEROS, 1300).into(),
-                ],
+                ]
+                .into(),
                 ..Default::default()
             },
             spent_utxos: vec![withdrawal],

@@ -1023,8 +1023,8 @@ mod test {
             },
         },
         types::{
-            Address, FilledOutput, FilledOutputContent, InPoint, M6id,
-            OutPoint, OutPointKey, Txid, WithdrawalBundle,
+            Address, Coinbase, FilledOutput, FilledOutputContent, InPoint,
+            M6id, OutPoint, OutPointKey, Txid, WithdrawalBundle,
             WithdrawalBundleEvent, WithdrawalBundleEventStatus,
             WithdrawalBundleStatus, WithdrawalOutputContent,
             proto::mainchain::{BlockEvent, BlockInfo, Deposit, TwoWayPegData},
@@ -1262,17 +1262,21 @@ mod test {
     #[test]
     fn deposit_reorg_round_trips() -> anyhow::Result<()> {
         use crate::types::{
-            Body, FilledTransaction, Header, proto::mainchain::Deposit,
+            Body, FilledTransaction, Header,
+            authorization::BatchVerificationContext, proto::mainchain::Deposit,
         };
 
         let (_temp_dir, env, state) = fresh_state("deposit_reorg_round_trips")?;
+        let batch_verification_ctxt =
+            BatchVerificationContext::new(&mut rand::rng());
         let empty_body = Body {
-            coinbase: Vec::new(),
+            coinbase: Coinbase::default(),
             transactions: Vec::new(),
             authorizations: Vec::new(),
         };
         let no_txs: &[FilledTransaction] = &[];
-        let merkle_root = Body::compute_merkle_root(&[], no_txs)?;
+        let merkle_root =
+            Body::compute_merkle_root(&empty_body.coinbase, no_txs)?;
         let main0 = bitcoin::BlockHash::from_byte_array([10; 32]);
         let main1 = bitcoin::BlockHash::from_byte_array([11; 32]);
 
@@ -1283,7 +1287,12 @@ mod test {
         };
         {
             let mut rwtxn = env.write_txn()?;
-            state.apply_block(&mut rwtxn, &genesis, &empty_body)?;
+            state.apply_block(
+                &mut rwtxn,
+                &batch_verification_ctxt,
+                &genesis,
+                &empty_body,
+            )?;
             state.connect_two_way_peg_data(
                 &mut rwtxn,
                 &TwoWayPegData::default(),
@@ -1319,7 +1328,12 @@ mod test {
         };
         {
             let mut rwtxn = env.write_txn()?;
-            state.apply_block(&mut rwtxn, &block1, &empty_body)?;
+            state.apply_block(
+                &mut rwtxn,
+                &batch_verification_ctxt,
+                &block1,
+                &empty_body,
+            )?;
             state.connect_two_way_peg_data(&mut rwtxn, &deposit_twpd)?;
             anyhow::ensure!(
                 state.utxos.try_get(&rwtxn, &deposit_key)?.is_some()

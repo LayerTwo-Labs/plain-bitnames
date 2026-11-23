@@ -13,7 +13,7 @@ use crate::{
     },
     types::{
         BatchIcannRegistrationData, BitName, BitNameDataUpdates, BitNameSeqId,
-        EncryptionPubKey, FilledTransaction, Hash, Txid, Update, VerifyingKey,
+        FilledTransaction, Hash, Txid, Update, bitname_data::XPublicKey,
     },
 };
 
@@ -32,14 +32,10 @@ pub struct BitNameData {
     /// optional ipv6 addr
     pub(in crate::state) socket_addr_v6:
         RollBack<TxidStamped<Option<SocketAddrV6>>>,
-    /// optional pubkey used for encryption
-    pub(in crate::state) encryption_pubkey:
-        RollBack<TxidStamped<Option<EncryptionPubKey>>>,
-    /// optional pubkey used for signing messages
-    pub(in crate::state) signing_pubkey:
-        RollBack<TxidStamped<Option<VerifyingKey>>>,
     /// optional minimum paymail fee, in sats
     pub(in crate::state) paymail_fee_sats: RollBack<TxidStamped<Option<u64>>>,
+    /// optional extended public key
+    pub(in crate::state) xpubkey: RollBack<TxidStamped<Option<XPublicKey>>>,
 }
 
 impl BitNameData {
@@ -68,18 +64,13 @@ impl BitNameData {
                 txid,
                 height,
             ),
-            encryption_pubkey: RollBack::<TxidStamped<_>>::new(
-                bitname_data.encryption_pubkey,
-                txid,
-                height,
-            ),
-            signing_pubkey: RollBack::<TxidStamped<_>>::new(
-                bitname_data.signing_pubkey,
-                txid,
-                height,
-            ),
             paymail_fee_sats: RollBack::<TxidStamped<_>>::new(
                 bitname_data.paymail_fee_sats,
+                txid,
+                height,
+            ),
+            xpubkey: RollBack::<TxidStamped<_>>::new(
+                bitname_data.xpubkey,
                 txid,
                 height,
             ),
@@ -99,9 +90,8 @@ impl BitNameData {
             is_icann: _,
             socket_addr_v4,
             socket_addr_v6,
-            encryption_pubkey,
-            signing_pubkey,
             paymail_fee_sats,
+            xpubkey,
         } = self;
 
         // apply an update to a single data field
@@ -133,23 +123,12 @@ impl BitNameData {
             height,
         );
         apply_field_update(
-            encryption_pubkey,
-            updates.encryption_pubkey,
-            txid,
-            height,
-        );
-        apply_field_update(
-            signing_pubkey,
-            updates.signing_pubkey,
-            txid,
-            height,
-        );
-        apply_field_update(
             paymail_fee_sats,
             updates.paymail_fee_sats,
             txid,
             height,
         );
+        apply_field_update(xpubkey, updates.xpubkey, txid, height);
     }
 
     // revert bitname data updates
@@ -196,25 +175,13 @@ impl BitNameData {
             is_icann: _,
             socket_addr_v4,
             socket_addr_v6,
-            encryption_pubkey,
-            signing_pubkey,
             paymail_fee_sats,
+            xpubkey,
         } = self;
+        revert_field_update(xpubkey, updates.xpubkey, txid, height);
         revert_field_update(
             paymail_fee_sats,
             updates.paymail_fee_sats,
-            txid,
-            height,
-        );
-        revert_field_update(
-            signing_pubkey,
-            updates.signing_pubkey,
-            txid,
-            height,
-        );
-        revert_field_update(
-            encryption_pubkey,
-            updates.encryption_pubkey,
             txid,
             height,
         );
@@ -246,15 +213,11 @@ impl BitNameData {
             commitment: self.commitment.at_block_height(height)?.data,
             socket_addr_v4: self.socket_addr_v4.at_block_height(height)?.data,
             socket_addr_v6: self.socket_addr_v6.at_block_height(height)?.data,
-            encryption_pubkey: self
-                .encryption_pubkey
-                .at_block_height(height)?
-                .data,
-            signing_pubkey: self.signing_pubkey.at_block_height(height)?.data,
             paymail_fee_sats: self
                 .paymail_fee_sats
                 .at_block_height(height)?
                 .data,
+            xpubkey: self.xpubkey.at_block_height(height)?.data,
         };
         Some(crate::types::BitNameData {
             seq_id: self.seq_id,
@@ -268,9 +231,8 @@ impl BitNameData {
             commitment: self.commitment.latest().data,
             socket_addr_v4: self.socket_addr_v4.latest().data,
             socket_addr_v6: self.socket_addr_v6.latest().data,
-            encryption_pubkey: self.encryption_pubkey.latest().data,
-            signing_pubkey: self.signing_pubkey.latest().data,
             paymail_fee_sats: self.paymail_fee_sats.latest().data,
+            xpubkey: self.xpubkey.latest().data,
         };
         crate::types::BitNameData {
             seq_id: self.seq_id,

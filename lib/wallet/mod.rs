@@ -4,8 +4,8 @@ use std::{
     path::Path,
 };
 
+use bip32ish::U31;
 use bitcoin::Amount;
-use ed25519_bip32::XPrv;
 use fallible_iterator::FallibleIterator as _;
 use futures::{Stream, StreamExt};
 use heed::{
@@ -15,35 +15,31 @@ use heed::{
 };
 use rayon::prelude::ParallelSliceMut;
 use sneed::{DbError, Env, UnitKey};
-use thiserror::Error;
 use tokio_stream::{StreamMap, wrappers::WatchStream};
 
 use crate::{
     types::{
         Address, AmountOverflowError, AuthorizedTransaction,
-        BitcoinOutputContent, EncryptionPubKey, FilledOutput, GetValue, Hash,
-        InPoint, MutableBitNameData, OutPoint, OutPointKey, Output,
-        OutputContent, SpentOutput, Transaction, TxData, VERSION, VerifyingKey,
-        Version, WithdrawalOutputContent, XEncryptionSecretKey, XVerifyingKey,
-        authorization::{self, Authorization, Signature, get_address},
+        BitcoinOutputContent, FilledOutput, GetValue, Hash, InPoint,
+        MutableBitNameData, OutPoint, OutPointKey, Output, OutputContent,
+        SpentOutput, THIS_SIDECHAIN, Transaction, TxData, VERSION, Version,
+        WithdrawalOutputContent,
+        authorization::{
+            self, Authorization, Signature, SigningKey, VerifyingKey,
+            get_address, rand_core::CryptoRng,
+        },
+        bitname_data::XPublicKey,
+        ecies,
         hashes::BitName,
-        keys::Ecies,
+        keys::{PublicKey, SecretKey},
         wallet::Balance,
     },
     util::Watchable,
 };
 
+pub mod bip32;
 pub mod error;
 pub use error::Error;
-
-mod util;
-use util::KnownBip32Path;
-
-#[derive(Debug, Error)]
-#[error("Message signature verification key {vk} does not exist")]
-pub struct VkDoesNotExistError {
-    vk: VerifyingKey,
-}
 
 /// Marker type for Wallet Env
 pub struct WalletEnv;
@@ -60,29 +56,23 @@ pub struct Wallet {
     seed: DatabaseUnique<U8, Bytes>,
     /// Map each address to it's index
     address_to_index: DatabaseUnique<SerdeBincode<Address>, U32<BigEndian>>,
-    /// Map each encryption pubkey to it's index
-    epk_to_index:
-        DatabaseUnique<SerdeBincode<EncryptionPubKey>, U32<BigEndian>>,
     /// Map each address index to an address
     index_to_address: DatabaseUnique<U32<BigEndian>, SerdeBincode<Address>>,
-    /// Map each encryption key index to an encryption pubkey
-    index_to_epk:
-        DatabaseUnique<U32<BigEndian>, SerdeBincode<EncryptionPubKey>>,
-    /// Map each signing key index to a verifying key
-    index_to_vk: DatabaseUnique<U32<BigEndian>, SerdeBincode<VerifyingKey>>,
+    /// Map each public key index to a public key
+    index_to_pubkey: DatabaseUnique<U32<BigEndian>, SerdeBincode<PublicKey>>,
+    /// Map each public key to it's index
+    pubkey_to_index: DatabaseUnique<SerdeBincode<PublicKey>, U32<BigEndian>>,
     utxos: DatabaseUnique<OutPointKey, SerdeBincode<FilledOutput>>,
     stxos: DatabaseUnique<OutPointKey, SerdeBincode<SpentOutput>>,
     /// Associates reservation commitments with plaintext BitNames
     bitname_reservations: DatabaseUnique<SerdeBincode<[u8; 32]>, Str>,
     /// Associates BitNames with plaintext names
     known_bitnames: DatabaseUnique<SerdeBincode<BitName>, Str>,
-    /// Map each verifying key to it's index
-    vk_to_index: DatabaseUnique<SerdeBincode<VerifyingKey>, U32<BigEndian>>,
     _version: DatabaseUnique<UnitKey, SerdeBincode<Version>>,
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 12;
+    pub const NUM_DBS: u32 = 10;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
@@ -119,183 +109,82 @@ impl Wallet {
         let seed_db = DatabaseUnique::create(&env, &mut rwtxn, "seed")?;
         let address_to_index =
             DatabaseUnique::create(&env, &mut rwtxn, "address_to_index")?;
-        let epk_to_index =
-            DatabaseUnique::create(&env, &mut rwtxn, "epk_to_index")?;
         let index_to_address =
             DatabaseUnique::create(&env, &mut rwtxn, "index_to_address")?;
-        let index_to_epk =
-            DatabaseUnique::create(&env, &mut rwtxn, "index_to_epk")?;
-        let index_to_vk =
-            DatabaseUnique::create(&env, &mut rwtxn, "index_to_vk")?;
+        let index_to_pubkey =
+            DatabaseUnique::create(&env, &mut rwtxn, "index_to_pubkey")?;
+        let pubkey_to_index =
+            DatabaseUnique::create(&env, &mut rwtxn, "pubkey_to_index")?;
         let utxos = DatabaseUnique::create(&env, &mut rwtxn, "utxos")?;
         let stxos = DatabaseUnique::create(&env, &mut rwtxn, "stxos")?;
         let bitname_reservations =
             DatabaseUnique::create(&env, &mut rwtxn, "bitname_reservations")?;
         let known_bitnames =
             DatabaseUnique::create(&env, &mut rwtxn, "known_bitnames")?;
-        let vk_to_index =
-            DatabaseUnique::create(&env, &mut rwtxn, "vk_to_index")?;
         let version = DatabaseUnique::create(&env, &mut rwtxn, "version")?;
-        if version.try_get(&rwtxn, &())?.is_none() {
-            version.put(&mut rwtxn, &(), &*VERSION)?;
+        match version.try_get(&rwtxn, &())? {
+            Some(db_version)
+                if db_version
+                    < Version {
+                        major: 0,
+                        minor: 18,
+                        patch: 0,
+                    } =>
+            {
+                return Err(Error::IncompatibleVersion {
+                    version: db_version,
+                    db_path: env.path().to_path_buf(),
+                });
+            }
+            Some(_) => (),
+            None => version.put(&mut rwtxn, &(), &*VERSION)?,
         }
         rwtxn.commit()?;
         Ok(Self {
             env,
             seed: seed_db,
             address_to_index,
-            epk_to_index,
             index_to_address,
-            index_to_epk,
-            index_to_vk,
+            index_to_pubkey,
+            pubkey_to_index,
             utxos,
             stxos,
             bitname_reservations,
             known_bitnames,
-            vk_to_index,
             _version: version,
         })
-    }
-
-    // Adapted from https://input-output-hk.github.io/adrestia/static/Ed25519_BIP.pdf
-    fn get_master_xprv(
-        &self,
-        rotxn: &RoTxn,
-    ) -> Result<XPrv, error::GetMasterXprv> {
-        use bitcoin::hashes::{Hash as _, HashEngine as _, sha256};
-        let seed_bytes = self.seed.try_get(rotxn, &0)?.ok_or(error::NoSeed)?;
-        // Master secret must be 256 bits, see
-        // https://input-output-hk.github.io/adrestia/static/Ed25519_BIP.pdf
-        let mut master_secret: [u8; 32] =
-            sha256::Hash::hash(seed_bytes).to_byte_array();
-        // If master secret generates a valid extended secret, return i
-        // Otherwise, hash and try again.
-        // Each iteration of the loop has a 50% chance of success
-        loop {
-            // Derived as described in
-            // https://input-output-hk.github.io/adrestia/static/Ed25519_BIP.pdf
-            let root_chain_code: [u8; 32] = {
-                let mut hasher = sha256::HashEngine::default();
-                hasher.input(&[0x01]);
-                hasher.input(&master_secret);
-                assert_eq!(hasher.n_bytes_hashed(), 33);
-                sha256::Hash::from_engine(hasher).to_byte_array()
-            };
-            if let Ok(res) =
-                XPrv::from_nonextended_noforce(&master_secret, &root_chain_code)
-            {
-                return Ok(res);
-            } else {
-                master_secret =
-                    sha256::Hash::hash(&master_secret).to_byte_array();
-            }
-        }
-    }
-
-    pub fn get_master_xesk(
-        &self,
-        rotxn: &RoTxn,
-    ) -> Result<XEncryptionSecretKey, error::GetMasterXprv> {
-        let master_xprv = self.get_master_xprv(rotxn)?;
-        let derivation_path = KnownBip32Path::MASTER_ENCRYPTION.to_vec().into();
-        let xesk = util::derive_xprv(master_xprv, &derivation_path).into();
-        Ok(xesk)
-    }
-
-    // Get master tx signing key
-    fn get_master_xsk(
-        &self,
-        rotxn: &RoTxn,
-    ) -> Result<ed25519_bip32::XPrv, error::GetMasterXprv> {
-        let master_xprv = self.get_master_xprv(rotxn)?;
-        let derivation_path = KnownBip32Path::MASTER_TX_SIGNING.to_vec().into();
-        let xsk = util::derive_xprv(master_xprv, &derivation_path);
-        Ok(xsk)
-    }
-
-    pub fn get_master_xvk(
-        &self,
-        rotxn: &RoTxn,
-    ) -> Result<XVerifyingKey, error::GetMasterXprv> {
-        let xsk = self.get_master_xsk(rotxn)?;
-        let xvk = xsk.public().into();
-        Ok(xvk)
-    }
-
-    fn get_epk_index(
-        &self,
-        rotxn: &RoTxn,
-        epk: &EncryptionPubKey,
-    ) -> Result<u32, error::GetEpkIndex> {
-        let epk_idx = self
-            .epk_to_index
-            .try_get(rotxn, epk)?
-            .ok_or(error::EpkDoesNotExist { epk: *epk })?;
-        Ok(epk_idx)
-    }
-
-    fn get_encryption_xesk(
-        &self,
-        rotxn: &RoTxn,
-        index: u32,
-    ) -> Result<XEncryptionSecretKey, error::GetMasterXprv> {
-        let master_xprv = self.get_master_xprv(rotxn)?;
-        let derivation_path = KnownBip32Path::Encryption { index }.into();
-        let xesk = util::derive_xprv(master_xprv, &derivation_path).into();
-        Ok(xesk)
-    }
-
-    fn get_encryption_secret(
-        &self,
-        rotxn: &RoTxn,
-        index: u32,
-    ) -> Result<x25519_dalek::StaticSecret, error::GetMasterXprv> {
-        let xesk = self.get_encryption_xesk(rotxn, index)?;
-        Ok(xesk.encryption_secret())
-    }
-
-    /// Get the xesk that corresponds to the provided encryption pubkey
-    #[allow(dead_code)]
-    fn get_encryption_xesk_for_epk(
-        &self,
-        rotxn: &RoTxn,
-        epk: &EncryptionPubKey,
-    ) -> Result<XEncryptionSecretKey, error::GetEncryptionXEskForEpk> {
-        let epk_idx = self.get_epk_index(rotxn, epk)?;
-        let xesk = self.get_encryption_xesk(rotxn, epk_idx)?;
-        // sanity check that encryption secret corresponds to epk
-        assert_eq!(*epk, (&xesk.encryption_secret()).into());
-        Ok(xesk)
-    }
-
-    /// Get the tx signing key that corresponds to the provided encryption
-    /// pubkey
-    fn get_encryption_secret_for_epk(
-        &self,
-        rotxn: &RoTxn,
-        epk: &EncryptionPubKey,
-    ) -> Result<x25519_dalek::StaticSecret, error::GetEncryptionXEskForEpk>
-    {
-        let epk_idx = self.get_epk_index(rotxn, epk)?;
-        let encryption_secret = self.get_encryption_secret(rotxn, epk_idx)?;
-        // sanity check that encryption secret corresponds to epk
-        assert_eq!(*epk, (&encryption_secret).into());
-        Ok(encryption_secret)
     }
 
     fn get_tx_signing_key(
         &self,
         rotxn: &RoTxn,
         index: u32,
-    ) -> Result<ed25519_dalek::hazmat::ExpandedSecretKey, error::GetMasterXprv>
-    {
-        let master_xprv = self.get_master_xprv(rotxn)?;
-        let derivation_path = KnownBip32Path::TxSigning { index }.into();
-        let xpriv = util::derive_xprv(master_xprv, &derivation_path);
-        let esk_bytes = xpriv.extended_secret_key_bytes();
-        Ok(ed25519_dalek::hazmat::ExpandedSecretKey::from_bytes(
-            esk_bytes,
-        ))
+    ) -> Result<SigningKey, error::GetTxSigningKey> {
+        let seed = self.seed.try_get(rotxn, &0)?.ok_or(error::NoSeed)?;
+        let mut xpriv = bip32::new_master_xpriv(seed);
+        // derive via path m/43'/1899'/0'/<SIDECHAIN_NUMBER>'/0'/0'/index
+        // (m / bip43 purpose / eCash Token / purpose (0) / sidechain number /
+        // account /  purpose (0) / index)
+        {
+            xpriv = xpriv.derive_hardened(U31::new(43).unwrap())?;
+            xpriv = xpriv.derive_hardened(U31::new(1899).unwrap())?;
+            xpriv = xpriv.derive_hardened(U31::new(0).unwrap())?;
+            xpriv = xpriv
+                .derive_hardened(U31::new(THIS_SIDECHAIN as u32).unwrap())?;
+            xpriv = xpriv.derive_hardened(U31::new(0).unwrap())?;
+            xpriv = xpriv.derive_hardened(U31::new(0).unwrap())?;
+            match bip32ish::ChildIndex::from(index) {
+                bip32ish::ChildIndex::Hardened { index } => {
+                    xpriv = xpriv.derive_hardened(index)?;
+                }
+                bip32ish::ChildIndex::NonHardened { index } => {
+                    xpriv = xpriv.derive_non_hardened(index)?;
+                }
+            }
+        }
+        let sk = SigningKey::from_scalar(xpriv.secret_scalar)
+            .expect("expected secret scalar to be non-zero");
+        Ok(sk)
     }
 
     /// Get the tx signing key that corresponds to the provided address
@@ -303,7 +192,7 @@ impl Wallet {
         &self,
         rotxn: &RoTxn,
         address: &Address,
-    ) -> Result<ed25519_dalek::hazmat::ExpandedSecretKey, Error> {
+    ) -> Result<SigningKey, Error> {
         let addr_idx = self
             .address_to_index
             .try_get(rotxn, address)?
@@ -311,103 +200,123 @@ impl Wallet {
         let signing_key = self.get_tx_signing_key(rotxn, addr_idx)?;
         // sanity check that signing key corresponds to address
         {
-            let vk = ed25519_dalek::VerifyingKey::from(&signing_key);
-            assert_eq!(*address, get_address(&vk.into()));
+            let vk = VerifyingKey::from(&signing_key);
+            assert_eq!(*address, get_address(vk));
         }
         Ok(signing_key)
     }
 
-    fn get_message_signing_key(
+    // Get master secret key
+    fn get_master_xsk(
+        &self,
+        rotxn: &RoTxn,
+    ) -> Result<bip32::Xpriv, error::GetSecretKey> {
+        let seed = self.seed.try_get(rotxn, &0)?.ok_or(error::NoSeed)?;
+        let mut xpriv = bip32::new_master_xpriv(seed);
+        // derive via path m/43'/1899'/0'/<SIDECHAIN_NUMBER>'/0'/1'
+        // (m / bip43 purpose / eCash Token / purpose (0) / sidechain number /
+        // account /  purpose (1))
+        {
+            xpriv = xpriv.derive_hardened(U31::new(43).unwrap())?;
+            xpriv = xpriv.derive_hardened(U31::new(1899).unwrap())?;
+            xpriv = xpriv.derive_hardened(U31::new(0).unwrap())?;
+            xpriv = xpriv
+                .derive_hardened(U31::new(THIS_SIDECHAIN as u32).unwrap())?;
+            xpriv = xpriv.derive_hardened(U31::new(0).unwrap())?;
+            xpriv = xpriv.derive_hardened(U31::new(1).unwrap())?;
+        }
+        Ok(xpriv)
+    }
+
+    // Get master public key
+    pub fn get_master_xpk(
+        &self,
+        rotxn: &RoTxn,
+    ) -> Result<XPublicKey, error::GetSecretKey> {
+        let master_xsk = self.get_master_xsk(rotxn)?;
+        let master_xpk = master_xsk.xpub();
+        let master_xpk = XPublicKey {
+            pubkey: PublicKey(master_xpk.pubkey),
+            chaincode: master_xpk.chaincode.0,
+        };
+        Ok(master_xpk)
+    }
+
+    fn get_xsecret_key(
         &self,
         rotxn: &RoTxn,
         index: u32,
-    ) -> Result<ed25519_dalek::hazmat::ExpandedSecretKey, error::GetMasterXprv>
-    {
-        let master_xprv = self.get_master_xprv(rotxn)?;
-        let derivation_path = KnownBip32Path::MessageSigning { index }.into();
-        let xpriv = util::derive_xprv(master_xprv, &derivation_path);
-        let esk_bytes = xpriv.extended_secret_key_bytes();
-        Ok(ed25519_dalek::hazmat::ExpandedSecretKey::from_bytes(
-            esk_bytes,
-        ))
-    }
-
-    /// Get the tx signing key that corresponds to the provided verifying key,
-    /// if it exists
-    fn try_get_message_signing_key_for_vk(
-        &self,
-        rotxn: &RoTxn,
-        vk: &VerifyingKey,
-    ) -> Result<Option<ed25519_dalek::hazmat::ExpandedSecretKey>, Error> {
-        let Some(vk_idx) = self.vk_to_index.try_get(rotxn, vk)? else {
-            return Ok(None);
-        };
-        let signing_key = self.get_message_signing_key(rotxn, vk_idx)?;
-        // sanity check that signing key corresponds to vk
-        {
-            assert_eq!(
-                *vk,
-                ed25519_dalek::VerifyingKey::from(&signing_key).into()
-            );
+    ) -> Result<bip32::Xpriv, error::GetSecretKey> {
+        let mut xsk = self.get_master_xsk(rotxn)?;
+        match bip32ish::ChildIndex::from(index) {
+            bip32ish::ChildIndex::Hardened { index } => {
+                xsk = xsk.derive_hardened(index)?;
+            }
+            bip32ish::ChildIndex::NonHardened { index } => {
+                xsk = xsk.derive_non_hardened(index)?;
+            }
         }
-        Ok(Some(signing_key))
+        Ok(xsk)
     }
 
-    /// Get the tx signing key that corresponds to the provided verifying key
-    fn get_message_signing_key_for_vk(
+    /// Get the secret key that corresponds to the provided public key
+    fn get_secret_key_for_pubkey(
         &self,
         rotxn: &RoTxn,
-        vk: &VerifyingKey,
-    ) -> Result<ed25519_dalek::hazmat::ExpandedSecretKey, Error> {
-        self.try_get_message_signing_key_for_vk(rotxn, vk)?
-            .ok_or_else(|| error::VkDoesNotExist { vk: *vk }.into())
+        pubkey: &PublicKey,
+    ) -> Result<SecretKey, Error> {
+        let pubkey_idx = self.pubkey_to_index.try_get(rotxn, pubkey)?.ok_or(
+            error::PubkeyDoesNotExist {
+                cpk: pubkey.compress(),
+            },
+        )?;
+        let xsecret_key = self.get_xsecret_key(rotxn, pubkey_idx)?;
+        let secret_key = xsecret_key.secret_scalar;
+        // sanity check that secret key corresponds to pubkey
+        {
+            assert_eq!(*pubkey, PublicKey::from_secret_key(&secret_key));
+        }
+        Ok(secret_key)
     }
 
     pub fn get_new_address(&self) -> Result<Address, Error> {
-        let mut txn = self.env.write_txn()?;
+        let mut rwtxn = self.env.write_txn()?;
         let next_index = self
             .index_to_address
-            .last(&txn)?
+            .last(&rwtxn)?
             .map(|(idx, _)| idx + 1)
             .unwrap_or(0);
-        let tx_signing_key = self.get_tx_signing_key(&txn, next_index)?;
-        let vk = ed25519_dalek::VerifyingKey::from(&tx_signing_key);
-        let address = get_address(&vk.into());
-        self.index_to_address.put(&mut txn, &next_index, &address)?;
-        self.address_to_index.put(&mut txn, &address, &next_index)?;
-        txn.commit()?;
+        let tx_signing_key = self.get_tx_signing_key(&rwtxn, next_index)?;
+        let address = get_address(tx_signing_key.into());
+        self.index_to_address
+            .put(&mut rwtxn, &next_index, &address)?;
+        self.address_to_index
+            .put(&mut rwtxn, &address, &next_index)?;
+        rwtxn.commit()?;
         Ok(address)
     }
 
-    pub fn get_new_encryption_key(&self) -> Result<EncryptionPubKey, Error> {
-        let mut txn = self.env.write_txn()?;
+    pub fn get_new_xpubkey(&self) -> Result<XPublicKey, Error> {
+        let mut rwtxn = self.env.write_txn()?;
         let next_index = self
-            .index_to_epk
-            .last(&txn)?
+            .index_to_pubkey
+            .last(&rwtxn)?
             .map(|(idx, _)| idx + 1)
             .unwrap_or(0);
-        let encryption_secret = self.get_encryption_secret(&txn, next_index)?;
-        let epk = (&encryption_secret).into();
-        self.index_to_epk.put(&mut txn, &next_index, &epk)?;
-        self.epk_to_index.put(&mut txn, &epk, &next_index)?;
-        txn.commit()?;
-        Ok(epk)
-    }
-
-    /// Get a new message verifying key
-    pub fn get_new_verifying_key(&self) -> Result<VerifyingKey, Error> {
-        let mut txn = self.env.write_txn()?;
-        let next_index = self
-            .index_to_vk
-            .last(&txn)?
-            .map(|(idx, _)| idx + 1)
-            .unwrap_or(0);
-        let signing_key = self.get_message_signing_key(&txn, next_index)?;
-        let vk = ed25519_dalek::VerifyingKey::from(&signing_key).into();
-        self.index_to_vk.put(&mut txn, &next_index, &vk)?;
-        self.vk_to_index.put(&mut txn, &vk, &next_index)?;
-        txn.commit()?;
-        Ok(vk)
+        let xsecret_key = self.get_xsecret_key(&rwtxn, next_index)?;
+        let xpubkey = {
+            let xpk = xsecret_key.xpub();
+            XPublicKey {
+                pubkey: PublicKey(xpk.pubkey),
+                chaincode: xpk.chaincode.0,
+            }
+        };
+        self.index_to_pubkey
+            .put(&mut rwtxn, &next_index, &xpubkey.pubkey)?;
+        self.pubkey_to_index
+            .put(&mut rwtxn, &xpubkey.pubkey, &next_index)?;
+        rwtxn.commit()?;
+        Ok(xpubkey)
     }
 
     /// Overwrite the seed, or set it if it does not already exist.
@@ -463,14 +372,12 @@ impl Wallet {
 
     pub fn decrypt_msg(
         &self,
-        encryption_pubkey: &EncryptionPubKey,
+        pubkey: &PublicKey,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, Error> {
         let rotxn = self.env.read_txn()?;
-        let encryption_secret =
-            self.get_encryption_secret_for_epk(&rotxn, encryption_pubkey)?;
-        let res = Ecies::decrypt(&encryption_secret, ciphertext)
-            .map_err(Error::Ecies)?;
+        let secret_key = self.get_secret_key_for_pubkey(&rotxn, pubkey)?;
+        let res = ecies::decrypt(&secret_key, ciphertext)?;
         Ok(res)
     }
 
@@ -481,12 +388,12 @@ impl Wallet {
     ) -> Result<Transaction, Error> {
         let (total, coins) = self.select_coins(fee)?;
         let change = total - fee;
-        let inputs = coins.into_keys().collect();
+        let inputs = coins.into_keys().collect::<Vec<_>>();
         let outputs = vec![Output::new(
             self.get_new_address()?,
             OutputContent::Bitcoin(BitcoinOutputContent(change)),
         )];
-        Ok(Transaction::new(inputs, outputs))
+        Ok(Transaction::new(inputs.into(), outputs.into()))
     }
 
     pub fn create_withdrawal(
@@ -511,7 +418,7 @@ impl Wallet {
                 .ok_or(AmountOverflowError)?,
         )?;
         let change = total - value - fee - main_fee;
-        let inputs = coins.into_keys().collect();
+        let inputs = coins.into_keys().collect::<Vec<_>>();
         let outputs = vec![
             Output::new(
                 self.get_new_address()?,
@@ -526,7 +433,7 @@ impl Wallet {
                 OutputContent::Bitcoin(BitcoinOutputContent(change)),
             ),
         ];
-        Ok(Transaction::new(inputs, outputs))
+        Ok(Transaction::new(inputs.into(), outputs.into()))
     }
 
     pub fn create_transfer(
@@ -539,7 +446,7 @@ impl Wallet {
         let (total, coins) = self
             .select_coins(value.checked_add(fee).ok_or(AmountOverflowError)?)?;
         let change = total - value - fee;
-        let inputs = coins.into_keys().collect();
+        let inputs = coins.into_keys().collect::<Vec<_>>();
         let mut outputs = vec![Output {
             address,
             content: OutputContent::Bitcoin(BitcoinOutputContent(value)),
@@ -551,7 +458,7 @@ impl Wallet {
                 OutputContent::Bitcoin(BitcoinOutputContent(change)),
             ))
         }
-        Ok(Transaction::new(inputs, outputs))
+        Ok(Transaction::new(inputs.into(), outputs.into()))
     }
 
     /// given a regular transaction, add a bitname reservation.
@@ -577,7 +484,7 @@ impl Wallet {
             }
             // if the last output is owned by this wallet, then use
             // the address associated with the last output
-            else if let Some(last_output) = tx.outputs.last() {
+            else if let Some(last_output) = tx.outputs.as_slice().last() {
                 let last_output_addr = last_output.address;
                 let rotxn = self.env.read_txn()?;
                 if self.address_to_index.try_get(&rotxn, &last_output_addr)?.is_some() {
@@ -594,7 +501,7 @@ impl Wallet {
         let name_hash: Hash = blake3::hash(plain_name.as_bytes()).into();
         let bitname = BitName(name_hash);
         let reservation_hmac_key =
-            blake3::hash(reservation_signing_key.scalar.as_bytes()).into();
+            blake3::hash(reservation_signing_key.to_scalar().as_bytes()).into();
         let nonce =
             blake3::keyed_hash(&reservation_hmac_key, &name_hash).into();
         // hmac(nonce, name_hash)
@@ -632,7 +539,7 @@ impl Wallet {
         let registration_addr =
             // if the last output is owned by this wallet, then use
             // the address associated with the last output
-            if let Some(last_output) = tx.outputs.last() {
+            if let Some(last_output) = tx.outputs.as_slice().last() {
                 let last_output_addr = last_output.address;
                 let rotxn = self.env.read_txn()?;
                 if self.address_to_index.try_get(&rotxn, &last_output_addr)?.is_some() {
@@ -662,9 +569,10 @@ impl Wallet {
                 let rotxn = self.env.read_txn()?;
                 let reservation_signing_key = self
                     .get_tx_signing_key_for_addr(&rotxn, &reservation_addr)?;
-                let reservation_hmac_key =
-                    blake3::hash(reservation_signing_key.scalar.as_bytes())
-                        .into();
+                let reservation_hmac_key = blake3::hash(
+                    reservation_signing_key.to_scalar().as_bytes(),
+                )
+                .into();
                 let nonce =
                     blake3::keyed_hash(&reservation_hmac_key, &name_hash)
                         .into();
@@ -868,10 +776,14 @@ impl Wallet {
         Ok(addresses)
     }
 
-    pub fn authorize(
+    pub fn authorize<R>(
         &self,
+        mut rng: R,
         transaction: Transaction,
-    ) -> Result<AuthorizedTransaction, Error> {
+    ) -> Result<AuthorizedTransaction, Error>
+    where
+        R: CryptoRng,
+    {
         let rotxn = self.env.read_txn()?;
         let mut authorizations = vec![];
         for input in &transaction.inputs {
@@ -886,11 +798,13 @@ impl Wallet {
                     address: spent_utxo.address,
                 })?;
             let tx_signing_key = self.get_tx_signing_key(&rotxn, index)?;
-            let signature =
-                authorization::sign_tx_esk(&tx_signing_key, &transaction)?;
-            let vk = ed25519_dalek::VerifyingKey::from(&tx_signing_key);
+            let signature = authorization::sign_tx(
+                &mut rng,
+                &tx_signing_key,
+                &transaction,
+            )?;
             authorizations.push(Authorization {
-                verifying_key: vk.into(),
+                verifying_key: VerifyingKey::from(&tx_signing_key),
                 signature,
             });
         }
@@ -923,30 +837,48 @@ impl Wallet {
         Ok(res)
     }
 
-    pub fn sign_arbitrary_msg(
+    pub fn sign_arbitrary_msg<R>(
         &self,
-        verifying_key: &VerifyingKey,
+        rng: R,
+        public_key: &PublicKey,
         msg: &str,
-    ) -> Result<Signature, Error> {
-        use authorization::{Dst, sign_esk};
+    ) -> Result<Signature, Error>
+    where
+        R: CryptoRng,
+    {
+        use authorization::Dst;
         let rotxn = self.env.read_txn()?;
-        let signing_key =
-            self.get_message_signing_key_for_vk(&rotxn, verifying_key)?;
-        let res = sign_esk(&signing_key, Dst::Arbitrary, msg.as_bytes());
+        let secret_key = self.get_secret_key_for_pubkey(&rotxn, public_key)?;
+        let signing_key = SigningKey::from_scalar(secret_key)
+            .expect("expected secret scalar to be non-zero");
+        let res = authorization::sign(
+            rng,
+            &signing_key,
+            Dst::Arbitrary,
+            msg.as_bytes(),
+        );
         Ok(res)
     }
 
-    pub fn sign_arbitrary_msg_as_addr(
+    pub fn sign_arbitrary_msg_as_addr<R>(
         &self,
+        rng: R,
         address: &Address,
         msg: &str,
-    ) -> Result<Authorization, Error> {
-        use authorization::{Dst, sign_esk};
+    ) -> Result<Authorization, Error>
+    where
+        R: CryptoRng,
+    {
+        use authorization::Dst;
         let rotxn = self.env.read_txn()?;
         let signing_key = self.get_tx_signing_key_for_addr(&rotxn, address)?;
-        let signature = sign_esk(&signing_key, Dst::Arbitrary, msg.as_bytes());
-        let verifying_key =
-            ed25519_dalek::VerifyingKey::from(&signing_key).into();
+        let signature = authorization::sign(
+            rng,
+            &signing_key,
+            Dst::Arbitrary,
+            msg.as_bytes(),
+        );
+        let verifying_key = VerifyingKey::from(&signing_key);
         Ok(Authorization {
             verifying_key,
             signature,
@@ -963,29 +895,25 @@ impl Watchable<()> for Wallet {
             env: _,
             seed,
             address_to_index,
-            epk_to_index,
             index_to_address,
-            index_to_epk,
-            index_to_vk,
+            index_to_pubkey,
+            pubkey_to_index,
             utxos,
             stxos,
             bitname_reservations,
             known_bitnames,
-            vk_to_index,
             _version: _,
         } = self;
         let watchables = [
             seed.watch().clone(),
             address_to_index.watch().clone(),
-            epk_to_index.watch().clone(),
             index_to_address.watch().clone(),
-            index_to_epk.watch().clone(),
-            index_to_vk.watch().clone(),
+            index_to_pubkey.watch().clone(),
+            pubkey_to_index.watch().clone(),
             utxos.watch().clone(),
             stxos.watch().clone(),
             bitname_reservations.watch().clone(),
             known_bitnames.watch().clone(),
-            vk_to_index.watch().clone(),
         ];
         let streams = StreamMap::from_iter(
             watchables.into_iter().map(WatchStream::new).enumerate(),

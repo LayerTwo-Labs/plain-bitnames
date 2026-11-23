@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     ops::Deref,
     path::PathBuf,
@@ -13,6 +14,7 @@ use crate::util::saturating_pred_level;
 
 #[derive(Clone, Debug)]
 pub struct Config {
+    pub add_peers: HashSet<plain_bitnames::types::net::PeerAddress>,
     pub datadir: PathBuf,
     pub file_log_level: tracing::Level,
     pub headless: bool,
@@ -27,8 +29,71 @@ pub struct Config {
         Option<plain_bitnames::net::peer_message::MagicBytes>,
     pub private_rpc_addr: SocketAddr,
     pub rpc_addr: SocketAddr,
+    pub server_names: HashSet<String>,
+    pub wallet_dir: PathBuf,
     #[cfg(feature = "zmq")]
     pub zmq_addr: SocketAddr,
+}
+
+impl Config {
+    /// Log all fields at info level
+    #[track_caller]
+    pub fn log_all_fields(&self, msg: &str) {
+        let Self {
+            add_peers,
+            datadir,
+            file_log_level,
+            headless,
+            log_dir,
+            log_level,
+            mainchain_grpc_url,
+            mnemonic_seed_phrase_path,
+            net_addr,
+            network,
+            network_magic_override,
+            private_rpc_addr,
+            rpc_addr,
+            server_names,
+            wallet_dir,
+            #[cfg(feature = "zmq")]
+            zmq_addr,
+        } = self;
+        let add_peers = std::fmt::from_fn(|f| {
+            f.debug_set()
+                .entries(add_peers.iter().map(|peer_addr| {
+                    std::fmt::from_fn(|f| std::fmt::Display::fmt(peer_addr, f))
+                }))
+                .finish()
+        });
+        tracing::info!(
+            %add_peers,
+            datadir = %datadir.display(),
+            %headless,
+            log_dir = log_dir.as_ref().map(|path|
+                tracing::field::display(path.display())
+            ),
+            %log_level,
+            %file_log_level,
+            %mainchain_grpc_url,
+            mnemonic_seed_phrase_path = mnemonic_seed_phrase_path.as_ref()
+                .map(|path| tracing::field::display(path.display())),
+            %net_addr,
+            %network,
+            network_magic_override = network_magic_override.map(|magic|
+                tracing::field::display(const_hex::encode(magic))
+            ),
+            %private_rpc_addr,
+            %rpc_addr,
+            ?server_names,
+            wallet_dir = %wallet_dir.display(),
+            zmq_addr = if cfg!(feature = "zmq") {
+                Some(tracing::field::display(zmq_addr))
+            } else {
+                None
+            },
+            msg,
+        )
+    }
 }
 
 const fn ipv4_socket_addr(ipv4_octets: [u8; 4], port: u16) -> SocketAddr {
@@ -132,7 +197,13 @@ fn parse_network_magic(s: &str) -> Result<[u8; 4], const_hex::FromHexError> {
 #[derive(Clone, Debug, Parser)]
 #[command(author, version, about, long_about = None)]
 pub(super) struct Cli {
-    /// Data directory for storing blockchain and wallet data
+    /// Additional peers to dial on startup, as `host:port`. May be given
+    /// more than once, and is dialed in addition to the network's built-in
+    /// seed peers.
+    #[arg(long = "add-peer")]
+    add_peers: Vec<plain_bitnames::types::net::PeerAddress>,
+    /// Data directory for storing blockchain data.
+    /// Wallet data is stored here by default.
     #[command(flatten)]
     datadir: DatadirArg,
     /// Log level for logs that get written to file
@@ -175,6 +246,13 @@ pub(super) struct Cli {
     /// Socket address to host the RPC server
     #[arg(default_value_t = DEFAULT_RPC_ADDR, long, short)]
     rpc_addr: SocketAddr,
+    /// Host name used by the p2p server.
+    /// This option can be specified multiple times.
+    #[arg(long = "server-name")]
+    server_names: Vec<String>,
+    /// Data directory for storing wallet data
+    #[arg(long)]
+    wallet_dir: Option<PathBuf>,
     /// ZMQ pub/sub address
     #[cfg(feature = "zmq")]
     #[arg(default_value_t = DEFAULT_ZMQ_ADDR, long, short)]
@@ -192,12 +270,12 @@ impl Cli {
 
     pub fn get_config(self) -> anyhow::Result<Config> {
         let mainchain_grpc_url = self.mainchain_grpc_url();
+        let datadir = self.datadir.0;
         let log_dir = match self.log_dir {
             None => {
                 let version_dir_name =
                     format!("v{}", env!("CARGO_PKG_VERSION"));
-                let log_dir =
-                    self.datadir.0.join("logs").join(version_dir_name);
+                let log_dir = datadir.join("logs").join(version_dir_name);
                 Some(log_dir)
             }
             Some(log_dir) => {
@@ -213,8 +291,10 @@ impl Cli {
         } else {
             saturating_pred_level(self.log_level)
         };
+        let wallet_dir = self.wallet_dir.unwrap_or_else(|| datadir.clone());
         Ok(Config {
-            datadir: self.datadir.0,
+            add_peers: HashSet::from_iter(self.add_peers),
+            datadir,
             file_log_level: self.file_log_level,
             headless: self.headless,
             log_dir,
@@ -226,6 +306,8 @@ impl Cli {
             network_magic_override: self.network_magic,
             private_rpc_addr: self.private_rpc_addr,
             rpc_addr: self.rpc_addr,
+            server_names: HashSet::from_iter(self.server_names),
+            wallet_dir,
             #[cfg(feature = "zmq")]
             zmq_addr: self.zmq_addr,
         })

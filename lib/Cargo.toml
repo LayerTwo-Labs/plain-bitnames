@@ -17,6 +17,7 @@ addr = { workspace = true }
 async-lock = { workspace = true }
 bech32 = { workspace = true }
 bincode = { workspace = true }
+bip32ish = { workspace = true }
 bitcoin = { workspace = true, features = ["serde"] }
 blake3 = { workspace = true }
 borsh = { workspace = true, features = ["derive"] }
@@ -24,8 +25,7 @@ byteorder = { workspace = true }
 bytes = { workspace = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 const-hex = { workspace = true, features = ["serde"] }
-ed25519-bip32 = { workspace = true }
-ed25519-dalek = { workspace = true, features = ["hazmat"]}
+curve25519-dalek = { workspace = true, features = ["group"] }
 educe = { workspace = true, features = ["Clone", "Debug"] }
 error-fatality = { workspace = true }
 fallible-iterator = { workspace = true }
@@ -33,6 +33,7 @@ futures = { workspace = true, features = ["alloc"] }
 governor = { workspace = true, features = ["quanta", "std"] }
 hashlink = { workspace = true, features = ["serde_impl"] }
 heed = { workspace = true }
+hickory-resolver = { workspace = true, features = ["system-config", "tokio"] }
 jsonrpsee = { workspace = true }
 nonempty = { workspace = true, features = ["serialize"] }
 parking_lot = { workspace = true }
@@ -47,27 +48,25 @@ semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_with = { workspace = true, features = ["alloc", "macros"] }
+smallvec = { workspace = true, features = ["const_generics"] }
 sneed = { workspace = true, features = ["observe"] }
 strum = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true }
 tiny-bip39 = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 tokio-stream = { workspace = true, features = ["sync"] }
-tokio-util = { workspace = true, features = ["rt"] }
+tokio-util = { workspace = true, features = ["join-map",  "rt"] }
 tonic = { workspace = true }
 tonic-prost = { workspace = true }
 tracing = { workspace = true }
 transitive = { workspace = true }
+url = { workspace = true }
 utoipa = { workspace = true, features = ["macros", "non_strict_integers"] }
-x25519-dalek = { workspace = true, features = ["static_secrets"] }
 zeromq = { workspace = true, optional = true }
-
-[dependencies.libes]
-workspace = true
-features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
 
 [dev-dependencies]
 anyhow = { workspace = true }
+rand = { workspace = true, features = ["thread_rng"] }
 temp-dir = { workspace = true }
 
 [features]

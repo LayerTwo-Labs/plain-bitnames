@@ -12,15 +12,18 @@ use jsonrpsee::{
 };
 use plain_bitnames::types::{
     Address, Authorization, BitName, BitNameData, Block, BlockHash,
-    EncryptionPubKey, FilledOutput, MutableBitNameData, OutPoint,
-    PointedOutput, SpentOutput, Transaction, Txid, VerifyingKey,
-    WithdrawalBundle,
-    authorization::{self, Dst, Signature},
-    keys::{Ecies, XEncryptionSecretKey, XVerifyingKey},
-    net::Peer,
+    FilledOutput, M6id, MutableBitNameData, OutPoint, PointedOutput,
+    SpentOutput, Transaction, Txid, WithdrawalBundle,
+    authorization::{self, Dst, Signature, VerifyingKey},
+    bitname_data::XPublicKey,
+    ecies,
+    keys::PublicKey,
+    net::{Peer, PeerAddress},
     wallet::Balance,
 };
-use plain_bitnames_app_rpc_api::{self as rpc_api, node::TxInfo};
+use plain_bitnames_app_rpc_api::{
+    self as rpc_api, node::TxInfo, typewit::const_marker::Bool,
+};
 use tower_http::{
     cors::CorsLayer,
     request_id::{
@@ -86,11 +89,20 @@ impl rpc_api::open_api::RpcServer for RpcServerImpl<true> {
 
 #[async_trait]
 impl rpc_api::node::PrivateRpcServer for RpcServerImpl<true> {
-    async fn connect_peer(&self, addr: SocketAddr) -> RpcResult<()> {
-        self.app.node.connect_peer(addr).map_err(custom_err)
+    async fn connect_peer(&self, addr: PeerAddress) -> RpcResult<()> {
+        let resolved_addr = plain_bitnames::net::resolve_peer_address(
+            self.app.node.dns_resolver(),
+            addr,
+        )
+        .await
+        .map_err(custom_err)?;
+        self.app
+            .node
+            .connect_peer(resolved_addr)
+            .map_err(custom_err)
     }
 
-    async fn forget_peer(&self, addr: SocketAddr) -> RpcResult<()> {
+    async fn forget_peer(&self, addr: PeerAddress) -> RpcResult<()> {
         match self.app.node.forget_peer(&addr) {
             Ok(_) => Ok(()),
             Err(err) => Err(custom_err(err)),
@@ -110,6 +122,78 @@ impl rpc_api::node::PrivateRpcServer for RpcServerImpl<true> {
 
     async fn stop(&self) {
         std::process::exit(0);
+    }
+}
+
+#[async_trait]
+impl<const ENABLE_PRIVATE_API: bool>
+    rpc_api::node::get_block::RpcServer<Bool<false>>
+    for RpcServerImpl<ENABLE_PRIVATE_API>
+{
+    async fn get_block(
+        &self,
+        block_hash: BlockHash,
+        _verbose: Bool<false>,
+    ) -> RpcResult<
+        Option<<Bool<false> as rpc_api::node::get_block::Verbosity>::Response>,
+    > {
+        let Some(header) = self
+            .app
+            .node
+            .try_get_header(block_hash)
+            .map_err(custom_err)?
+        else {
+            return Ok(None);
+        };
+        let body = self.app.node.get_body(block_hash).map_err(custom_err)?;
+        let block = plain_bitnames::types::Block { header, body };
+        Ok(Some(block))
+    }
+}
+
+#[async_trait]
+impl<const ENABLE_PRIVATE_API: bool>
+    rpc_api::node::get_block::RpcServer<Bool<true>>
+    for RpcServerImpl<ENABLE_PRIVATE_API>
+{
+    async fn get_block(
+        &self,
+        block_hash: BlockHash,
+        _verbose: Bool<true>,
+    ) -> RpcResult<
+        Option<<Bool<true> as rpc_api::node::get_block::Verbosity>::Response>,
+    > {
+        let Some(header) = self
+            .app
+            .node
+            .try_get_header(block_hash)
+            .map_err(custom_err)?
+        else {
+            return Ok(None);
+        };
+        let plain_bitnames::types::Body {
+            coinbase,
+            transactions,
+            authorizations,
+        } = self.app.node.get_body(block_hash).map_err(custom_err)?;
+        let transactions_verbose = transactions
+            .into_iter()
+            .map(|tx| {
+                Ok(rpc_api::node::TransactionVerbose {
+                    canonical_bytes: tx.canonical_bytes()?,
+                    tx,
+                })
+            })
+            .collect::<std::io::Result<_>>()
+            .map_err(custom_err)?;
+        let body = rpc_api::node::get_block::BodyVerbose {
+            coinbase,
+            transactions: transactions_verbose,
+            authorizations,
+        };
+        let block_verbose =
+            rpc_api::node::get_block::BlockVerbose { header, body };
+        Ok(Some(block_verbose))
     }
 }
 
@@ -150,13 +234,11 @@ impl<const ENABLE_PRIVATE_API: bool> rpc_api::node::RpcServer
             .unwrap()
     }
 
-    async fn get_block(&self, block_hash: BlockHash) -> RpcResult<Block> {
-        let block = self
-            .app
-            .node
-            .get_block(block_hash)
-            .expect("This error should have been handled properly.");
-        Ok(block)
+    async fn get_block_hash(
+        &self,
+        height: u32,
+    ) -> RpcResult<Option<BlockHash>> {
+        self.app.node.try_get_block_hash(height).map_err(custom_err)
     }
 
     async fn get_best_sidechain_block_hash(
@@ -270,6 +352,25 @@ impl<const ENABLE_PRIVATE_API: bool> rpc_api::node::RpcServer
             .map(|(outpoint, output)| PointedOutput { outpoint, output })
             .collect();
         Ok(res)
+    }
+
+    async fn get_withdrawal_bundle(
+        &self,
+        m6id: M6id,
+    ) -> RpcResult<Option<rpc_api::node::GetWithdrawalBundleResponse>> {
+        let Some((bundle_info, bundle_status)) = self
+            .app
+            .node
+            .try_get_withdrawal_bundle(&m6id)
+            .map_err(custom_err)?
+        else {
+            return Ok(None);
+        };
+        let response = rpc_api::node::GetWithdrawalBundleResponse {
+            info: bundle_info,
+            status: bundle_status,
+        };
+        Ok(Some(response))
     }
 
     async fn getblockcount(&self) -> RpcResult<u32> {
@@ -417,24 +518,23 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
 
     async fn decrypt_msg(
         &self,
-        encryption_pubkey: EncryptionPubKey,
+        pubkey: PublicKey,
         msg: String,
     ) -> RpcResult<String> {
         let ciphertext = const_hex::decode(msg).map_err(custom_err)?;
         self.app
             .wallet
-            .decrypt_msg(&encryption_pubkey, &ciphertext)
+            .decrypt_msg(&pubkey, &ciphertext)
             .map(const_hex::encode)
             .map_err(custom_err)
     }
 
     async fn encrypt_msg(
         &self,
-        encryption_pubkey: EncryptionPubKey,
+        recipient_pubkey: PublicKey,
         msg: String,
     ) -> RpcResult<String> {
-        Ecies::new(encryption_pubkey.0)
-            .encrypt(msg.as_bytes())
+        ecies::encrypt(rand::rng(), &recipient_pubkey, msg.as_bytes())
             .map(const_hex::encode)
             .map_err(|err| custom_err(anyhow::anyhow!("{err:?}")))
     }
@@ -473,7 +573,6 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
             critical_hash: template.header.hash(),
             block: Block {
                 header: template.header,
-                height: template.height,
                 body: template.body,
             },
             fees_sats: template.fees.to_sat(),
@@ -484,12 +583,8 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
         self.app.wallet.get_new_address().map_err(custom_err)
     }
 
-    async fn get_new_encryption_key(&self) -> RpcResult<EncryptionPubKey> {
-        self.app.wallet.get_new_encryption_key().map_err(custom_err)
-    }
-
-    async fn get_new_verifying_key(&self) -> RpcResult<VerifyingKey> {
-        self.app.wallet.get_new_verifying_key().map_err(custom_err)
+    async fn get_new_xpubkey(&self) -> RpcResult<XPublicKey> {
+        self.app.wallet.get_new_xpubkey().map_err(custom_err)
     }
 
     async fn get_wallet_addresses(&self) -> RpcResult<Vec<Address>> {
@@ -499,21 +594,11 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
         Ok(res)
     }
 
-    async fn get_wallet_master_xesk(&self) -> RpcResult<XEncryptionSecretKey> {
+    async fn get_wallet_master_xpk(&self) -> RpcResult<XPublicKey> {
         let rotxn = self.app.wallet.env.read_txn().map_err(custom_err)?;
-        let master_xesk = self
-            .app
-            .wallet
-            .get_master_xesk(&rotxn)
-            .map_err(custom_err)?;
-        Ok(master_xesk)
-    }
-
-    async fn get_wallet_master_xvk(&self) -> RpcResult<XVerifyingKey> {
-        let rotxn = self.app.wallet.env.read_txn().map_err(custom_err)?;
-        let master_xvk =
-            self.app.wallet.get_master_xvk(&rotxn).map_err(custom_err)?;
-        Ok(master_xvk)
+        let master_xpk =
+            self.app.wallet.get_master_xpk(&rotxn).map_err(custom_err)?;
+        Ok(master_xpk)
     }
 
     async fn get_wallet_utxos(
@@ -591,12 +676,12 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
 
     async fn sign_arbitrary_msg(
         &self,
-        verifying_key: VerifyingKey,
+        pubkey: PublicKey,
         msg: String,
     ) -> RpcResult<Signature> {
         self.app
             .wallet
-            .sign_arbitrary_msg(&verifying_key, &msg)
+            .sign_arbitrary_msg(rand::rng(), &pubkey, &msg)
             .map_err(custom_err)
     }
 
@@ -607,7 +692,7 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
     ) -> RpcResult<Authorization> {
         self.app
             .wallet
-            .sign_arbitrary_msg_as_addr(&address, &msg)
+            .sign_arbitrary_msg_as_addr(rand::rng(), &address, &msg)
             .map_err(custom_err)
     }
 
@@ -616,8 +701,11 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
         transaction: plain_bitnames::types::Transaction,
         broadcast: Option<bool>,
     ) -> RpcResult<plain_bitnames::types::AuthorizedTransaction> {
-        let authorized =
-            self.app.wallet.authorize(transaction).map_err(custom_err)?;
+        let authorized = self
+            .app
+            .wallet
+            .authorize(rand::rng(), transaction)
+            .map_err(custom_err)?;
         if let Some(true) = broadcast {
             let () = self
                 .app
@@ -630,12 +718,13 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
     async fn verify_signature(
         &self,
         signature: Signature,
-        verifying_key: VerifyingKey,
+        pubkey: PublicKey,
         dst: Dst,
         msg: String,
     ) -> RpcResult<bool> {
+        let verifying_key = VerifyingKey::new(pubkey.0);
         let res = authorization::verify(
-            signature,
+            &signature,
             &verifying_key,
             dst,
             msg.as_bytes(),
@@ -748,6 +837,11 @@ pub async fn run_server(
             let rpc_server_impl = RpcServerImpl::<false> { app: app.clone() };
             let mut rpc_module =
                 rpc_api::open_api::RpcServer::into_rpc(rpc_server_impl.clone());
+            rpc_module.merge(
+                rpc_api::node::get_block::untyped::RpcServer::into_rpc(
+                    rpc_server_impl.clone(),
+                ),
+            )?;
             rpc_module
                 .merge(rpc_api::node::RpcServer::into_rpc(rpc_server_impl))?;
             server.start(rpc_module)
@@ -757,6 +851,11 @@ pub async fn run_server(
             let mut rpc_module = rpc_api::open_api::RpcServer::into_rpc(
                 PrivateOnlyRpcServerImpl,
             );
+            rpc_module.merge(
+                rpc_api::node::get_block::untyped::RpcServer::into_rpc(
+                    rpc_server_impl.clone(),
+                ),
+            )?;
             rpc_module.merge(rpc_api::node::PrivateRpcServer::into_rpc(
                 rpc_server_impl.clone(),
             ))?;
@@ -782,6 +881,11 @@ pub async fn run_server(
         rpc_module.merge(rpc_api::node::PrivateRpcServer::into_rpc(
             rpc_server_impl.clone(),
         ))?;
+        rpc_module.merge(
+            rpc_api::node::get_block::untyped::RpcServer::into_rpc(
+                rpc_server_impl.clone(),
+            ),
+        )?;
         rpc_module.merge(rpc_api::node::RpcServer::into_rpc(
             rpc_server_impl.clone(),
         ))?;

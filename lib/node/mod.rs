@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     net::SocketAddr,
-    path::Path,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -16,16 +16,18 @@ use tonic::transport::Channel;
 use crate::{
     archive::Archive,
     mempool::{self, MemPool},
-    net::Net,
+    net::{DialKnownPeersHandle, Net},
     state::{self, State},
     types::{
         Address, AmountOverflowError, AmountUnderflowError, Authorized,
         AuthorizedTransaction, BitName, BitNameData, Block, BlockHash,
         BmmResult, Body, FilledOutput, FilledTransaction, GetValue, Header,
-        Network, OutPoint, OutPointKey, SpentOutput, Tip, Transaction, TxIn,
-        Txid, WithdrawalBundle,
-        net::Peer,
+        M6id, Network, OutPoint, OutPointKey, SpentOutput, Tip, Transaction,
+        TxIn, Txid, WithdrawalBundle, WithdrawalBundleStatus,
+        authorization::{BatchVerificationContext, rand_core::CryptoRng},
+        net::{Peer, PeerAddress, ResolvedPeerAddress},
         proto::{self, mainchain},
+        state::WithdrawalBundleInfo,
     },
     util::Watchable,
 };
@@ -42,18 +44,38 @@ use net_task::ZmqPubHandler;
 pub type FilledTransactionWithPosition =
     (Authorized<FilledTransaction>, Option<TxIn>);
 
+#[derive(Debug)]
+pub struct Config {
+    pub datadir: PathBuf,
+    pub bind_addr: SocketAddr,
+    pub magic_bytes_override: Option<crate::net::peer_message::MagicBytes>,
+    pub network: Network,
+    pub add_peers: HashSet<PeerAddress>,
+    pub server_names: HashSet<String>,
+    #[cfg(feature = "zmq")]
+    pub zmq_addr: SocketAddr,
+}
+
+/// Handles for spawned tasks / task sets
+#[derive(Clone)]
+struct TaskHandles {
+    _dial_known_peers: Arc<DialKnownPeersHandle>,
+    mainchain: MainchainTaskHandle,
+    net: NetTaskHandle,
+}
+
 #[derive(Clone)]
 pub struct Node<MainchainTransport = Channel> {
     archive: Archive,
+    batch_verification_ctxt: BatchVerificationContext,
     cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
-    cusf_mainchain_wallet:
-        Option<Arc<Mutex<mainchain::WalletClient<MainchainTransport>>>>,
+    cusf_mainchain_block_producer:
+        Option<Arc<Mutex<mainchain::BlockProducerClient<MainchainTransport>>>>,
     env: sneed::Env<heed::WithoutTls>,
-    mainchain_task: MainchainTaskHandle,
     mempool: MemPool,
     net: Net,
-    net_task: NetTaskHandle,
     state: State,
+    task_handles: TaskHandles,
     #[cfg(feature = "zmq")]
     zmq_pub_handler: Arc<ZmqPubHandler>,
 }
@@ -62,18 +84,14 @@ impl<MainchainTransport> Node<MainchainTransport>
 where
     MainchainTransport: proto::Transport,
 {
-    #[allow(clippy::too_many_arguments)]
-    pub async fn new(
-        bind_addr: SocketAddr,
-        datadir: &Path,
+    pub async fn new<R>(
+        config: Config,
         cusf_mainchain: mainchain::ValidatorClient<MainchainTransport>,
-        cusf_mainchain_wallet: Option<
-            mainchain::WalletClient<MainchainTransport>,
+        cusf_mainchain_block_producer: Option<
+            mainchain::BlockProducerClient<MainchainTransport>,
         >,
-        magic_bytes_override: Option<crate::net::peer_message::MagicBytes>,
-        network: Network,
+        rng: &mut R,
         runtime: &tokio::runtime::Runtime,
-        #[cfg(feature = "zmq")] zmq_addr: SocketAddr,
     ) -> Result<Self, Error>
     where
         mainchain::ValidatorClient<MainchainTransport>: Clone,
@@ -81,7 +99,18 @@ where
         <MainchainTransport as tonic::client::GrpcService<
             tonic::body::Body,
         >>::Future: Send,
+        R: CryptoRng,
 {
+        let Config {
+            datadir,
+            bind_addr,
+            magic_bytes_override,
+            network,
+            add_peers,
+            server_names,
+            #[cfg(feature = "zmq")]
+            zmq_addr,
+        } = config;
         let env_path = datadir.join("data.mdb");
         // let _ = std::fs::remove_dir_all(&env_path);
         std::fs::create_dir_all(&env_path)?;
@@ -91,10 +120,10 @@ where
             env_open_opts
                 .map_size(128 * 1024 * 1024 * 1024) // 128 GB
                 .max_dbs(
-                    State::NUM_DBS
-                        + Archive::NUM_DBS
+                    Archive::NUM_DBS
                         + MemPool::NUM_DBS
-                        + Net::NUM_DBS,
+                        + Net::NUM_DBS
+                        + State::NUM_DBS,
                 );
             // Apply LMDB "fast" flags consistent with our benchmark setup:
             // - WRITE_MAP lets us write directly into the memory map instead of
@@ -124,28 +153,31 @@ where
         let zmq_pub_handler = Arc::new(ZmqPubHandler::new(zmq_addr).await?);
         let archive = Archive::new(&env)?;
         let mempool = MemPool::new(&env)?;
-        let (mainchain_task, mainchain_task_response_rx) =
+        let (mainchain_task_handle, mainchain_task_event_rx) =
             MainchainTaskHandle::new(
                 env.clone(),
                 archive.clone(),
                 cusf_mainchain.clone(),
             );
-        let (net, peer_info_rx) = Net::new(
+        let batch_verification_ctxt = BatchVerificationContext::new(rng);
+        let (net, peer_info_rx, dial_known_peers_handle) = Net::new(
+            runtime.handle(),
             &env,
             archive.clone(),
+            batch_verification_ctxt,
             magic_bytes_override,
             network,
             state.clone(),
             bind_addr,
+            add_peers,
+            server_names,
         )?;
-        let cusf_mainchain_wallet =
-            cusf_mainchain_wallet.map(|wallet| Arc::new(Mutex::new(wallet)));
-        let net_task = NetTaskHandle::new(
+        let net_task_handle = NetTaskHandle::new(
             runtime,
             env.clone(),
             archive.clone(),
-            mainchain_task.clone(),
-            mainchain_task_response_rx,
+            mainchain_task_handle.clone(),
+            mainchain_task_event_rx,
             mempool.clone(),
             net.clone(),
             peer_info_rx,
@@ -153,16 +185,23 @@ where
             #[cfg(feature = "zmq")]
             zmq_pub_handler.clone(),
         );
+        let task_handles = TaskHandles {
+            _dial_known_peers: Arc::new(dial_known_peers_handle),
+            mainchain: mainchain_task_handle,
+            net: net_task_handle,
+        };
+        let cusf_mainchain_block_producer = cusf_mainchain_block_producer
+            .map(|block_producer| Arc::new(Mutex::new(block_producer)));
         Ok(Self {
             archive,
+            batch_verification_ctxt,
             cusf_mainchain,
-            cusf_mainchain_wallet,
+            cusf_mainchain_block_producer,
             env,
-            mainchain_task,
             mempool,
             net,
-            net_task,
             state,
+            task_handles,
             #[cfg(feature = "zmq")]
             zmq_pub_handler: zmq_pub_handler.clone(),
         })
@@ -183,6 +222,10 @@ where
         F: FnOnce(&mainchain::ValidatorClient<MainchainTransport>) -> Output,
     {
         f(&self.cusf_mainchain)
+    }
+
+    pub fn dns_resolver(&self) -> &Arc<hickory_resolver::TokioResolver> {
+        &self.net.dns_resolver
     }
 
     /// Invalidate a block.
@@ -328,7 +371,11 @@ where
     ) -> Result<(), Error> {
         {
             let mut rwtxn = self.env.write_txn()?;
-            self.state.validate_transaction(&rwtxn, transaction)?;
+            self.state.validate_transaction(
+                &rwtxn,
+                &self.batch_verification_ctxt,
+                transaction,
+            )?;
             self.mempool.put(&mut rwtxn, transaction)?;
             rwtxn.commit().map_err(RwTxnError::from)?;
         }
@@ -414,7 +461,7 @@ where
         Ok(self.archive.get_header(&rotxn, block_hash)?)
     }
 
-    /// Get the block hash at the specified height in the current chain,
+    /// Get the block hash at the specified height in the active chain,
     /// if it exists
     pub fn try_get_block_hash(
         &self,
@@ -516,7 +563,11 @@ where
             }
             if self
                 .state
-                .validate_transaction(&rwtxn, &transaction)
+                .validate_transaction(
+                    &rwtxn,
+                    &self.batch_verification_ctxt,
+                    &transaction,
+                )
                 .is_err()
             {
                 self.mempool
@@ -636,6 +687,19 @@ where
         }
     }
 
+    pub fn try_get_withdrawal_bundle(
+        &self,
+        m6id: &M6id,
+    ) -> Result<Option<(WithdrawalBundleInfo, WithdrawalBundleStatus)>, Error>
+    {
+        let rotxn = self.env.read_txn()?;
+        let res = self
+            .state
+            .try_get_withdrawal_bundle(&rotxn, m6id)
+            .map_err(state::Error::from)?;
+        Ok(res)
+    }
+
     pub fn try_get_pending_withdrawal_bundle(
         &self,
     ) -> Result<Option<WithdrawalBundle>, Error> {
@@ -654,13 +718,19 @@ where
         Ok(())
     }
 
-    pub fn connect_peer(&self, addr: SocketAddr) -> Result<(), Error> {
-        self.net
-            .connect_peer(self.env.clone(), addr)
-            .map_err(Error::from)
+    pub fn connect_peer(&self, addr: ResolvedPeerAddress) -> Result<(), Error> {
+        let peer_addr = addr.as_peer_address().to_owned();
+        let () =
+            self.net
+                .connect_peer(self.env.clone(), addr)
+                .map_err(|err| crate::net::Error::ConnectPeer {
+                    peer_addr,
+                    source: err,
+                })?;
+        Ok(())
     }
 
-    pub fn forget_peer(&self, addr: &SocketAddr) -> Result<bool, Error> {
+    pub fn forget_peer(&self, addr: &PeerAddress) -> Result<bool, Error> {
         let mut rwtxn = self.env.write_txn().map_err(EnvError::from)?;
         let res = self.net.forget_peer(&mut rwtxn, addr)?;
         rwtxn.commit().map_err(RwTxnError::from)?;
@@ -676,7 +746,8 @@ where
         block_hash: bitcoin::BlockHash,
     ) -> Result<bool, Error> {
         let mainchain_task::Response::AncestorInfos(_, res): mainchain_task::Response = self
-            .mainchain_task
+            .task_handles
+            .mainchain
             .request_oneshot(mainchain_task::Request::AncestorInfos(
                 block_hash,
             ))
@@ -696,10 +767,6 @@ where
         header: &Header,
         body: &Body,
     ) -> Result<bool, Error> {
-        let Some(cusf_mainchain_wallet) = self.cusf_mainchain_wallet.as_ref()
-        else {
-            return Err(Error::NoCusfMainchainWalletClient);
-        };
         let block_hash = header.hash();
         // Store the header, if ancestors exist
         if let Some(parent) = header.prev_side_hash
@@ -712,7 +779,8 @@ where
         }
         // Request mainchain header/infos if they do not exist
         let mainchain_task::Response::AncestorInfos(_, res): mainchain_task::Response = self
-            .mainchain_task
+            .task_handles
+            .mainchain
             .request_oneshot(mainchain_task::Request::AncestorInfos(
                 main_block_hash,
             ))
@@ -733,16 +801,18 @@ where
         // Check BMM
         {
             let rotxn = self.env.read_txn()?;
-            if self.archive.get_bmm_result(
+            match self.archive.get_bmm_result(
                 &rotxn,
                 block_hash,
                 main_block_hash,
-            )? == BmmResult::Failed
-            {
-                tracing::error!(%block_hash,
-                    "Rejecting block {block_hash} due to failing BMM verification",
-                );
-                return Ok(false);
+            )? {
+                BmmResult::Verified => (),
+                BmmResult::Failed => {
+                    tracing::error!(%block_hash,
+                        "Rejecting block {block_hash} due to failing BMM verification",
+                    );
+                    return Ok(false);
+                }
             }
         }
         // Check that ancestor bodies exist, and store body
@@ -779,7 +849,7 @@ where
             block_hash,
             main_block_hash,
         };
-        if !self.net_task.new_tip_ready_confirm(new_tip).await? {
+        if !self.task_handles.net.new_tip_ready_confirm(new_tip).await? {
             tracing::warn!(%block_hash, "Not ready to reorg");
             return Ok(false);
         };
@@ -801,13 +871,29 @@ where
         }
         if let Some((bundle, _)) = bundle {
             let m6id = bundle.compute_m6id();
-            let mut cusf_mainchain_wallet_lock =
-                cusf_mainchain_wallet.lock().await;
-            let () = cusf_mainchain_wallet_lock
-                .broadcast_withdrawal_bundle(bundle.tx())
-                .await?;
-            drop(cusf_mainchain_wallet_lock);
-            tracing::trace!(%m6id, "Broadcast withdrawal bundle");
+            if let Some(cusf_mainchain_block_producer) =
+                self.cusf_mainchain_block_producer.as_ref()
+            {
+                {
+                    let mut cusf_mainchain_block_producer_lock =
+                        cusf_mainchain_block_producer.lock().await;
+                    let () = cusf_mainchain_block_producer_lock
+                        .propose_withdrawal_bundle(bundle.tx())
+                        .await?;
+                }
+                tracing::trace!(%m6id, "Proposed withdrawal bundle");
+            } else {
+                // Without the mainchain's block producer service there is
+                // nowhere to send the bundle, and it stays pending for every
+                // block that follows. Say so, or the withdrawal simply never
+                // completes and nothing explains why.
+                tracing::warn!(
+                    %m6id,
+                    "Withdrawal bundle is pending, but the mainchain node \
+                     does not serve BlockProducerService, so the bundle \
+                     cannot be proposed and the withdrawal cannot complete",
+                );
+            }
         }
         Ok(true)
     }

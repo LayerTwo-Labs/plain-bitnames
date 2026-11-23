@@ -58,6 +58,7 @@ impl PartialSchema for BitcoinTransaction {
         RefOr::T(Schema::Object(obj))
     }
 }
+
 impl ToSchema for BitcoinTransaction {
     fn name() -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Borrowed("bitcoin.Transaction")
@@ -72,6 +73,7 @@ impl PartialSchema for SocketAddr {
         RefOr::T(Schema::Object(obj))
     }
 }
+
 impl ToSchema for SocketAddr {
     fn name() -> std::borrow::Cow<'static, str> {
         std::borrow::Cow::Borrowed("net.SocketAddr")

@@ -28,6 +28,7 @@ plain_bitnames = { path = "../lib", features = ["clap"] }
 plain_bitnames_app_cli = { path = "../cli" }
 plain_bitnames_app_rpc_api = { path = "../rpc-api" }
 poll-promise = { workspace = true, features = ["tokio"] }
+rand = { workspace = true, features = ["thread_rng"] }
 serde = { workspace = true, features = ["derive"] }
 shlex = { workspace = true }
 strum = {  workspace = true, features = ["derive"] }
@@ -49,10 +50,6 @@ uuid = { workspace = true, features = ["v4"] }
 [dependencies.eframe]
 workspace = true
 features = ["glow", "wayland", "web_screen_reader", "x11"]
-
-[dependencies.libes]
-workspace = true
-features = ["AES256-GCM", "ECIES-MAC", "HMAC-SHA256", "x25519"]
 
 [features]
 default = ["zmq"]

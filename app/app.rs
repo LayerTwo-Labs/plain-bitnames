@@ -1,6 +1,8 @@
 use std::{
     collections::{HashMap, HashSet},
+    net::SocketAddr,
     ops::Range,
+    path::PathBuf,
     sync::Arc,
 };
 
@@ -12,13 +14,13 @@ use plain_bitnames::{
     node::{self, Node},
     types::{
         self, Address, AmountOverflowError, BitcoinOutputContent, Body,
-        FilledOutput, GetValue, InPoint, OutPoint, Transaction,
+        Coinbase, FilledOutput, GetValue, InPoint, OutPoint, Transaction,
         hashes::BitName,
         proto::mainchain::{
             self,
             generated::{
-                mining_service_server, validator_service_server,
-                wallet_service_server,
+                block_producer_service_server, mining_service_server,
+                validator_service_server, wallet_service_server,
             },
         },
     },
@@ -30,8 +32,6 @@ use tonic_health::{
     ServingStatus,
     pb::{HealthCheckRequest, health_client::HealthClient},
 };
-
-use crate::cli::Config;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -96,6 +96,7 @@ fn update(
 }
 
 struct ProtoSupport {
+    block_producer: bool,
     miner: bool,
     wallet: bool,
 }
@@ -105,10 +106,25 @@ pub struct BlockTemplate {
     /// Bribe to offer for this block
     pub bribe: bitcoin::Amount,
     pub header: types::Header,
-    pub height: u32,
     pub body: types::Body,
     /// Fees collected by the transactions in the block
     pub fees: bitcoin::Amount,
+}
+
+#[derive(Debug)]
+pub struct Config {
+    pub add_peers: HashSet<plain_bitnames::types::net::PeerAddress>,
+    pub datadir: PathBuf,
+    pub mainchain_grpc_url: url::Url,
+    pub mnemonic_seed_phrase_path: Option<PathBuf>,
+    pub net_addr: SocketAddr,
+    pub network: plain_bitnames::types::Network,
+    pub network_magic_override:
+        Option<plain_bitnames::net::peer_message::MagicBytes>,
+    pub server_names: HashSet<String>,
+    pub wallet_dir: PathBuf,
+    #[cfg(feature = "zmq")]
+    pub zmq_addr: SocketAddr,
 }
 
 #[derive(Clone)]
@@ -179,17 +195,16 @@ impl App {
     async fn check_proto_support(
         transport: tonic::transport::channel::Channel,
     ) -> Result<ProtoSupport, tonic::Status> {
-        let mut health_client = HealthClient::new(transport);
+        let mut client = HealthClient::new(transport);
 
+        let block_producer_service_name =
+            block_producer_service_server::SERVICE_NAME;
         let mining_service_name = mining_service_server::SERVICE_NAME;
         let validator_service_name = validator_service_server::SERVICE_NAME;
         let wallet_service_name = wallet_service_server::SERVICE_NAME;
         // The validator service MUST exist. We therefore error out here directly.
-        if !Self::check_status_serving(
-            &mut health_client,
-            validator_service_name,
-        )
-        .await?
+        if !Self::check_status_serving(&mut client, validator_service_name)
+            .await?
         {
             return Err(tonic::Status::aborted(format!(
                 "{validator_service_name} is not supported in mainchain client",
@@ -197,38 +212,43 @@ impl App {
         }
         tracing::info!("Verified existence of {}", validator_service_name);
 
-        // The mining and wallet services are optional.
+        // The block producer, mining and wallet services are optional.
+        let has_block_producer_service = Self::check_status_serving(
+            &mut client,
+            block_producer_service_name,
+        )
+        .await?;
         let has_mining_service =
-            Self::check_status_serving(&mut health_client, mining_service_name)
+            Self::check_status_serving(&mut client, mining_service_name)
                 .await?;
         let has_wallet_service =
-            Self::check_status_serving(&mut health_client, wallet_service_name)
+            Self::check_status_serving(&mut client, wallet_service_name)
                 .await?;
         tracing::info!(
+            %has_block_producer_service,
             %has_mining_service,
             %has_wallet_service,
-            "Checked existence of {}, {}",
+            "Checked existence of {}, {}, {}",
+            block_producer_service_name,
             mining_service_name,
             wallet_service_name,
         );
         let res = ProtoSupport {
+            block_producer: has_block_producer_service,
             miner: has_mining_service,
             wallet: has_wallet_service,
         };
         Ok(res)
     }
 
-    pub fn new(config: &Config) -> Result<Self, Error> {
+    pub fn new(config: Config) -> Result<Self, Error> {
+        let mut rng = rand::rng();
         // Node launches some tokio tasks for p2p networking, that is why we need a tokio runtime
         // here.
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()?;
-        tracing::info!(
-            "Instantiating wallet with data directory: {}",
-            config.datadir.display()
-        );
-        let wallet = Wallet::new(&config.datadir.join("wallet.mdb"))?;
+        let wallet = Wallet::new(&config.wallet_dir.join("wallet.mdb"))?;
         if let Some(seed_phrase_path) = &config.mnemonic_seed_phrase_path {
             let mnemonic = std::fs::read_to_string(seed_phrase_path)?;
             let () = wallet.set_seed_from_mnemonic(mnemonic.as_str())?;
@@ -244,8 +264,17 @@ impl App {
         .unwrap()
         .concurrency_limit(256)
         .connect_lazy();
-        let (cusf_mainchain, cusf_mainchain_miner, cusf_mainchain_wallet) = {
-            let ProtoSupport { miner, wallet } = runtime
+        let (
+            cusf_mainchain,
+            cusf_mainchain_miner,
+            cusf_mainchain_wallet,
+            cusf_mainchain_block_producer,
+        ) = {
+            let ProtoSupport {
+                block_producer,
+                miner,
+                wallet,
+            } = runtime
                 .block_on(Self::check_proto_support(transport.clone()))
                 .map_err(|err| Error::VerifyMainchainServices {
                     url: Box::new(config.mainchain_grpc_url.clone()),
@@ -261,8 +290,18 @@ impl App {
             } else {
                 None
             };
+            let block_producer_client = if block_producer {
+                Some(mainchain::BlockProducerClient::new(transport.clone()))
+            } else {
+                None
+            };
             let validator_client = mainchain::ValidatorClient::new(transport);
-            (validator_client, mining_client, wallet_client)
+            (
+                validator_client,
+                mining_client,
+                wallet_client,
+                block_producer_client,
+            )
         };
         let miner = cusf_mainchain_wallet
             .clone()
@@ -277,15 +316,20 @@ impl App {
         let local_pool = LocalPoolHandle::new(1);
         tracing::debug!("Initializing node...");
         let node = runtime.block_on(Node::new(
-            config.net_addr,
-            &config.datadir,
+            plain_bitnames::node::Config {
+                add_peers: config.add_peers,
+                bind_addr: config.net_addr,
+                datadir: config.datadir,
+                magic_bytes_override: config.network_magic_override,
+                network: config.network,
+                server_names: config.server_names,
+                #[cfg(feature = "zmq")]
+                zmq_addr: config.zmq_addr,
+            },
             cusf_mainchain,
-            cusf_mainchain_wallet,
-            config.network_magic_override,
-            config.network,
+            cusf_mainchain_block_producer,
+            &mut rng,
             &runtime,
-            #[cfg(feature = "zmq")]
-            config.zmq_addr,
         ))?;
         let utxos = {
             let mut utxos = wallet.get_utxos()?;
@@ -328,7 +372,7 @@ impl App {
     }
 
     pub fn sign_and_send(&self, tx: Transaction) -> Result<(), Error> {
-        let authorized_transaction = self.wallet.authorize(tx)?;
+        let authorized_transaction = self.wallet.authorize(rand::rng(), tx)?;
         self.submit_transaction(&authorized_transaction)
     }
 
@@ -579,14 +623,20 @@ impl App {
             const NUM_TRANSACTIONS: usize = 1000;
             let (txs, tx_fees) =
                 self.node.get_transactions(NUM_TRANSACTIONS)?;
-            let coinbase = match tx_fees {
-                bitcoin::Amount::ZERO => Vec::new(),
-                _ => vec![types::Output::new(
-                    self.wallet.get_new_address()?,
-                    types::OutputContent::Bitcoin(BitcoinOutputContent(
-                        tx_fees,
-                    )),
-                )],
+            let coinbase = {
+                let outputs = match tx_fees {
+                    bitcoin::Amount::ZERO => Vec::new(),
+                    _ => vec![types::Output::new(
+                        self.wallet.get_new_address()?,
+                        types::OutputContent::Bitcoin(BitcoinOutputContent(
+                            tx_fees,
+                        )),
+                    )],
+                };
+                Coinbase {
+                    memo: Vec::new(),
+                    outputs: outputs.into(),
+                }
             };
             let merkle_root = Body::compute_merkle_root(&coinbase, &txs)?;
             let body = Body::new(
@@ -607,7 +657,7 @@ impl App {
             });
             (bribe, header, body, tx_fees)
         } else {
-            let coinbase = Vec::new();
+            let coinbase = Coinbase::default();
             let merkle_root = Body::compute_merkle_root::<
                 types::FilledTransaction,
             >(&coinbase, &[])?;
@@ -620,14 +670,9 @@ impl App {
             let bribe = Self::EMPTY_BLOCK_BMM_BRIBE;
             (bribe, header, body, bitcoin::Amount::ZERO)
         };
-        let height = match prev_side_hash {
-            None => 0,
-            Some(prev_side_hash) => self.node.get_height(prev_side_hash)? + 1,
-        };
         Ok(BlockTemplate {
             bribe,
             header,
-            height,
             body,
             fees,
         })
@@ -647,11 +692,7 @@ impl App {
         block: types::Block,
         main_block_hash: bitcoin::BlockHash,
     ) -> Result<bool, Error> {
-        let types::Block {
-            header,
-            height: _,
-            body,
-        } = block;
+        let types::Block { header, body } = block;
         let accepted = self
             .node
             .submit_block(main_block_hash, &header, &body)
@@ -673,7 +714,6 @@ impl App {
         let BlockTemplate {
             bribe,
             header,
-            height: _,
             body,
             fees: _,
         } = self.build_block_template(fee).await?;
