@@ -304,7 +304,11 @@ mod test {
                     output::Content::Bitcoin(output::BitcoinContent(value));
                 let mut memo = vec![0; 256];
                 rng.fill_bytes(&mut memo);
-                Output { address, content, memo }
+                Output {
+                    address,
+                    content,
+                    memo,
+                }
             })
             .collect::<Vec<_>>()
             .into();

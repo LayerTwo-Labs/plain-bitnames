@@ -19,7 +19,7 @@ use plain_bitnames::types::{
     ecies,
     keys::PublicKey,
     net::{Peer, PeerAddress},
-    wallet::Balance,
+    wallet::{Balance, TransferDests},
 };
 use plain_bitnames_app_rpc_api::{
     self as rpc_api, node::TxInfo, typewit::const_marker::Bool,
@@ -296,8 +296,16 @@ impl<const ENABLE_PRIVATE_API: bool> rpc_api::node::RpcServer
     async fn get_transaction(
         &self,
         txid: Txid,
-    ) -> RpcResult<Option<Transaction>> {
-        self.app.node.try_get_transaction(txid).map_err(custom_err)
+    ) -> RpcResult<Option<rpc_api::node::GetTransactionResponse>> {
+        let res =
+            self.app
+                .node
+                .try_get_transaction(txid)
+                .map_err(custom_err)?
+                .map(|(tx, block_hash)| {
+                    rpc_api::node::GetTransactionResponse { tx, block_hash }
+                });
+        Ok(res)
     }
 
     async fn get_transaction_info(
@@ -488,6 +496,36 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
                 Amount::from_sat(fee_sats),
                 memo,
             )
+            .map_err(custom_err)?;
+        let txid = tx.txid();
+        let () = self.app.sign_and_send(tx).map_err(custom_err)?;
+        Ok(txid)
+    }
+
+    async fn create_transfer_many(
+        &self,
+        dests: TransferDests,
+        fee_sats: u64,
+        memo: Option<String>,
+    ) -> RpcResult<Txid> {
+        let memo = match memo {
+            None => None,
+            Some(memo) => {
+                let hex = const_hex::decode(memo).map_err(custom_err)?;
+                Some(hex)
+            }
+        };
+        let dests = dests
+            .0
+            .into_iter()
+            .map(|(address, value_sats)| {
+                (address, Amount::from_sat(value_sats))
+            })
+            .collect();
+        let tx = self
+            .app
+            .wallet
+            .create_transaction_many(&dests, Amount::from_sat(fee_sats), memo)
             .map_err(custom_err)?;
         let txid = tx.txid();
         let () = self.app.sign_and_send(tx).map_err(custom_err)?;

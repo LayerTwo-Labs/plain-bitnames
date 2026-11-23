@@ -392,7 +392,7 @@ pub mod node {
         async fn get_transaction(
             &self,
             txid: Txid,
-        ) -> RpcResult<Option<Transaction>>;
+        ) -> RpcResult<Option<GetTransactionResponse>>;
 
         /// Get information about a transaction in the current chain
         #[method(name = "get_transaction_info")]
@@ -482,7 +482,7 @@ pub mod wallet {
         hashes::BitName,
         keys::PublicKey,
         transaction::Outputs,
-        wallet::Balance,
+        wallet::{Balance, TransferDests},
     };
     use serde::{Deserialize, Serialize};
     use utoipa::ToSchema;
@@ -534,6 +534,16 @@ pub mod wallet {
             &self,
             dest: Address,
             value_sats: u64,
+            fee_sats: u64,
+            memo: Option<String>,
+        ) -> RpcResult<Txid>;
+
+        /// Create a tx that transfers funds to each address in `dests`,
+        /// which maps an address to a value in sats.
+        #[method(name = "create_transfer_many")]
+        async fn create_transfer_many(
+            &self,
+            dests: TransferDests,
             fee_sats: u64,
             memo: Option<String>,
         ) -> RpcResult<Txid>;

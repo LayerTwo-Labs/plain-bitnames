@@ -46,8 +46,8 @@ async fn setup(
     };
     let sidechain_sender = PostSetup::setup(
         Init {
-            bitnames_app: bin_paths.bitnames()?.clone(),
             data_dir_suffix: Some("sender".to_owned()),
+            ..Init::new(bin_paths.bitnames()?.clone())
         },
         &enforcer_post_setup,
         res_tx.clone(),
@@ -56,8 +56,8 @@ async fn setup(
     tracing::info!("Setup BitNames send node successfully");
     let sidechain_syncer = PostSetup::setup(
         Init {
-            bitnames_app: bin_paths.bitnames()?.clone(),
             data_dir_suffix: Some("syncer".to_owned()),
+            ..Init::new(bin_paths.bitnames()?.clone())
         },
         &enforcer_post_setup,
         res_tx,

@@ -54,10 +54,7 @@ async fn block_template_task(
     let mut enforcer_post_setup =
         setup(&bin_paths.others, res_tx.clone()).await?;
     let sidechain = PostSetup::setup(
-        Init {
-            bitnames_app: bin_paths.bitnames()?.clone(),
-            data_dir_suffix: None,
-        },
+        Init::new(bin_paths.bitnames()?.clone()),
         &enforcer_post_setup,
         res_tx,
     )

@@ -431,6 +431,9 @@ pub struct ConnectionHandle {
     pub(in crate::net) received_msg_successfully: Arc<AtomicBool>,
     /// Atomic representation of [`PeerConnectionStatus`]
     pub(in crate::net) status: Arc<AtomicStatus>,
+    /// `true` if this node dialed the peer, `false` if the peer connected
+    /// to this node
+    outbound: bool,
     /// Push messages from connection task / net task / node
     pub internal_message_tx: mpsc::UnboundedSender<InternalMessage>,
 }
@@ -444,6 +447,12 @@ impl ConnectionHandle {
     pub fn received_msg_successfully(&self) -> bool {
         self.received_msg_successfully
             .load(atomic::Ordering::SeqCst)
+    }
+
+    /// `true` if this node dialed the peer, `false` if the peer connected
+    /// to this node
+    pub fn is_outbound(&self) -> bool {
+        self.outbound
     }
 }
 
@@ -505,6 +514,7 @@ pub fn handle(
         task,
         received_msg_successfully,
         status: Arc::new(AtomicStatus::from(status)),
+        outbound: false,
         internal_message_tx,
     };
     (connection_handle, info_rx)
@@ -563,17 +573,19 @@ pub fn connect(
         task,
         received_msg_successfully,
         status,
+        outbound: true,
         internal_message_tx,
     };
     (connection_handle, info_rx)
 }
 
 #[cfg(test)]
-mod test {
-    use std::num::NonZeroUsize;
+mod tests {
+    use std::{collections::HashSet, num::NonZeroUsize, time::Duration};
 
+    use super::Connection;
     use crate::{
-        net::peer::{Connection, message::GetBlockRequest},
+        net::peer::message::{GetBlockRequest, GetHeadersRequest},
         types::BlockHash,
     };
 
@@ -596,6 +608,29 @@ mod test {
             "10MB block response timeout {timeout:?} must exceed the heartbeat \
              timeout {:?}",
             Connection::HEARTBEAT_TIMEOUT_INTERVAL,
+        );
+    }
+
+    /// The height attached to a `GetHeaders` request originates from a peer
+    /// heartbeat, so an absurd height must not be able to inflate the read
+    /// budget (and with it, the response read timeout) without bound.
+    #[test]
+    fn get_headers_read_response_limit_is_bounded() {
+        let get_headers = GetHeadersRequest {
+            start: HashSet::new(),
+            end: BlockHash([0u8; 32]),
+            height: Some(u32::MAX),
+            peer_state_id: None,
+        };
+        let limit = get_headers.read_response_limit();
+        assert!(
+            limit.get() <= 64 * 1024 * 1024,
+            "GetHeaders read limit {limit} must stay bounded",
+        );
+        let timeout = Connection::response_read_timeout(limit);
+        assert!(
+            timeout <= Duration::from_secs(60 * 60),
+            "GetHeaders response read timeout {timeout:?} must stay bounded",
         );
     }
 

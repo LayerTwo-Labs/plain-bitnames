@@ -6,12 +6,12 @@ use std::{
     sync::Arc,
 };
 
-use fallible_iterator::{FallibleIterator as _, IteratorExt};
-use futures::{StreamExt as _, TryFutureExt as _};
+use fallible_iterator::{FallibleIterator as _, IteratorExt as _};
+use futures::StreamExt as _;
 use parking_lot::RwLock;
 use plain_bitnames::{
     miner::{self, Miner},
-    node::{self, Node},
+    node::{self, FatalErrorTx, Node},
     types::{
         self, Address, AmountOverflowError, BitcoinOutputContent, Body,
         Coinbase, FilledOutput, GetValue, InPoint, OutPoint, Transaction,
@@ -19,7 +19,9 @@ use plain_bitnames::{
         proto::mainchain::{
             self,
             generated::{
-                block_producer_service_server, mining_service_server,
+                GetChainTipRequest, block_producer_service_server,
+                mining_service_server,
+                validator_service_client::ValidatorServiceClient,
                 validator_service_server, wallet_service_server,
             },
         },
@@ -43,7 +45,9 @@ pub enum Error {
     CusfMainchain(#[from] plain_bitnames::types::proto::Error),
     #[error("io error")]
     Io(#[from] std::io::Error),
-    #[error("miner error: {0}")]
+    #[error("Invalid mainchain gRPC TLS config")]
+    MainchainTls(#[source] tonic::transport::Error),
+    #[error("miner error")]
     Miner(#[from] miner::Error),
     #[error("node error")]
     Node(#[source] Box<node::Error>),
@@ -66,7 +70,10 @@ impl From<node::Error> for Error {
     }
 }
 
-fn update_wallet(node: &Node, wallet: &Wallet) -> Result<(), Error> {
+fn update_wallet(
+    node: &Node<MainchainTransport>,
+    wallet: &Wallet,
+) -> Result<(), Error> {
     tracing::trace!("starting wallet update");
     let addresses = wallet.get_addresses()?;
     let utxos = node.get_utxos_by_addresses(&addresses)?;
@@ -84,7 +91,7 @@ fn update_wallet(node: &Node, wallet: &Wallet) -> Result<(), Error> {
 
 /// Update utxos & wallet
 fn update(
-    node: &Node,
+    node: &Node<MainchainTransport>,
     utxos: &mut HashMap<OutPoint, FilledOutput>,
     wallet: &Wallet,
 ) -> Result<(), Error> {
@@ -116,6 +123,8 @@ pub struct Config {
     pub add_peers: HashSet<plain_bitnames::types::net::PeerAddress>,
     pub datadir: PathBuf,
     pub mainchain_grpc_url: url::Url,
+    /// Extra CA certificate (PEM) to trust for an `https` mainchain URL
+    pub mainchain_grpc_ca_cert: Option<PathBuf>,
     pub mnemonic_seed_phrase_path: Option<PathBuf>,
     pub net_addr: SocketAddr,
     pub network: plain_bitnames::types::Network,
@@ -127,11 +136,15 @@ pub struct Config {
     pub zmq_addr: SocketAddr,
 }
 
+/// Connection to the mainchain node
+pub type MainchainTransport =
+    crate::path_prefix::PathPrefix<tonic::transport::Channel>;
+
 #[derive(Clone)]
 pub struct App {
-    pub node: Arc<Node>,
+    pub node: Arc<Node<MainchainTransport>>,
     pub wallet: Wallet,
-    pub miner: Option<Arc<TokioRwLock<Miner>>>,
+    pub miner: Option<Arc<TokioRwLock<Miner<MainchainTransport>>>>,
     pub utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
     pub runtime: Arc<tokio::runtime::Runtime>,
     task: Arc<JoinHandle<()>>,
@@ -140,7 +153,7 @@ pub struct App {
 
 impl App {
     async fn task(
-        node: Arc<Node>,
+        node: Arc<Node<MainchainTransport>>,
         utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
         wallet: Wallet,
     ) -> Result<(), Error> {
@@ -152,19 +165,21 @@ impl App {
     }
 
     fn spawn_task(
-        node: Arc<Node>,
+        node: Arc<Node<MainchainTransport>>,
         utxos: Arc<RwLock<HashMap<OutPoint, FilledOutput>>>,
         wallet: Wallet,
+        fatal_error_tx: FatalErrorTx,
     ) -> JoinHandle<()> {
-        spawn(Self::task(node, utxos, wallet).unwrap_or_else(|err| {
-            let err = anyhow::Error::from(err);
-            tracing::error!("{err:#}")
-        }))
+        spawn(node::supervise(
+            "Wallet",
+            Self::task(node, utxos, wallet),
+            fatal_error_tx,
+        ))
     }
 
     /// Check that a service has `Serving` status via gRPC health
     async fn check_status_serving(
-        client: &mut HealthClient<tonic::transport::Channel>,
+        client: &mut HealthClient<MainchainTransport>,
         service_name: &str,
     ) -> Result<bool, tonic::Status> {
         let health_check_request = HealthCheckRequest {
@@ -193,9 +208,9 @@ impl App {
     /// Returns `Ok(_)` iff validator service is available, and error if validator
     /// service is unavailable.
     async fn check_proto_support(
-        transport: tonic::transport::channel::Channel,
+        transport: MainchainTransport,
     ) -> Result<ProtoSupport, tonic::Status> {
-        let mut client = HealthClient::new(transport);
+        let mut client = HealthClient::new(transport.clone());
 
         let block_producer_service_name =
             block_producer_service_server::SERVICE_NAME;
@@ -203,12 +218,34 @@ impl App {
         let validator_service_name = validator_service_server::SERVICE_NAME;
         let wallet_service_name = wallet_service_server::SERVICE_NAME;
         // The validator service MUST exist. We therefore error out here directly.
-        if !Self::check_status_serving(&mut client, validator_service_name)
-            .await?
+        match Self::check_status_serving(&mut client, validator_service_name)
+            .await
         {
-            return Err(tonic::Status::aborted(format!(
-                "{validator_service_name} is not supported in mainchain client",
-            )));
+            Ok(true) => (),
+            Ok(false) => {
+                return Err(tonic::Status::aborted(format!(
+                    "{validator_service_name} is not supported in mainchain client",
+                )));
+            }
+            // Some proxies expose only the CUSF services. Call the validator
+            // directly instead; the optional services count as missing.
+            Err(health_err) => {
+                tracing::warn!(
+                    "Mainchain health service unavailable ({health_err}), calling {validator_service_name} directly"
+                );
+                let _tip = ValidatorServiceClient::new(transport)
+                    .get_chain_tip(GetChainTipRequest {})
+                    .await?;
+                tracing::info!(
+                    "Verified existence of {}",
+                    validator_service_name
+                );
+                return Ok(ProtoSupport {
+                    block_producer: false,
+                    miner: false,
+                    wallet: false,
+                });
+            }
         }
         tracing::info!("Verified existence of {}", validator_service_name);
 
@@ -241,7 +278,10 @@ impl App {
         Ok(res)
     }
 
-    pub fn new(config: Config) -> Result<Self, Error> {
+    pub fn new(
+        config: Config,
+        fatal_error_tx: FatalErrorTx,
+    ) -> Result<Self, Error> {
         let mut rng = rand::rng();
         // Node launches some tokio tasks for p2p networking, that is why we need a tokio runtime
         // here.
@@ -258,12 +298,27 @@ impl App {
             "Connecting to mainchain"
         );
         let rt_guard = runtime.enter();
-        let transport = tonic::transport::channel::Channel::from_shared(
+        let mut endpoint = tonic::transport::channel::Channel::from_shared(
             config.mainchain_grpc_url.to_string(),
         )
         .unwrap()
-        .concurrency_limit(256)
-        .connect_lazy();
+        .concurrency_limit(256);
+        if config.mainchain_grpc_url.scheme() == "https" {
+            let mut tls =
+                tonic::transport::ClientTlsConfig::new().with_webpki_roots();
+            if let Some(path) = &config.mainchain_grpc_ca_cert {
+                tls = tls.ca_certificate(
+                    tonic::transport::Certificate::from_pem(std::fs::read(
+                        path,
+                    )?),
+                );
+            }
+            endpoint = endpoint.tls_config(tls).map_err(Error::MainchainTls)?;
+        }
+        let transport = crate::path_prefix::PathPrefix::new(
+            endpoint.connect_lazy(),
+            config.mainchain_grpc_url.path(),
+        );
         let (
             cusf_mainchain,
             cusf_mainchain_miner,
@@ -330,6 +385,7 @@ impl App {
             cusf_mainchain_block_producer,
             &mut rng,
             &runtime,
+            fatal_error_tx.clone(),
         ))?;
         let utxos = {
             let mut utxos = wallet.get_utxos()?;
@@ -343,8 +399,12 @@ impl App {
         };
         let node = Arc::new(node);
         let miner = miner.map(|miner| Arc::new(TokioRwLock::new(miner)));
-        let task =
-            Self::spawn_task(node.clone(), utxos.clone(), wallet.clone());
+        let task = Self::spawn_task(
+            node.clone(),
+            utxos.clone(),
+            wallet.clone(),
+            fatal_error_tx,
+        );
         drop(rt_guard);
         Ok(Self {
             node,
@@ -626,8 +686,10 @@ impl App {
             let coinbase = {
                 let outputs = match tx_fees {
                     bitcoin::Amount::ZERO => Vec::new(),
+                    // A template is built on every poll and mostly thrown
+                    // away, so it must not derive an address each time.
                     _ => vec![types::Output::new(
-                        self.wallet.get_new_address()?,
+                        self.wallet.get_or_generate_last_address()?,
                         types::OutputContent::Bitcoin(BitcoinOutputContent(
                             tx_fees,
                         )),
@@ -790,7 +852,13 @@ impl App {
 }
 
 impl Drop for App {
+    // If only one reference exists (ie. within self), abort the wallet update
+    // task. A dropped clone must not stop the task the other clones use.
     fn drop(&mut self) {
-        self.task.abort()
+        // use `Arc::get_mut` since `Arc::into_inner` requires ownership of the
+        // Arc, and cloning would increase the reference count
+        if let Some(task) = Arc::get_mut(&mut self.task) {
+            task.abort()
+        }
     }
 }

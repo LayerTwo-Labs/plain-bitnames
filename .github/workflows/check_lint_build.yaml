@@ -223,10 +223,29 @@ jobs:
           export BIP300301_ENFORCER='${{ runner.temp }}/deps/bip300301-enforcer'
           export BITCOIND='${{ runner.temp }}/deps/bitcoin-patched/bitcoind'
           export BITCOIND_UNPATCHED='${{ runner.temp }}/deps/bitcoin-unpatched/bitcoind'
-          export BITCOIN_CLI='${{ runner.temp }}/deps/bitcoin-patched/bitcoin-cli'
-          export ELECTRS='${{ runner.temp }}/electrs/target/release/electrs'
           export BITNAMES_APP='target/debug/plain_bitnames_app'
+          export ELECTRS='${{ runner.temp }}/electrs/target/release/electrs'
+          # Each test leaks a TempDir holding per-component stdout/stderr
+          # (bitnames and the enforcer run at trace level). Point TMPDIR at a
+          # known directory so the "Upload integration test logs" step can
+          # collect them as artifacts when a test fails.
+          export TMPDIR="$RUNNER_TEMP/it-logs"
+          mkdir -p "$TMPDIR"
           target/debug/examples/integration_tests
+
+      - name: Upload integration test logs
+        # Only on failure: the leaked TempDirs are what we need to diagnose
+        # flakes. Restricted to log files so we don't upload bitcoind
+        # block/chainstate data.
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-test-logs
+          path: |
+            ${{ runner.temp }}/it-logs/**/*.txt
+            ${{ runner.temp }}/it-logs/**/*.log
+          retention-days: 14
+          if-no-files-found: warn
 
   test-build-release:
     strategy:

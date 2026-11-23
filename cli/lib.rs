@@ -20,6 +20,7 @@ use plain_bitnames_types::{
     THIS_SIDECHAIN, Txid,
     authorization::{Dst, Signature},
     net::PeerAddress,
+    wallet::TransferDests,
 };
 use tracing_subscriber::layer::SubscriberExt as _;
 use url::Url;
@@ -68,6 +69,14 @@ pub enum Command {
         dest: Address,
         #[arg(long)]
         value_sats: u64,
+        #[arg(long)]
+        fee_sats: u64,
+    },
+    /// Create a tx that transfers funds to each address in a JSON map of
+    /// address to value in sats, such as `{"<address>": 1000}`
+    CreateTransferMany {
+        #[arg(value_parser = JsonParser::<TransferDests>::parse)]
+        dests: TransferDests,
         #[arg(long)]
         fee_sats: u64,
     },
@@ -370,6 +379,12 @@ where
         } => {
             let txid = rpc_client
                 .create_transfer(dest, value_sats, fee_sats, None)
+                .await?;
+            format!("{txid}")
+        }
+        Command::CreateTransferMany { dests, fee_sats } => {
+            let txid = rpc_client
+                .create_transfer_many(dests, fee_sats, None)
                 .await?;
             format!("{txid}")
         }
