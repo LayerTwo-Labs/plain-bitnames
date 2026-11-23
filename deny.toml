@@ -88,6 +88,8 @@ ignore = [
     { id = "RUSTSEC-2026-0404", reason = "Temporary ignore until connectrpc updates zstd to >= 0.14.0" },
     { id = "RUSTSEC-2026-0405", reason = "Temporary ignore until connectrpc updates zstd to >= 0.14.0" },
     { id = "RUSTSEC-2026-0406", reason = "Temporary ignore until connectrpc updates zstd to >= 0.14.0" },
+    { id = "RUSTSEC-2026-0459", reason = "Temporary ignore until bdk_chain updates rusqlite to >= 0.39.0" },
+    { id = "RUSTSEC-2026-0543", reason = "Temporary ignore until cusf-enforcer-mempool migrates to jiff" },
 ]
 # If this is true, then cargo deny will use the git executable to fetch advisory database.
 # If this is false, then it uses a built-in git library.
