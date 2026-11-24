@@ -2,7 +2,7 @@
 
 use aes_gcm::{KeyInit as _, aead::Aead as _};
 use curve25519_dalek::RistrettoPoint;
-use hkdf::hmac::{self, Hmac, KeyInit as _, Mac as _};
+use hkdf::hmac::{self, Hmac, Mac as _};
 use rand::CryptoRng;
 use sha2::Sha256;
 

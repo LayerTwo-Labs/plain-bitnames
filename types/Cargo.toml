@@ -1,7 +1,7 @@
 [build-dependencies]
 
 [dependencies]
-aes-gcm = { workspace = true, features = ["aes", "alloc", "std"] }
+aes-gcm = { workspace = true, features = ["aes", "alloc"] }
 bech32 = { workspace = true }
 bincode = { workspace = true }
 bitcoin = { workspace = true, features = ["serde"] }
