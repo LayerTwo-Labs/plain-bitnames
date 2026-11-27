@@ -1,22 +1,168 @@
 //! Connect and disconnect blocks
 
-use rayon::prelude::*;
+use fallible_iterator::FallibleIterator as _;
+use nonempty::NonEmpty;
+use rayon::prelude::ParallelSliceMut as _;
 use sneed::{RoTxn, RwTxn};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::{
-    state::{Error, PrevalidatedBlock, State, error},
+    state::{
+        Error, PrevalidatedBlock, State, bitnames::PrunedBitNameReservation,
+        error,
+    },
     types::{
-        AmountOverflowError, Body, FilledOutput, FilledOutputContent,
-        FilledTransaction, GetAddress as _, GetValue as _, Header, InPoint,
-        MerkleRoot, OutPoint, OutPointKey, OutputContent, SpentOutput, TxData,
+        AmountOverflowError, BitName, BlockHash, Body, FilledOutput,
+        FilledOutputContent, FilledTransaction, GetAddress as _, GetValue as _,
+        Header, InPoint, MerkleRoot, OutPoint, OutPointKey, OutputContent,
+        SpentOutput, TxData,
         authorization::{self, BatchVerificationContext},
+        constants,
+        state::BitNameReservationPosition,
     },
 };
 
 /// Calculate total number of inputs across all transactions in a block body
 fn calculate_total_inputs(body: &Body) -> usize {
     body.transactions.iter().map(|t| t.inputs.len()).sum()
+}
+
+fn validate_unique_bitname_registrations(body: &Body) -> Result<(), Error> {
+    let mut names = HashSet::new();
+    for name_hash in body
+        .transactions
+        .iter()
+        .filter_map(|tx| tx.registration_name_hash())
+    {
+        if !names.insert(name_hash) {
+            return Err(Error::AmbiguousBitNameRegistration { name_hash });
+        }
+    }
+    Ok(())
+}
+
+/// Find the incumbent UTXO replaced by a registration challenge, and the
+/// inpoint of the reservation that authorizes the challenge.
+fn replaced_bitname_registration(
+    state: &State,
+    rotxn: &RoTxn,
+    filled_tx: &FilledTransaction,
+    bitname: &BitName,
+) -> Result<Option<(OutPoint, FilledOutput, InPoint)>, Error> {
+    if state.bitnames.try_get_bitname(rotxn, bitname)?.is_none() {
+        return Ok(None);
+    }
+    let outpoint = state
+        .bitnames
+        .try_get_bitname_outpoint(rotxn, bitname)?
+        .ok_or(error::BitName::MissingRegistrationUtxo { bitname: *bitname })?;
+    let output = state
+        .utxos
+        .try_get(rotxn, &OutPointKey::from(&outpoint))?
+        .ok_or(error::NoUtxo { outpoint })?;
+    let implied_commitment = filled_tx
+        .implied_reservation_commitment()
+        .expect("a registration should have an implied commitment");
+    let vin = filled_tx
+        .spent_inputs()
+        .enumerate()
+        .find_map(|(vin, (_, output))| {
+            let (_, commitment) = output.reservation_data()?;
+            (*commitment == implied_commitment).then_some(vin as u32)
+        })
+        .ok_or(error::BitName::NoReservationForRegistration {
+            bitname: *bitname,
+        })?;
+    let inpoint = InPoint::Regular {
+        txid: filled_tx.txid(),
+        vin,
+    };
+    Ok(Some((outpoint, output, inpoint)))
+}
+
+fn prune_expired_bitname_reservations(
+    state: &State,
+    rwtxn: &mut RwTxn,
+    block_hash: &BlockHash,
+    main_height: u32,
+) -> Result<(), Error> {
+    let Some(max_reservation_height) =
+        main_height.checked_sub(constants::MAX_RESERVATION_AGE)
+    else {
+        return Ok(());
+    };
+    let expired_outpoints = state
+        .bitnames
+        .reservation_outpoints_through_initial_mainchain_height(
+            rwtxn,
+            max_reservation_height,
+        )?;
+    let mut pruned: Option<NonEmpty<_>> = None;
+    expired_outpoints
+        .map_err(Error::from)
+        .for_each(|outpoint| {
+            let output = state
+                .utxos
+                .try_get(rwtxn, &OutPointKey::from(&outpoint))?
+                .ok_or(error::NoUtxo { outpoint })?;
+            let (reservation_txid, _) = output
+                .reservation_data()
+                .expect("expiry index entries should refer to reservations");
+            let Some(position) = state
+                .bitnames
+                .try_get_reservation_heights(rwtxn, reservation_txid)?
+            else {
+                return Err(error::BitName::MissingReservation {
+                    txid: *reservation_txid,
+                }
+                .into());
+            };
+            let pruned_reservation = PrunedBitNameReservation {
+                outpoint,
+                output,
+                heights: position,
+            };
+            match pruned.as_mut() {
+                Some(pruned) => pruned.push(pruned_reservation),
+                None => pruned = Some(NonEmpty::new(pruned_reservation)),
+            }
+            Ok(())
+        })?;
+    if let Some(pruned) = pruned {
+        for reservation in &pruned {
+            let outpoint_key = OutPointKey::from(&reservation.outpoint);
+            if !state.utxos.delete(rwtxn, &outpoint_key)? {
+                return Err(error::NoUtxo {
+                    outpoint: reservation.outpoint,
+                }
+                .into());
+            }
+        }
+        let () = state
+            .bitnames
+            .put_pruned_reservations(rwtxn, block_hash, pruned)?;
+    }
+    Ok(())
+}
+
+fn restore_pruned_bitname_reservations(
+    state: &State,
+    rwtxn: &mut RwTxn,
+    block_hash: &crate::types::BlockHash,
+) -> Result<(), Error> {
+    if let Some(pruned) = state
+        .bitnames()
+        .restore_pruned_reservations(rwtxn, block_hash)?
+    {
+        for reservation in pruned.into_iter().rev() {
+            state.utxos.put(
+                rwtxn,
+                &OutPointKey::from(&reservation.outpoint),
+                &reservation.output,
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// Validate a block, returning the merkle root and fees
@@ -33,6 +179,7 @@ pub fn validate(
     if body_size > Body::MAX_SIZE {
         return Err(Error::BodyTooLarge);
     }
+    let () = validate_unique_bitname_registrations(body)?;
 
     let tip_hash = state.try_get_tip(rotxn)?;
     if header.prev_side_hash != tip_hash {
@@ -142,6 +289,7 @@ pub fn prevalidate(
     if body_size > Body::MAX_SIZE {
         return Err(Error::BodyTooLarge);
     }
+    let () = validate_unique_bitname_registrations(body)?;
 
     let tip_hash = state.try_get_tip(rotxn)?;
     if header.prev_side_hash != tip_hash {
@@ -241,6 +389,7 @@ pub fn prevalidate(
         total_fees,
         coinbase_value,
         next_height,
+        prev_main_height,
     })
 }
 
@@ -255,6 +404,7 @@ pub fn connect_prevalidated(
 ) -> Result<MerkleRoot, Error> {
     // Use precomputed height and merkle root (validation already done in prevalidate)
     let height = prevalidated.next_height;
+    let prev_main_height = prevalidated.prev_main_height;
     let merkle_root = prevalidated.computed_merkle_root;
     let coinbase_txid = header.compute_coinbase_txid();
 
@@ -289,10 +439,11 @@ pub fn connect_prevalidated(
     }
 
     // Process transactions using precomputed filled_transactions
-    for (transaction, filled_tx) in body
+    for (tx_index, (transaction, filled_tx)) in body
         .transactions
         .iter()
         .zip(&prevalidated.filled_transactions)
+        .enumerate()
     {
         let txid = filled_tx.txid();
         // Accumulate input deletes and STXO puts
@@ -302,6 +453,18 @@ pub fn connect_prevalidated(
                 .utxos
                 .try_get(rwtxn, &key)?
                 .ok_or(error::NoUtxo { outpoint: *input })?;
+            let () = state
+                .bitnames
+                .delete_reservation_outpoint_at_initial_height(
+                    rwtxn,
+                    input,
+                    &spent_output,
+                )?;
+            let () = state.bitnames.delete_bitname_outpoint(
+                rwtxn,
+                input,
+                &spent_output,
+            )?;
             let spent_output = SpentOutput {
                 output: spent_output,
                 inpoint: InPoint::Regular {
@@ -311,6 +474,26 @@ pub fn connect_prevalidated(
             };
             utxo_deletes.insert(key, ());
             stxo_puts.insert(key, spent_output);
+        }
+
+        let replaced_registration = match &transaction.data {
+            Some(TxData::BitNameRegistration { name_hash, .. }) => {
+                replaced_bitname_registration(
+                    state, rwtxn, filled_tx, name_hash,
+                )?
+            }
+            _ => None,
+        };
+        let replaced_outpoint = replaced_registration
+            .as_ref()
+            .map(|(outpoint, _, _)| *outpoint);
+        if let Some((outpoint, output, inpoint)) = replaced_registration {
+            let () = state
+                .bitnames
+                .delete_bitname_outpoint(rwtxn, &outpoint, &output)?;
+            let key = OutPointKey::from(&outpoint);
+            utxo_deletes.insert(key, ());
+            stxo_puts.insert(key, SpentOutput { output, inpoint });
         }
 
         // Accumulate output UTXO puts
@@ -330,7 +513,16 @@ pub fn connect_prevalidated(
         match &transaction.data {
             None => (),
             Some(TxData::BitNameReservation { commitment }) => {
-                state.bitnames.put_reservation(rwtxn, &txid, commitment)?;
+                state.bitnames.put_reservation(
+                    rwtxn,
+                    &txid,
+                    commitment,
+                    BitNameReservationPosition {
+                        sidechain: height,
+                        mainchain: prev_main_height,
+                        tx_index: tx_index as u32,
+                    },
+                )?;
             }
             Some(TxData::BitNameRegistration {
                 name_hash,
@@ -343,6 +535,7 @@ pub fn connect_prevalidated(
                     *name_hash,
                     bitname_data,
                     height,
+                    replaced_outpoint,
                 )?;
             }
             Some(TxData::BitNameUpdate(bitname_updates)) => {
@@ -361,6 +554,19 @@ pub fn connect_prevalidated(
                 )?;
             }
         }
+        for (vout, output) in filled_outputs.iter().enumerate() {
+            let outpoint = OutPoint::Regular {
+                txid,
+                vout: vout as u32,
+            };
+            let () =
+                state.bitnames.put_reservation_outpoint_at_initial_height(
+                    rwtxn, &outpoint, output,
+                )?;
+            let () = state
+                .bitnames
+                .put_bitname_outpoint(rwtxn, &outpoint, output)?;
+        }
     }
 
     // Apply accumulated DB mutations in sorted key order
@@ -373,6 +579,12 @@ pub fn connect_prevalidated(
     for (key, output) in &utxo_puts {
         state.utxos.put(rwtxn, key, output)?;
     }
+    let () = prune_expired_bitname_reservations(
+        state,
+        rwtxn,
+        &header.hash(),
+        prev_main_height,
+    )?;
 
     // NOTE: the tip, height, and coinbase height are NOT updated here;
     // that happens after the block's transactions, in `connect_header`.
@@ -403,6 +615,7 @@ pub fn connect(
     rwtxn: &mut RwTxn,
     header: &Header,
     body: &Body,
+    prev_main_height: u32,
 ) -> Result<MerkleRoot, Error> {
     let height = state.try_get_height(rwtxn)?.map_or(0, |height| height + 1);
     let tip_hash = state.try_get_tip(rwtxn)?;
@@ -442,7 +655,7 @@ pub fn connect(
         )?;
     }
     let mut filled_txs: Vec<FilledTransaction> = Vec::new();
-    for transaction in &body.transactions {
+    for (tx_index, transaction) in body.transactions.iter().enumerate() {
         let filled_tx = state.fill_transaction(rwtxn, transaction)?;
         let txid = filled_tx.txid();
         for (vin, input) in filled_tx.inputs().iter().enumerate() {
@@ -450,6 +663,18 @@ pub fn connect(
                 .utxos
                 .try_get(rwtxn, &OutPointKey::from(input))?
                 .ok_or(error::NoUtxo { outpoint: *input })?;
+            let () = state
+                .bitnames
+                .delete_reservation_outpoint_at_initial_height(
+                    rwtxn,
+                    input,
+                    &spent_output,
+                )?;
+            let () = state.bitnames.delete_bitname_outpoint(
+                rwtxn,
+                input,
+                &spent_output,
+            )?;
             let spent_output = SpentOutput {
                 output: spent_output,
                 inpoint: InPoint::Regular {
@@ -461,6 +686,27 @@ pub fn connect(
             state
                 .stxos
                 .put(rwtxn, &OutPointKey::from(input), &spent_output)?;
+        }
+        let replaced_registration = match &transaction.data {
+            Some(TxData::BitNameRegistration { name_hash, .. }) => {
+                replaced_bitname_registration(
+                    state, rwtxn, &filled_tx, name_hash,
+                )?
+            }
+            _ => None,
+        };
+        let replaced_outpoint = replaced_registration
+            .as_ref()
+            .map(|(outpoint, _, _)| *outpoint);
+        if let Some((outpoint, output, inpoint)) = replaced_registration {
+            let () = state
+                .bitnames
+                .delete_bitname_outpoint(rwtxn, &outpoint, &output)?;
+            let key = OutPointKey::from(&outpoint);
+            state.utxos.delete(rwtxn, &key)?;
+            state
+                .stxos
+                .put(rwtxn, &key, &SpentOutput { output, inpoint })?;
         }
         let filled_outputs = filled_tx
             .filled_outputs()
@@ -479,7 +725,16 @@ pub fn connect(
         match &transaction.data {
             None => (),
             Some(TxData::BitNameReservation { commitment }) => {
-                state.bitnames.put_reservation(rwtxn, &txid, commitment)?;
+                state.bitnames.put_reservation(
+                    rwtxn,
+                    &txid,
+                    commitment,
+                    BitNameReservationPosition {
+                        sidechain: height,
+                        mainchain: prev_main_height,
+                        tx_index: tx_index as u32,
+                    },
+                )?;
             }
             Some(TxData::BitNameRegistration {
                 name_hash,
@@ -492,6 +747,7 @@ pub fn connect(
                     *name_hash,
                     bitname_data,
                     height,
+                    replaced_outpoint,
                 )?;
             }
             Some(TxData::BitNameUpdate(bitname_updates)) => {
@@ -509,6 +765,19 @@ pub fn connect(
                     batch_icann_data,
                 )?;
             }
+        }
+        for (vout, output) in filled_outputs.iter().enumerate() {
+            let outpoint = OutPoint::Regular {
+                txid,
+                vout: vout as u32,
+            };
+            let () =
+                state.bitnames.put_reservation_outpoint_at_initial_height(
+                    rwtxn, &outpoint, output,
+                )?;
+            let () = state
+                .bitnames
+                .put_bitname_outpoint(rwtxn, &outpoint, output)?;
         }
         filled_txs.push(filled_tx);
     }
@@ -528,6 +797,12 @@ pub fn connect(
     state.tip.put(rwtxn, &(), &block_hash)?;
     state.coinbase_height.put(rwtxn, &coinbase_txid, &height)?;
     state.height.put(rwtxn, &(), &height)?;
+    let () = prune_expired_bitname_reservations(
+        state,
+        rwtxn,
+        &block_hash,
+        prev_main_height,
+    )?;
     Ok(merkle_root)
 }
 
@@ -549,11 +824,31 @@ pub fn disconnect_tip_body(
     let height = state
         .try_get_height(rwtxn)?
         .expect("Height should not be None");
+    // Pruning is applied after transactions during connection, so restore
+    // pruned reservations before reverting transactions.
+    let () = restore_pruned_bitname_reservations(state, rwtxn, &block_hash)?;
     // revert txs, last-to-first
     let mut filled_txs: Vec<FilledTransaction> = Vec::new();
     body.transactions.iter().rev().try_for_each(|tx| {
         let txid = tx.txid();
         let filled_tx = state.fill_transaction_from_stxos(rwtxn, tx.clone())?;
+        let filled_outputs = filled_tx
+            .filled_outputs()
+            .ok_or(Error::FillTxOutputContentsFailed)?;
+        for (vout, output) in filled_outputs.iter().enumerate() {
+            let outpoint = OutPoint::Regular {
+                txid,
+                vout: vout as u32,
+            };
+            let () = state
+                .bitnames
+                .delete_reservation_outpoint_at_initial_height(
+                    rwtxn, &outpoint, output,
+                )?;
+            let () = state
+                .bitnames
+                .delete_bitname_outpoint(rwtxn, &outpoint, output)?;
+        }
         // revert transaction effects
         match &tx.data {
             None => (),
@@ -567,11 +862,33 @@ pub fn disconnect_tip_body(
             Some(TxData::BitNameRegistration {
                 name_hash,
                 revealed_nonce: _,
-                bitname_data: _,
+                bitname_data,
             }) => {
-                let () = state
-                    .bitnames
-                    .revert_registration(rwtxn, &filled_tx, *name_hash)?;
+                let replaced_outpoint = state.bitnames.revert_registration(
+                    rwtxn,
+                    &filled_tx,
+                    *name_hash,
+                    bitname_data,
+                    height,
+                )?;
+                if let Some(outpoint) = replaced_outpoint {
+                    let outpoint_key = OutPointKey::from(&outpoint);
+                    let spent_output = state
+                        .stxos
+                        .try_get(rwtxn, &outpoint_key)?
+                        .ok_or(Error::NoStxo { outpoint })?;
+                    state.stxos.delete(rwtxn, &outpoint_key)?;
+                    state.utxos.put(
+                        rwtxn,
+                        &outpoint_key,
+                        &spent_output.output,
+                    )?;
+                    let () = state.bitnames.put_bitname_outpoint(
+                        rwtxn,
+                        &outpoint,
+                        &spent_output.output,
+                    )?;
+                }
             }
             Some(TxData::BitNameUpdate(bitname_updates)) => {
                 let () = state.bitnames.revert_updates(
@@ -609,6 +926,17 @@ pub fn disconnect_tip_body(
             if let Some(spent_output) =
                 state.stxos.try_get(rwtxn, &OutPointKey::from(outpoint))?
             {
+                let () =
+                    state.bitnames.put_reservation_outpoint_at_initial_height(
+                        rwtxn,
+                        outpoint,
+                        &spent_output.output,
+                    )?;
+                let () = state.bitnames.put_bitname_outpoint(
+                    rwtxn,
+                    outpoint,
+                    &spent_output.output,
+                )?;
                 state.stxos.delete(rwtxn, &OutPointKey::from(outpoint))?;
                 state.utxos.put(
                     rwtxn,

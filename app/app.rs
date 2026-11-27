@@ -81,9 +81,10 @@ fn update_wallet(
     let utxos = node.get_utxos_by_addresses(&addresses)?;
     let mut coinbase_heights = HashMap::new();
     let mut deposit_main_heights = HashMap::new();
+    let mut reservation_heights = HashMap::new();
     {
         let rotxn = node.env().read_txn().map_err(node::Error::from)?;
-        for outpoint in utxos.keys() {
+        for (outpoint, output) in &utxos {
             match outpoint {
                 OutPoint::Coinbase { txid, vout: _ } => {
                     let height = node
@@ -108,16 +109,49 @@ fn update_wallet(
                 OutPoint::Regular { .. }
                 | OutPoint::UnsuccessfulWithdrawal { .. } => (),
             }
+            if let Some((reservation_txid, _)) = output.reservation_data() {
+                let heights = node
+                    .state()
+                    .bitnames()
+                    .try_get_reservation_heights(&rotxn, reservation_txid)
+                    .map_err(|err| node::Error::from(state::Error::from(err)))?
+                    .ok_or_else(|| {
+                        node::Error::from(state::Error::from(
+                            state::error::BitName::MissingReservation {
+                                txid: *reservation_txid,
+                            },
+                        ))
+                    })?;
+                reservation_heights.insert(*reservation_txid, heights);
+            }
         }
     }
-    let outpoints: Vec<_> = wallet.get_utxos()?.into_keys().collect();
+    let wallet_utxos = wallet.get_utxos()?;
+    let outpoints: Vec<_> = wallet_utxos.keys().copied().collect();
     let spent: Vec<_> = node
         .get_spent_utxos(&outpoints)?
         .into_iter()
         .map(|(outpoint, spent_output)| (outpoint, spent_output.inpoint))
         .collect();
-    wallet.put_utxos(&coinbase_heights, &deposit_main_heights, &utxos)?;
+    let spent_outpoints: HashSet<_> =
+        spent.iter().map(|(outpoint, _)| *outpoint).collect();
+    let pruned_reservations: Vec<_> = wallet_utxos
+        .iter()
+        .filter(|(outpoint, output)| {
+            output.is_reservation()
+                && !utxos.contains_key(outpoint)
+                && !spent_outpoints.contains(outpoint)
+        })
+        .map(|(outpoint, _)| *outpoint)
+        .collect();
+    wallet.put_utxos(
+        &coinbase_heights,
+        &deposit_main_heights,
+        &reservation_heights,
+        &utxos,
+    )?;
     wallet.spend_utxos(&spent)?;
+    wallet.prune_utxos(&pruned_reservations)?;
     tracing::debug!("finished wallet update");
     Ok(())
 }

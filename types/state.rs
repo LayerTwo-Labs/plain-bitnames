@@ -5,6 +5,14 @@ use utoipa::ToSchema;
 
 use crate::{FilledOutput, OutPoint, WithdrawalBundle};
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct BitNameReservationPosition {
+    pub mainchain: u32,
+    pub sidechain: u32,
+    /// Index of the reservation transaction within its sidechain block.
+    pub tx_index: u32,
+}
+
 /// Information we have regarding a withdrawal bundle
 #[derive(Clone, Debug, Deserialize, Serialize, ToSchema)]
 pub enum WithdrawalBundleInfo {

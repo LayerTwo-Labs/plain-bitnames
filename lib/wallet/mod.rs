@@ -22,16 +22,18 @@ use crate::{
         Address, AmountOverflowError, AuthorizedTransaction,
         BitcoinOutputContent, CoinbaseTxid, FilledOutput, GetValue, Hash,
         InPoint, MutableBitNameData, OutPoint, OutPointKey, Output,
-        OutputContent, SpentOutput, THIS_SIDECHAIN, Transaction, TxData,
+        OutputContent, SpentOutput, THIS_SIDECHAIN, Transaction, TxData, Txid,
         VERSION, Version, WithdrawalOutputContent,
         authorization::{
             self, Authorization, Signature, SigningKey, VerifyingKey,
             get_address, rand_core::CryptoRng,
         },
         bitname_data::XPublicKey,
+        constants::{MAX_RESERVATION_AGE, MIN_RESERVATION_AGE},
         ecies,
         hashes::BitName,
         keys::{PublicKey, SecretKey},
+        state::BitNameReservationPosition,
         transaction::outpoint::{COINBASE_MATURITY, DEPOSIT_MATURITY},
         wallet::Balance,
     },
@@ -53,6 +55,11 @@ pub struct Wallet {
     pub env: sneed::Env<heed::WithoutTls, WalletEnv>,
     /// Map each address to it's index
     address_to_index: DatabaseUnique<SerdeBincode<Address>, U32<BigEndian>>,
+    /// Sidechain and mainchain heights for each reservation txid
+    bitname_reservation_heights: DatabaseUnique<
+        SerdeBincode<Txid>,
+        SerdeBincode<BitNameReservationPosition>,
+    >,
     /// Associates reservation commitments with plaintext BitNames
     bitname_reservations: DatabaseUnique<SerdeBincode<[u8; 32]>, Str>,
     /// Sidechain heights for each coinbase txid
@@ -79,7 +86,7 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    pub const NUM_DBS: u32 = 12;
+    pub const NUM_DBS: u32 = 13;
 
     pub fn new(path: &Path) -> Result<Self, Error> {
         std::fs::create_dir_all(path)?;
@@ -120,6 +127,11 @@ impl Wallet {
         let mut rwtxn = env.write_txn()?;
         let address_to_index =
             DatabaseUnique::create(&env, &mut rwtxn, "address_to_index")?;
+        let bitname_reservation_heights = DatabaseUnique::create(
+            &env,
+            &mut rwtxn,
+            "bitname_reservation_heights",
+        )?;
         let bitname_reservations =
             DatabaseUnique::create(&env, &mut rwtxn, "bitname_reservations")?;
         let coinbase_height =
@@ -162,6 +174,7 @@ impl Wallet {
         Ok(Self {
             env,
             address_to_index,
+            bitname_reservation_heights,
             bitname_reservations,
             coinbase_height,
             deposit_mainchain_height,
@@ -601,6 +614,8 @@ impl Wallet {
         tx: &mut Transaction,
         plain_name: &str,
         bitname_data: Cow<MutableBitNameData>,
+        spend_height: u32,
+        main_height: u32,
     ) -> Result<(), Error> {
         assert!(tx.is_regular(), "this function only accepts a regular tx");
         // address for the registration output
@@ -620,37 +635,77 @@ impl Wallet {
             };
         let name_hash: Hash = blake3::hash(plain_name.as_bytes()).into();
         let bitname = BitName(name_hash);
-        /* Search for reservation utxo by the following procedure:
-        For each reservation:
-        * Get the corresponding signing key
-        * Compute a reservation commitment for the bitname to be registered
-        * If the computed commitment is the same as the reservation commitment,
-          then use this utxo. Otherwise, continue */
-        // outpoint and nonce, if found
-        let mut reservation_outpoint_nonce: Option<(OutPoint, Hash)> = None;
+        // Search for the oldest valid reservation utxo by the following procedure:
+        // For each reservation:
+        // Ignore immature and expired reservations.
+        // Get the corresponding signing key
+        // Compute a reservation commitment for the bitname to be registered
+        // If the computed commitment is the same as the reservation commitment,
+        // then use this utxo if it is older than the current candidate.
+        struct ReservationOutpointInfo {
+            nonce: Hash,
+            outpoint: OutPoint,
+            position: BitNameReservationPosition,
+        }
+        let mut best_reservation_outpoint_info: Option<
+            ReservationOutpointInfo,
+        > = None;
         for (outpoint, filled_output) in self.get_utxos()?.into_iter() {
-            if let Some(reservation_commitment) =
-                filled_output.reservation_commitment()
+            let Some((reservation_txid, reservation_commitment)) =
+                filled_output.reservation_data()
+            else {
+                continue;
+            };
+            let rotxn = self.env.read_txn()?;
+            let Some(reservation_heights) = self
+                .bitname_reservation_heights
+                .try_get(&rotxn, reservation_txid)?
+            else {
+                continue;
+            };
+            if spend_height
+                .checked_sub(reservation_heights.sidechain)
+                .is_none_or(|age| age < MIN_RESERVATION_AGE)
+                || main_height
+                    .checked_sub(reservation_heights.mainchain)
+                    .is_none_or(|age| age > MAX_RESERVATION_AGE)
             {
-                // for each reservation, get the signing key, and
-                let reservation_addr = filled_output.address;
-                let rotxn = self.env.read_txn()?;
-                let reservation_signing_key = self
-                    .get_tx_signing_key_for_addr(&rotxn, &reservation_addr)?;
-                let reservation_hmac_key = blake3::hash(
-                    reservation_signing_key.to_scalar().as_bytes(),
-                )
-                .into();
-                let nonce =
-                    blake3::keyed_hash(&reservation_hmac_key, &name_hash)
-                        .into();
-                // hmac(nonce, name_hash)
-                let commitment = blake3::keyed_hash(&nonce, &name_hash);
-                // WARNING: This comparison MUST be done in constant time.
-                // `blake3::Hash` handles this; DO NOT compare as byte arrays
-                if commitment == *reservation_commitment {
-                    reservation_outpoint_nonce = Some((outpoint, nonce));
-                    break;
+                continue;
+            }
+            let reservation_addr = filled_output.address;
+            let reservation_signing_key =
+                self.get_tx_signing_key_for_addr(&rotxn, &reservation_addr)?;
+            let reservation_hmac_key =
+                blake3::hash(reservation_signing_key.to_scalar().as_bytes())
+                    .into();
+            let nonce =
+                blake3::keyed_hash(&reservation_hmac_key, &name_hash).into();
+            // hmac(nonce, name_hash)
+            let commitment = blake3::keyed_hash(&nonce, &name_hash);
+            // WARNING: This comparison MUST be done in constant time.
+            // `blake3::Hash` handles this; DO NOT compare as byte arrays
+            if commitment == *reservation_commitment {
+                let replace = match &best_reservation_outpoint_info {
+                    None => true,
+                    Some(best) => {
+                        let candidate_order = (
+                            reservation_heights.sidechain,
+                            reservation_heights.tx_index,
+                        );
+                        let best_order =
+                            (best.position.sidechain, best.position.tx_index);
+                        candidate_order < best_order
+                            || (candidate_order == best_order
+                                && outpoint < best.outpoint)
+                    }
+                };
+                if replace {
+                    best_reservation_outpoint_info =
+                        Some(ReservationOutpointInfo {
+                            nonce,
+                            outpoint,
+                            position: reservation_heights,
+                        });
                 }
             }
         }
@@ -658,17 +713,17 @@ impl Wallet {
         let mut rwtxn = self.env.write_txn()?;
         self.known_bitnames.put(&mut rwtxn, &bitname, plain_name)?;
         rwtxn.commit()?;
-        let (reservation_outpoint, nonce) = reservation_outpoint_nonce
+        let reservation_outpoint_info = best_reservation_outpoint_info
             .ok_or_else(|| Error::NoBitnameReservation {
                 plain_name: plain_name.to_owned(),
             })?;
         let registration_output =
             Output::new(registration_addr, OutputContent::BitName);
-        tx.inputs.push(reservation_outpoint);
+        tx.inputs.push(reservation_outpoint_info.outpoint);
         tx.outputs.push(registration_output);
         tx.data = Some(TxData::BitNameRegistration {
             name_hash: bitname,
-            revealed_nonce: nonce,
+            revealed_nonce: reservation_outpoint_info.nonce,
             bitname_data: Box::new(bitname_data.into_owned()),
         });
         Ok(())
@@ -755,10 +810,21 @@ impl Wallet {
         Ok(())
     }
 
+    pub fn prune_utxos(&self, pruned: &[OutPoint]) -> Result<(), Error> {
+        let mut rwtxn = self.env.write_txn()?;
+        for outpoint in pruned {
+            self.utxos
+                .delete(&mut rwtxn, &OutPointKey::from(outpoint))?;
+        }
+        rwtxn.commit()?;
+        Ok(())
+    }
+
     pub fn put_utxos(
         &self,
         coinbase_heights: &HashMap<CoinbaseTxid, u32>,
         deposit_main_heights: &HashMap<bitcoin::Txid, u32>,
+        reservation_heights: &HashMap<Txid, BitNameReservationPosition>,
         utxos: &HashMap<OutPoint, FilledOutput>,
     ) -> Result<(), Error> {
         let mut rwtxn = self.env.write_txn()?;
@@ -771,6 +837,13 @@ impl Wallet {
                 &mut rwtxn,
                 deposit_txid,
                 height,
+            )?;
+        }
+        for (reservation_txid, heights) in reservation_heights {
+            self.bitname_reservation_heights.put(
+                &mut rwtxn,
+                reservation_txid,
+                heights,
             )?;
         }
         for (outpoint, output) in utxos {
@@ -1001,27 +1074,28 @@ impl Watchable<()> for Wallet {
             env: _,
             seed,
             address_to_index,
+            bitname_reservation_heights: _,
+            bitname_reservations,
             coinbase_height: _,
             deposit_mainchain_height: _,
             index_to_address,
             index_to_pubkey,
-            pubkey_to_index,
-            utxos,
-            stxos,
-            bitname_reservations,
             known_bitnames,
+            pubkey_to_index,
+            stxos,
+            utxos,
             _version: _,
         } = self;
         let watchables = [
             seed.watch().clone(),
             address_to_index.watch().clone(),
+            bitname_reservations.watch().clone(),
             index_to_address.watch().clone(),
             index_to_pubkey.watch().clone(),
-            pubkey_to_index.watch().clone(),
-            utxos.watch().clone(),
-            stxos.watch().clone(),
-            bitname_reservations.watch().clone(),
             known_bitnames.watch().clone(),
+            pubkey_to_index.watch().clone(),
+            stxos.watch().clone(),
+            utxos.watch().clone(),
         ];
         let streams = StreamMap::from_iter(
             watchables.into_iter().map(WatchStream::new).enumerate(),

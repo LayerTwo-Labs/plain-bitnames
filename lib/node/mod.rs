@@ -645,6 +645,7 @@ where
         let mut fee = bitcoin::Amount::ZERO;
         let mut returned_transactions = vec![];
         let mut spent_utxos = HashSet::new();
+        let mut registration_names = HashSet::new();
         let main_tip_height = {
             let main_tip = self
                 .archive
@@ -661,6 +662,15 @@ where
                 // UTXO double spent
                 self.mempool
                     .delete(&mut rwtxn, transaction.transaction.txid())?;
+                continue;
+            }
+            if transaction
+                .transaction
+                .registration_name_hash()
+                .is_some_and(|name| registration_names.contains(&name))
+            {
+                // Blocks containing multiple registrations for one name are
+                // ambiguous. Leave the conflicting transaction for a later block.
                 continue;
             }
             if self
@@ -702,6 +712,11 @@ where
                 )
                 .ok_or(AmountUnderflowError)?;
             spent_utxos.extend(filled_transaction.transaction.inputs());
+            if let Some(name) =
+                filled_transaction.transaction.registration_name_hash()
+            {
+                registration_names.insert(name);
+            }
             returned_transactions.push(filled_transaction);
         }
         rwtxn.commit().map_err(RwTxnError::from)?;
