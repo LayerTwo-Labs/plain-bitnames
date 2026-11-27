@@ -123,10 +123,18 @@ impl TxCreator {
                     .clone()
                     .try_into()
                     .map_err(|err| anyhow::anyhow!("{err}"))?;
+                let spend_height = app
+                    .node
+                    .try_get_tip_height()?
+                    .map_or(0, |height| height + 1);
+                let main_height =
+                    app.node.try_get_mainchain_tip_height()?.unwrap_or(0);
                 let () = app.wallet.register_bitname(
                     &mut tx,
                     plaintext_name,
                     Cow::Borrowed(&bitname_data),
+                    spend_height,
+                    main_height,
                 )?;
                 Ok(tx)
             }

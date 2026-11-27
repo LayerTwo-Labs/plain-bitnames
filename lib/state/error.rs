@@ -36,6 +36,8 @@ pub enum BitName {
         bitname: BitNameId,
         block_height: u32,
     },
+    #[error("missing UTXO for incumbent BitName registration {bitname}")]
+    MissingRegistrationUtxo { bitname: BitNameId },
     #[error("missing BitName reservation {txid}")]
     MissingReservation { txid: Txid },
     #[error("no BitNames to update")]
@@ -139,6 +141,10 @@ impl From<db::Error> for ConnectWithdrawalBundleSubmitted {
 
 #[derive(Debug, Error)]
 pub enum ImmatureOutPoint {
+    #[error("immature BitName registration outpoint")]
+    BitNameRegistration,
+    #[error("immature BitName reservation outpoint")]
+    BitNameReservation,
     #[error("immature coinbase outpoint")]
     Coinbase,
     #[error("immature deposit outpoint")]
@@ -164,20 +170,23 @@ pub enum InvalidHeader {
 #[allow(clippy::duplicated_attributes)]
 #[derive(Debug, Error, Transitive)]
 #[allow(clippy::duplicated_attributes)]
-#[transitive(from(db::Clear, db::Error))]
-#[transitive(from(db::Delete, db::Error))]
-#[transitive(from(db::Error, sneed::Error))]
-#[transitive(from(db::Get, db::Error))]
-#[transitive(from(db::IterInit, db::Error))]
-#[transitive(from(db::IterItem, db::Error))]
-#[transitive(from(db::Last, db::Error))]
-#[transitive(from(db::Put, db::Error))]
-#[transitive(from(db::TryGet, db::Error))]
-#[transitive(from(env::CreateDb, env::Error))]
-#[transitive(from(env::Error, sneed::Error))]
-#[transitive(from(env::WriteTxn, env::Error))]
-#[transitive(from(rwtxn::Commit, rwtxn::Error))]
-#[transitive(from(rwtxn::Error, sneed::Error))]
+#[transitive(
+    from(db::Clear, db::Error),
+    from(db::Delete, db::Error),
+    from(db::Error, sneed::Error),
+    from(db::Get, db::Error),
+    from(db::IterInit, db::Error),
+    from(db::IterItem, db::Error),
+    from(db::Last, db::Error),
+    from(db::Put, db::Error),
+    from(db::RangeInit, db::Error),
+    from(db::TryGet, db::Error),
+    from(env::CreateDb, env::Error),
+    from(env::Error, sneed::Error),
+    from(env::WriteTxn, env::Error),
+    from(rwtxn::Commit, rwtxn::Error),
+    from(rwtxn::Error, sneed::Error)
+)]
 pub enum Error {
     #[error(transparent)]
     AmountOverflow(#[from] AmountOverflowError),
@@ -191,6 +200,14 @@ pub enum Error {
     BitName(#[from] BitName),
     #[error("bitname {name_hash} already registered")]
     BitNameAlreadyRegistered { name_hash: BitNameId },
+    #[error("ambiguous registrations for bitname {name_hash} in one block")]
+    AmbiguousBitNameRegistration { name_hash: BitNameId },
+    #[error("expired BitName reservation {txid}")]
+    BitNameReservationExpired { txid: Txid },
+    #[error(
+        "reservation for bitname {name_hash} is not older than the incumbent reservation"
+    )]
+    BitNameReservationNotOlder { name_hash: BitNameId },
     #[error("body too large")]
     BodyTooLarge,
     #[error("bundle too heavy {weight} > {max_weight}")]

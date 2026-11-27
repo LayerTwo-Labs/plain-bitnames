@@ -43,9 +43,13 @@ fn register_bitname(
         main_height,
         fee,
     )?;
-    let () =
-        app.wallet
-            .register_bitname(&mut tx, plaintext_name, bitname_data)?;
+    let () = app.wallet.register_bitname(
+        &mut tx,
+        plaintext_name,
+        bitname_data,
+        spend_height,
+        main_height,
+    )?;
     app.sign_and_send(tx).map_err(anyhow::Error::from)
 }
 

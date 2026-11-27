@@ -727,10 +727,24 @@ impl rpc_api::wallet::RpcServer for RpcServerImpl<true> {
     ) -> RpcResult<Txid> {
         let mut tx = Transaction::default();
         let bitname_data = Cow::Owned(bitname_data.unwrap_or_default());
+        let spend_height = self
+            .app
+            .node
+            .try_get_tip_height()
+            .map_err(custom_err)?
+            .map_or(0, |height| height + 1);
+        let main_height = self
+            .app
+            .node
+            .try_get_mainchain_tip_height()
+            .map_err(custom_err)?
+            .unwrap_or(0);
         let () = match self.app.wallet.register_bitname(
             &mut tx,
             &plain_name,
             bitname_data,
+            spend_height,
+            main_height,
         ) {
             Ok(()) => (),
             Err(err) => return Err(custom_err(err)),

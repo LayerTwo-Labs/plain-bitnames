@@ -48,6 +48,7 @@ pub struct PrevalidatedBlock {
     pub total_fees: bitcoin::Amount,
     pub coinbase_value: bitcoin::Amount,
     pub next_height: u32, // Precomputed next height to avoid DB read in write txn
+    pub prev_main_height: u32,
 }
 
 type WithdrawalBundlesDb = DatabaseUnique<
@@ -138,7 +139,7 @@ impl State {
                 if db_version
                     < Version {
                         major: 0,
-                        minor: 19,
+                        minor: 20,
                         patch: 0,
                     } =>
             {
@@ -451,8 +452,9 @@ impl State {
     ///   inputs.
     /// * Otherwise, the number of bitnames in the outputs is equal to
     ///   the number of bitnames in the inputs.
-    /// * If the tx is a BitName registration, then the newly registered
-    ///   BitName must be unregistered.
+    /// * If the tx is a BitName registration of an existing BitName, then the
+    ///   incumbent registration must be immature and the spent reservation must
+    ///   be strictly older than the incumbent's reservation.
     /// * If the tx is a BitName update, then there must be at least one
     ///   BitName input and output
     /// * If the tx is a Batch Icann registration, then there must be at least
@@ -460,6 +462,7 @@ impl State {
     pub fn validate_bitnames(
         &self,
         rotxn: &RoTxn,
+        main_height: u32,
         tx: &FilledTransaction,
     ) -> Result<(), Error> {
         let n_bitname_inputs: usize = tx.spent_bitnames().count();
@@ -473,27 +476,48 @@ impl State {
             return Err(Error::TooFewBitNameOutputs);
         }
         if let Some(name_hash) = tx.registration_name_hash() {
-            if self.bitnames.try_get_bitname(rotxn, &name_hash)?.is_some() {
-                return Err(Error::BitNameAlreadyRegistered { name_hash });
-            }
             // A registration must burn the reservation that commits to it,
             // i.e. a spent reservation whose commitment equals
             // keyed_hash(revealed_nonce, name_hash). Without this check,
             // `apply_registration` would later fail to find the reservation
             // to burn.
-            if let Some(implied_commitment) =
-                tx.implied_reservation_commitment()
+            let implied_commitment = tx
+                .implied_reservation_commitment()
+                .expect("a registration should have an implied commitment");
+            let burned_reservation_txid = tx
+                .spent_reservations()
+                .find_map(|(_, filled_output)| {
+                    let (txid, commitment) =
+                        filled_output.reservation_data()?;
+                    (*commitment == implied_commitment).then_some(txid)
+                })
+                .ok_or(error::BitName::NoReservationForRegistration {
+                    bitname: name_hash,
+                })?;
+            if let Some(incumbent) =
+                self.bitnames.try_get_bitname(rotxn, &name_hash)?
             {
-                let burns_matching_reservation =
-                    tx.spent_reservations().any(|(_, filled_output)| {
-                        filled_output.reservation_commitment()
-                            == Some(&implied_commitment)
+                let incumbent_reservation_heights =
+                    incumbent.reservation_heights.latest().data;
+                if main_height
+                    .checked_sub(incumbent_reservation_heights.mainchain)
+                    .is_none_or(|age| age > constants::MAX_RESERVATION_AGE)
+                {
+                    return Err(Error::BitNameAlreadyRegistered { name_hash });
+                }
+                let challenger = self
+                    .bitnames
+                    .get_reservation(rotxn, burned_reservation_txid)?;
+                let challenger_order =
+                    (challenger.heights.sidechain, challenger.heights.tx_index);
+                let incumbent_order = (
+                    incumbent_reservation_heights.sidechain,
+                    incumbent_reservation_heights.tx_index,
+                );
+                if challenger_order >= incumbent_order {
+                    return Err(Error::BitNameReservationNotOlder {
+                        name_hash,
                     });
-                if !burns_matching_reservation {
-                    return Err(error::BitName::NoReservationForRegistration {
-                        bitname: name_hash,
-                    }
-                    .into());
                 }
             }
             if n_bitname_outputs == n_bitname_inputs + 1 {
@@ -558,37 +582,83 @@ impl State {
         &self,
         rotxn: &RoTxn,
         main_height: u32,
+        tx: &FilledTransaction,
         outpoint: &OutPoint,
+        filled_output: &FilledOutput,
     ) -> Result<(), Error> {
         match outpoint {
             OutPoint::Coinbase { txid, vout: _ } => {
                 let coinbase_height = self.coinbase_height.get(rotxn, txid)?;
                 let spend_height =
                     self.try_get_height(rotxn)?.map_or(0, |height| height + 1);
-                if let Some(height_diff) =
-                    spend_height.checked_sub(coinbase_height)
-                    && height_diff >= COINBASE_MATURITY
+                if spend_height
+                    .checked_sub(coinbase_height)
+                    .is_none_or(|height_diff| height_diff < COINBASE_MATURITY)
                 {
-                    Ok(())
-                } else {
-                    Err(error::ImmatureOutPoint::Coinbase.into())
+                    return Err(error::ImmatureOutPoint::Coinbase.into());
                 }
             }
             OutPoint::Deposit(bitcoin::OutPoint { txid, vout: _ }) => {
                 let deposit_height =
                     self.deposit_mainchain_height.get(rotxn, txid)?;
-                if let Some(height_diff) =
-                    main_height.checked_sub(deposit_height)
-                    && height_diff >= DEPOSIT_MATURITY
+                if main_height
+                    .checked_sub(deposit_height)
+                    .is_none_or(|height_diff| height_diff < DEPOSIT_MATURITY)
                 {
-                    Ok(())
-                } else {
-                    Err(error::ImmatureOutPoint::Deposit.into())
+                    return Err(error::ImmatureOutPoint::Deposit.into());
                 }
             }
             OutPoint::Regular { .. }
-            | OutPoint::UnsuccessfulWithdrawal { .. } => Ok(()),
+            | OutPoint::UnsuccessfulWithdrawal { .. } => (),
         }
+        if let Some((reservation_txid, _)) = filled_output.reservation_data() {
+            let Some(reservation_heights) = self
+                .bitnames
+                .try_get_reservation_heights(rotxn, reservation_txid)?
+            else {
+                return Err(error::BitName::MissingReservation {
+                    txid: *reservation_txid,
+                }
+                .into());
+            };
+            if tx.is_registration() {
+                let spend_height =
+                    self.try_get_height(rotxn)?.map_or(0, |height| height + 1);
+                if spend_height
+                    .checked_sub(reservation_heights.sidechain)
+                    .is_none_or(|age| age < constants::MIN_RESERVATION_AGE)
+                {
+                    return Err(
+                        error::ImmatureOutPoint::BitNameReservation.into()
+                    );
+                }
+            }
+            let Some(mainchain_age) =
+                main_height.checked_sub(reservation_heights.mainchain)
+            else {
+                return Err(error::ImmatureOutPoint::BitNameReservation.into());
+            };
+            if mainchain_age > constants::MAX_RESERVATION_AGE {
+                return Err(Error::BitNameReservationExpired {
+                    txid: *reservation_txid,
+                });
+            }
+        }
+        if let Some(bitname) = filled_output.bitname() {
+            let reservation_heights = self
+                .bitnames
+                .get_bitname(rotxn, bitname)?
+                .reservation_heights
+                .latest()
+                .data;
+            if main_height
+                .checked_sub(reservation_heights.mainchain)
+                .is_none_or(|age| age <= constants::MAX_RESERVATION_AGE)
+            {
+                return Err(error::ImmatureOutPoint::BitNameRegistration.into());
+            }
+        }
+        Ok(())
     }
 
     /// Validates a filled transaction, and returns the fee
@@ -599,11 +669,16 @@ impl State {
         tx: &FilledTransaction,
     ) -> Result<bitcoin::Amount, Error> {
         let () = self.validate_reservations(tx)?;
-        let () = self.validate_bitnames(rotxn, tx)?;
+        let () = self.validate_bitnames(rotxn, main_height, tx)?;
         let () = self.validate_batch_icann(tx)?;
-        for outpoint in tx.inputs() {
-            let () =
-                self.validate_tx_input_maturity(rotxn, main_height, outpoint)?;
+        for (outpoint, filled_output) in tx.spent_inputs() {
+            let () = self.validate_tx_input_maturity(
+                rotxn,
+                main_height,
+                tx,
+                outpoint,
+                filled_output,
+            )?;
         }
         let fee = tx.fee()?;
         Ok(fee)
@@ -750,8 +825,9 @@ impl State {
         rwtxn: &mut RwTxn,
         header: &Header,
         body: &Body,
+        prev_main_height: u32,
     ) -> Result<MerkleRoot, Error> {
-        block::connect(self, rwtxn, header, body)
+        block::connect(self, rwtxn, header, body, prev_main_height)
     }
 
     /// Prevalidate a block and return computed values for efficient connection
@@ -1106,7 +1182,7 @@ mod test {
         assert_ne!(mismatched_commitment, implied_commitment);
         let tx =
             registration_tx(name_hash, revealed_nonce, mismatched_commitment);
-        let err = state.validate_bitnames(&rotxn, &tx).expect_err(
+        let err = state.validate_bitnames(&rotxn, 0, &tx).expect_err(
             "registration without a matching reservation must be rejected",
         );
         anyhow::ensure!(
@@ -1121,7 +1197,7 @@ mod test {
 
         // The same registration burning the matching reservation is accepted.
         let tx = registration_tx(name_hash, revealed_nonce, implied_commitment);
-        state.validate_bitnames(&rotxn, &tx).expect(
+        state.validate_bitnames(&rotxn, 0, &tx).expect(
             "registration burning the matching reservation should validate",
         );
         Ok(())

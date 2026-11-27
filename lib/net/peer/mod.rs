@@ -78,11 +78,11 @@ pub struct PeerState {
 }
 
 /// Oldest peer version that follows the same consensus rules as this node.
-/// 0.19.0 changed consensus (withdrawal bundle output order, and so
-/// M6IDs), so chains from older peers do not validate.
+/// 0.20.0-alpha changed BitName reservation and registration consensus rules,
+/// so chains from older peers do not validate.
 pub const MIN_PEER_VERSION: Version = Version {
     major: 0,
-    minor: 19,
+    minor: 20,
     patch: 0,
 };
 
